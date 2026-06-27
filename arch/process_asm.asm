@@ -40,12 +40,10 @@ process_jump_usermode:
 global context_switch_to
 context_switch_to:
     mov rsp, rdi
-    mov rcx, [rsp + 8192]
     xor ecx, ecx
     xgetbv
     xrstor [rsp]
     add rsp, 8192
-    add rsp, rcx
     
     pop r15
     pop r14

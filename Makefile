@@ -41,10 +41,16 @@ OBJ_FILES := $(patsubst %.c, $(BUILD_DIR)/%.o, $(C_SOURCES)) \
 INCLUDE_DIRS := $(shell find $(KERNEL_DIRS) -type d)
 INCLUDES := $(patsubst %, -I%, $(INCLUDE_DIRS))
 
+# Detect clang wrapper (FreeBSD) vs freestanding GCC cross (macOS/Linux)
+CC_IS_CLANG := $(shell $(CC) --version 2>/dev/null | grep -q clang && echo 1)
+ifeq ($(CC_IS_CLANG),1)
+  TOOLCHAIN_FLAGS = -DBOREDOS_SYS_TIMEVAL
+endif
+
 CFLAGS = -g -O2 -pipe -Wall -Wextra -std=gnu11 -ffreestanding \
          -fno-stack-protector -fno-stack-check -fno-lto -fPIE \
          -m64 -march=x86-64 -msse -msse2 -mstackrealign -mno-red-zone \
-         $(INCLUDES)
+         $(TOOLCHAIN_FLAGS) $(INCLUDES)
 
 LDFLAGS = -m elf_x86_64 -nostdlib -static -pie --no-dynamic-linker \
           -z text -z max-page-size=0x1000 -T linker.ld

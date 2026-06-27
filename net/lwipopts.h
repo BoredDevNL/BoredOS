@@ -7,6 +7,12 @@
 
 #define LWIP_PROVIDE_ERRNO         1
 
+#ifdef BOREDOS_SYS_TIMEVAL
+#define LWIP_TIMEVAL_PRIVATE       0
+#else
+#define LWIP_TIMEVAL_PRIVATE       1
+#endif
+
 #define LWIP_ARP                   1
 #define LWIP_ETHERNET              1
 #define LWIP_ICMP                  1

@@ -2483,8 +2483,10 @@ static uint64_t handle_sys_sbrk(const syscall_args_t *args) {
 
       uint64_t phys_addr = (uint64_t)phys_block;
       for (uint64_t page = start_page; page < end_page; page += 4096) {
-        paging_map_page(proc->pml4_phys, page, v2p(phys_addr),
-                        0x07); // PT_PRESENT | PT_RW | PT_USER
+        if (!paging_map_page(proc->pml4_phys, page, v2p(phys_addr),
+                        0x07)) { // PT_PRESENT | PT_RW | PT_USER
+          return old_end; // fail: don't advance heap
+        }
         phys_addr += 4096;
       }
       proc->used_memory += (end_page - start_page);
@@ -2549,8 +2551,9 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
 
     uint64_t phys_addr = v2p((uint64_t)phys_block);
     for (uint64_t off = 0; off < aligned_len; off += 4096) {
-      paging_map_page(proc->pml4_phys, virt_addr + off, phys_addr + off,
-                      pt_flags);
+      if (!paging_map_page(proc->pml4_phys, virt_addr + off, phys_addr + off,
+                      pt_flags))
+        return (uint64_t)MAP_FAILED;
     }
     return virt_addr;
   }
@@ -2574,8 +2577,9 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
     uint64_t phys_addr = v2p((uint64_t)fb.address);
     uint64_t fb_flags = pt_flags | PT_CACHE_DISABLE | PT_WRITE_THROUGH;
     for (uint64_t off = 0; off < aligned_len; off += 4096) {
-      paging_map_page(proc->pml4_phys, virt_addr + off, phys_addr + off,
-                      fb_flags);
+      if (!paging_map_page(proc->pml4_phys, virt_addr + off, phys_addr + off,
+                      fb_flags))
+        return (uint64_t)MAP_FAILED;
     }
     return virt_addr;
   }
@@ -2610,8 +2614,9 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
     // Map pages covering the requested length
     uint32_t pages_to_map = aligned_len / 4096;
     for (uint32_t i = 0; i < pages_to_map; i++) {
-      paging_map_page(proc->pml4_phys, virt_addr + i * 4096, seg->phys_pages[i],
-                      pt_flags);
+      if (!paging_map_page(proc->pml4_phys, virt_addr + i * 4096, seg->phys_pages[i],
+                      pt_flags))
+        return (uint64_t)MAP_FAILED;
     }
     return virt_addr;
   }

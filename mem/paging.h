@@ -29,7 +29,7 @@ typedef struct {
 
 uint64_t paging_get_pml4_phys(void);
 
-void paging_map_page(uint64_t pml4_phys, uint64_t virtual_addr, uint64_t physical_addr, uint64_t flags);
+bool paging_map_page(uint64_t pml4_phys, uint64_t virtual_addr, uint64_t physical_addr, uint64_t flags);
 
 uint64_t paging_create_user_pml4_phys(void);
 

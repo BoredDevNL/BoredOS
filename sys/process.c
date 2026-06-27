@@ -282,14 +282,24 @@ process_t* process_create(void (*entry_point)(void), bool is_user) {
     
     if (is_user) {
         for (int i = 0; i < 32; i++) {
-            paging_map_page(new_proc->pml4_phys, 0x800000 + i*4096, v2p((uint64_t)user_stack + i*4096), PT_PRESENT | PT_RW | PT_USER);
+            if (!paging_map_page(new_proc->pml4_phys, 0x800000 + i*4096, v2p((uint64_t)user_stack + i*4096), PT_PRESENT | PT_RW | PT_USER)) {
+                spinlock_release_irqrestore(&runqueue_lock, rflags);
+                return NULL;
+            }
         }
-        
+
         // Allocate code page aligned and copy code
         void* code = kmalloc_aligned(4096, 4096);
+        if (!code) {
+            spinlock_release_irqrestore(&runqueue_lock, rflags);
+            return NULL;
+        }
         for(int i=0; i<128; i++) ((uint8_t*)code)[i] = ((uint8_t*)entry_point)[i];
-        
-        paging_map_page(new_proc->pml4_phys, 0x400000, v2p((uint64_t)code), PT_PRESENT | PT_RW | PT_USER);
+
+        if (!paging_map_page(new_proc->pml4_phys, 0x400000, v2p((uint64_t)code), PT_PRESENT | PT_RW | PT_USER)) {
+            spinlock_release_irqrestore(&runqueue_lock, rflags);
+            return NULL;
+        }
         
         // Build initial stack frame for iretq
         // Stack grows down, start at top
@@ -518,10 +528,13 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
     
     // Map User stack to 0x800000
     for (uint64_t i = 0; i < (user_stack_size / 4096); i++) {
-        paging_map_page(new_proc->pml4_phys, 0x800000 - user_stack_size + (i * 4096), v2p((uint64_t)stack + (i * 4096)), PT_PRESENT | PT_RW | PT_USER);
+        if (!paging_map_page(new_proc->pml4_phys, 0x800000 - user_stack_size + (i * 4096), v2p((uint64_t)stack + (i * 4096)), PT_PRESENT | PT_RW | PT_USER)) {
+            kfree(stack);
+            kfree(kernel_stack);
+            return NULL;
+        }
     }
 
- 
     int argc = 1;
     char *args_buf = (char *)stack + user_stack_size;
     uint64_t user_args_buf = 0x800000;
@@ -1270,7 +1283,11 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
     }
 
     for (uint64_t i = 0; i < (user_stack_size / 4096); i++) {
-        paging_map_page(new_pml4, 0x800000 - user_stack_size + (i * 4096), v2p((uint64_t)stack + (i * 4096)), PT_PRESENT | PT_RW | PT_USER);
+        if (!paging_map_page(new_pml4, 0x800000 - user_stack_size + (i * 4096), v2p((uint64_t)stack + (i * 4096)), PT_PRESENT | PT_RW | PT_USER)) {
+            kfree(stack);
+            paging_destroy_user_pml4_phys(new_pml4, true);
+            return -1;
+        }
     }
 
     int argc = 1;

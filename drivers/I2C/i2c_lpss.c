@@ -198,10 +198,11 @@ static int map_bar0_to_kernel(uint64_t bar0_phys, uintptr_t *kernel_addr) {
     uint64_t virt_base = p2v(bar0_phys);
     
     // Map first 0x2000 bytes (8KB) to cover search range + registers
-    paging_map_page(paging_get_pml4_phys(), virt_base, bar0_phys, 
-                   PT_PRESENT | PT_RW | PT_CACHE_DISABLE);
-    paging_map_page(paging_get_pml4_phys(), virt_base + 0x1000, bar0_phys + 0x1000, 
-                   PT_PRESENT | PT_RW | PT_CACHE_DISABLE);
+    if (!paging_map_page(paging_get_pml4_phys(), virt_base, bar0_phys,
+                   PT_PRESENT | PT_RW | PT_CACHE_DISABLE) ||
+        !paging_map_page(paging_get_pml4_phys(), virt_base + 0x1000, bar0_phys + 0x1000,
+                   PT_PRESENT | PT_RW | PT_CACHE_DISABLE))
+        return false;
 
     *kernel_addr = virt_base;
     return 0;

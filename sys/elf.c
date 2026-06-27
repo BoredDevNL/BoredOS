@@ -103,7 +103,8 @@ uint64_t elf_load(const char *path, uint64_t user_pml4, size_t *out_load_size, s
             for (uint64_t p = 0; p < num_pages; p++) {
                 uint64_t vaddr = start_page + (p * 4096);
                 uint64_t phys_addr = v2p((uint64_t)bulk_phys + (p * 4096));
-                paging_map_page(user_pml4, vaddr, phys_addr, 0x07);
+                if (!paging_map_page(user_pml4, vaddr, phys_addr, 0x07))
+                    return 0;
             }
             
             if (proc) {

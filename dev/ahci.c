@@ -505,9 +505,10 @@ void ahci_init(void) {
 
     uint64_t abar_virt = p2v(abar_phys);
     for (uint64_t offset = 0; offset < 0x2000; offset += 4096) {
-        paging_map_page(paging_get_pml4_phys(), abar_virt + offset,
+        if (!paging_map_page(paging_get_pml4_phys(), abar_virt + offset,
                         abar_phys + offset,
-                        PT_PRESENT | PT_RW | PT_CACHE_DISABLE);
+                        PT_PRESENT | PT_RW | PT_CACHE_DISABLE))
+            return;
     }
 
     abar = (HBA_MEM*)abar_virt;

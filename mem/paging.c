@@ -57,49 +57,50 @@ void paging_switch_directory(uint64_t pml4_phys) {
     write_cr3(pml4_phys);
 }
 
-void paging_map_page(uint64_t pml4_phys, uint64_t virtual_addr, uint64_t physical_addr, uint64_t flags) {
-    if (!pml4_phys) return;
-    
+bool paging_map_page(uint64_t pml4_phys, uint64_t virtual_addr, uint64_t physical_addr, uint64_t flags) {
+    if (!pml4_phys) return false;
+
     page_table_t* pml4 = (page_table_t*)p2v(pml4_phys);
-    
+
     // Extract indices
     uint64_t pml4_index = (virtual_addr >> 39) & 0x1FF;
     uint64_t pdpt_index = (virtual_addr >> 30) & 0x1FF;
     uint64_t pd_index   = (virtual_addr >> 21) & 0x1FF;
     uint64_t pt_index   = (virtual_addr >> 12) & 0x1FF;
-    
+
     // Check PML4 entry
     if (!(pml4->entries[pml4_index] & PT_PRESENT)) {
         uint64_t new_table_phys = alloc_page_table_phys();
-        if (!new_table_phys) return; // Out of memory
+        if (!new_table_phys) return false;
         pml4->entries[pml4_index] = new_table_phys | PT_PRESENT | PT_RW | PT_USER;
     }
-    
+
     // Get PDPT
     page_table_t* pdpt = (page_table_t*)p2v(pml4->entries[pml4_index] & PT_ADDR_MASK);
     if (!(pdpt->entries[pdpt_index] & PT_PRESENT)) {
         uint64_t new_table_phys = alloc_page_table_phys();
-        if (!new_table_phys) return;
+        if (!new_table_phys) return false;
         pdpt->entries[pdpt_index] = new_table_phys | PT_PRESENT | PT_RW | PT_USER;
     }
-    
+
     // Get PD
     page_table_t* pd = (page_table_t*)p2v(pdpt->entries[pdpt_index] & PT_ADDR_MASK);
     if (!(pd->entries[pd_index] & PT_PRESENT)) {
         uint64_t new_table_phys = alloc_page_table_phys();
-        if (!new_table_phys) return;
+        if (!new_table_phys) return false;
         pd->entries[pd_index] = new_table_phys | PT_PRESENT | PT_RW | PT_USER;
     }
-    
+
     // Get PT
     page_table_t* pt = (page_table_t*)p2v(pd->entries[pd_index] & PT_ADDR_MASK);
-    
+
     // Set entry in PT. Always update the entry so overlapping ELF LOAD segments
     // can overwrite earlier mappings for the same page.
     pt->entries[pt_index] = (physical_addr & PT_ADDR_MASK) | flags;
-    
+
     // Flush TLB for this address
     asm volatile("invlpg (%0)" : : "r"(virtual_addr) : "memory");
+    return true;
 }
 
 uint64_t paging_create_user_pml4_phys(void) {

@@ -9,7 +9,7 @@ LD = x86_64-elf-ld
 NASM = nasm
 XORRISO = xorriso
 
-SRC_DIR = src
+KERNEL_DIRS = arch core dev drivers fs graphics input mem net sys
 BUILD_DIR = build
 ISO_DIR = iso_root
 FONT_SRC := external/bfonts/fonts
@@ -31,15 +31,14 @@ define PRINT_STEP
 	@printf "$(BLUE)============================================================$(RESET)\n"
 endef
 
-C_SOURCES := $(shell find $(SRC_DIR) -type f -name '*.c' \
-                ! -path '$(SRC_DIR)/userland/*' \
+C_SOURCES := $(shell find $(KERNEL_DIRS) -type f -name '*.c' \
                 ! -path '*/third_party/lwip/netif/slipif.c')
-ASM_SOURCES := $(shell find $(SRC_DIR) -type f -name '*.asm' ! -path '$(SRC_DIR)/userland/*')
+ASM_SOURCES := $(shell find $(KERNEL_DIRS) -type f -name '*.asm')
 
-OBJ_FILES := $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(C_SOURCES)) \
-             $(patsubst $(SRC_DIR)/%.asm, $(BUILD_DIR)/%.o, $(ASM_SOURCES))
+OBJ_FILES := $(patsubst %.c, $(BUILD_DIR)/%.o, $(C_SOURCES)) \
+             $(patsubst %.asm, $(BUILD_DIR)/%.o, $(ASM_SOURCES))
 
-INCLUDE_DIRS := $(shell find $(SRC_DIR) -type d ! -path '$(SRC_DIR)/userland*')
+INCLUDE_DIRS := $(shell find $(KERNEL_DIRS) -type d)
 INCLUDES := $(patsubst %, -I%, $(INCLUDE_DIRS))
 
 CFLAGS = -g -O2 -pipe -Wall -Wextra -std=gnu11 -ffreestanding \
@@ -77,9 +76,9 @@ limine-setup:
 	else \
 		printf "$(YELLOW)[LIMINE] Existing Limine binaries found.$(RESET)\n"; \
 	fi
-	@if [ ! -f $(SRC_DIR)/core/limine.h ]; then \
+	@if [ ! -f core/limine.h ]; then \
 		printf "$(YELLOW)[LIMINE] Copying limine.h...$(RESET)\n"; \
-		cp limine/limine.h $(SRC_DIR)/core/limine.h; \
+		cp limine/limine.h core/limine.h; \
 	else \
 		printf "$(YELLOW)[LIMINE] limine.h already present.$(RESET)\n"; \
 	fi
@@ -87,12 +86,12 @@ limine-setup:
 	$(MAKE) -C limine
 	@printf "$(GREEN)[OK] Limine setup complete.$(RESET)\n"
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR) limine-setup
+$(BUILD_DIR)/%.o: %.c | $(BUILD_DIR) limine-setup
 	@printf "$(YELLOW)[CC]$(RESET) $< -> $@\n"
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.asm | $(BUILD_DIR)
+$(BUILD_DIR)/%.o: %.asm | $(BUILD_DIR)
 	@printf "$(YELLOW)[ASM]$(RESET) $< -> $@\n"
 	@mkdir -p $(dir $@)
 	$(NASM) $(NASMFLAGS) $< -o $@
@@ -217,14 +216,14 @@ $(BUILD_DIR)/initrd.tar: $(KERNEL_ELF) userland packages
 	@cp -r branding/* $(BUILD_DIR)/initrd/Library/images/branding/
 
 	@printf "$(YELLOW)[COPY]$(RESET) bsh configuration...\n"
-	@if [ -f $(SRC_DIR)/library/bsh/bshrc ]; then printf "  -> bshrc\n"; cp $(SRC_DIR)/library/bsh/bshrc $(BUILD_DIR)/initrd/Library/bsh/; fi
-	@if [ -f $(SRC_DIR)/library/bsh/startup.bsh ]; then printf "  -> startup.bsh\n"; cp $(SRC_DIR)/library/bsh/startup.bsh $(BUILD_DIR)/initrd/Library/bsh/; fi
-	@if [ -f $(SRC_DIR)/library/bsh/boot.bsh ]; then printf "  -> boot.bsh\n"; cp $(SRC_DIR)/library/bsh/boot.bsh $(BUILD_DIR)/initrd/Library/bsh/; fi
-	@if [ -f $(SRC_DIR)/library/conf/sysfetch.cfg ]; then printf "  -> sysfetch.cfg\n"; cp $(SRC_DIR)/library/conf/sysfetch.cfg $(BUILD_DIR)/initrd/Library/conf/; fi
-	@if [ -f $(SRC_DIR)/library/conf/taskbar.conf ]; then printf "  -> taskbar.conf\n"; cp $(SRC_DIR)/library/conf/taskbar.conf $(BUILD_DIR)/initrd/Library/conf/; fi
-	@if [ -f $(SRC_DIR)/library/conf/wallpaper.conf ]; then printf "  -> wallpaper.conf\n"; cp $(SRC_DIR)/library/conf/wallpaper.conf $(BUILD_DIR)/initrd/Library/conf/; fi
+	@if [ -f library/bsh/bshrc ]; then printf "  -> bshrc\n"; cp library/bsh/bshrc $(BUILD_DIR)/initrd/Library/bsh/; fi
+	@if [ -f library/bsh/startup.bsh ]; then printf "  -> startup.bsh\n"; cp library/bsh/startup.bsh $(BUILD_DIR)/initrd/Library/bsh/; fi
+	@if [ -f library/bsh/boot.bsh ]; then printf "  -> boot.bsh\n"; cp library/bsh/boot.bsh $(BUILD_DIR)/initrd/Library/bsh/; fi
+	@if [ -f library/conf/sysfetch.cfg ]; then printf "  -> sysfetch.cfg\n"; cp library/conf/sysfetch.cfg $(BUILD_DIR)/initrd/Library/conf/; fi
+	@if [ -f library/conf/taskbar.conf ]; then printf "  -> taskbar.conf\n"; cp library/conf/taskbar.conf $(BUILD_DIR)/initrd/Library/conf/; fi
+	@if [ -f library/conf/wallpaper.conf ]; then printf "  -> wallpaper.conf\n"; cp library/conf/wallpaper.conf $(BUILD_DIR)/initrd/Library/conf/; fi
 	@mkdir -p $(BUILD_DIR)/initrd/etc/nova
-	@if [ -f $(SRC_DIR)/library/conf/nova.conf ]; then printf "  -> nova.conf\n"; cp $(SRC_DIR)/library/conf/nova.conf $(BUILD_DIR)/initrd/etc/nova/; fi
+	@if [ -f library/conf/nova.conf ]; then printf "  -> nova.conf\n"; cp library/conf/nova.conf $(BUILD_DIR)/initrd/etc/nova/; fi
 
 	@printf "$(YELLOW)[COPY]$(RESET) Copying Freedoom assets...\n"
 	@if [ -f external/doomgeneric/freedoom1.wad ]; then \
@@ -234,7 +233,7 @@ $(BUILD_DIR)/initrd.tar: $(KERNEL_ELF) userland packages
 
 
 	@printf "$(YELLOW)[COPY]$(RESET) ASCII art...\n"
-	@if [ -f $(SRC_DIR)/library/art/boredos.txt ]; then printf "  -> boredos.txt\n"; cp $(SRC_DIR)/library/art/boredos.txt $(BUILD_DIR)/initrd/Library/art/; fi
+	@if [ -f library/art/boredos.txt ]; then printf "  -> boredos.txt\n"; cp library/art/boredos.txt $(BUILD_DIR)/initrd/Library/art/; fi
 
 	@printf "$(YELLOW)[COPY]$(RESET) Documentation...\n"
 	@for f in $$(find docs -name '*.md' 2>/dev/null); do \

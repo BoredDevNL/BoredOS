@@ -1,12 +1,12 @@
 # Building, Running, and Deployment
 
-BoredOS utilizes a highly modular architecture. Core userland binaries, shells, environments, and assets are isolated into specialized external repositories stored under `external/` and dynamically staged during compilation.
+BoredOS utilizes a highly modular architecture. Core userland binaries, shells, environments, and assets are isolated into specialized external repositories stored under `contrib/` and dynamically staged during compilation.
 
 ---
 
 ## External Dependencies
 
-External repositories are managed as Git submodules under `external/`. Each submodule is pinned to a specific commit in `.gitmodules`.
+External repositories are managed as Git submodules under `contrib/`. Each submodule is pinned to a specific commit in `.gitmodules`.
 
 ### Cloning with dependencies:
 ```sh
@@ -46,7 +46,7 @@ graph TD
 
 ### The Compile Phases:
 1. **SDK Bootstrap Phase**:
-   - `external/libc` is compiled first. It installs standard headers and startup routines (`crt0.o`, `crt1.o`, `libc.a`) directly into a local target SDK folder: `build/sdk/`.
+   - `contrib/libc` is compiled first. It installs standard headers and startup routines (`crt0.o`, `crt1.o`, `libc.a`) directly into a local target SDK folder: `build/sdk/`.
 2. **Integrated Multi-Repo Compilation**:
    - The root Makefile builds all other external application repositories in parallel, explicitly passing `BOREDOS_SDK=$(abspath build/sdk)` to their sub-Makefiles.
    - The application sub-Makefiles detect this local SDK path, link immediately against it, and skip all local fetching or SDK rebuild routines, providing massive speedups.
@@ -61,7 +61,7 @@ graph TD
 
 ## 4. Standalone Repository Builds (Developer Friendly)
 
-Every external repository features complete isolation and autonomy. A developer can copy or clone **any** of the directories inside `external/` and compile it independently outside the BoredOS environment:
+Every external repository features complete isolation and autonomy. A developer can copy or clone **any** of the directories inside `contrib/` and compile it independently outside the BoredOS environment:
 
 - **Isolated Build Flow**:
   - If a sub-Makefile detects that `BOREDOS_SDK` is not defined, it knows it is being run standalone.

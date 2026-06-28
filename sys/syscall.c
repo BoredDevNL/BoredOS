@@ -12,6 +12,7 @@
 #include "app_metadata.h"
 #include "cmd.h"
 #include "disk.h"
+#include "ext4fs.h"
 #include "fat32.h"
 #include "graphics.h"
 #include "icmp.h"
@@ -1750,12 +1751,21 @@ static uint64_t sys_cmd_disk_mount(const syscall_args_t *args) {
   if (!devname || !mountpoint)
     return (uint64_t)-1;
   Disk *d = disk_get_by_name(devname);
-  if (!d || !d->is_fat32)
+  if (!d)
     return (uint64_t)-1;
-  void *vol = fat32_mount_volume(d);
+  if (d->is_fat32) {
+    void *vol = fat32_mount_volume(d);
+    if (!vol)
+      return (uint64_t)-1;
+    if (!vfs_mount(mountpoint, devname, "fat32", fat32_get_realfs_ops(), vol))
+      return (uint64_t)-1;
+    return 0;
+  }
+  // Try ext4
+  void *vol = ext4fs_mount_volume(d);
   if (!vol)
     return (uint64_t)-1;
-  if (!vfs_mount(mountpoint, devname, "fat32", fat32_get_realfs_ops(), vol))
+  if (!vfs_mount(mountpoint, devname, "ext4", ext4fs_get_ops(), vol))
     return (uint64_t)-1;
   return 0;
 }

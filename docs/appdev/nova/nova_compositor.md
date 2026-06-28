@@ -5,7 +5,7 @@
 
 ---
 
-Nova's compositor implementation lives in `external/nova/src/nova.c`. It is a self-contained userland process that manages input, clients, shared memory, and direct framebuffer rendering.
+Nova's compositor implementation lives in `contrib/nova/src/nova.c`. It is a self-contained userland process that manages input, clients, shared memory, and direct framebuffer rendering.
 
 ## Main runtime flow
 

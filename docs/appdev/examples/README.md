@@ -25,12 +25,12 @@ The examples are listed in order of increasing complexity. Click on a tutorial t
 ## 🔵 Graphical / GUI (Nova Toolkit)
 
 The native desktop environment source directory contains structured GUI apps using the Nova Toolkit:
-*   **[helloworld.c](file:///Users/chris/BoredOS/external/nova/src/helloworld.c)**: Demonstrates building tabbed windows, buttons, checkboxes, radio groups, sliders, combo boxes, list boxes, tables, text areas, input fields, modal dialogs, and a custom linear gradient canvas.
-*   **[about.c](file:///Users/chris/BoredOS/external/nova/src/about.c)**: A clean implementation of a system specification window featuring branding images, centered label text, and non-resizable layouts.
+*   **[helloworld.c](file:///Users/chris/BoredOS/contrib/nova/src/helloworld.c)**: Demonstrates building tabbed windows, buttons, checkboxes, radio groups, sliders, combo boxes, list boxes, tables, text areas, input fields, modal dialogs, and a custom linear gradient canvas.
+*   **[about.c](file:///Users/chris/BoredOS/contrib/nova/src/about.c)**: A clean implementation of a system specification window featuring branding images, centered label text, and non-resizable layouts.
 
 ---
 
 > [!TIP]
-> If you want to test these out, simply create a new `.c` file in an external repository source directory such as `external/coreutils/src/` for terminal apps or `external/netutils/src/` for network utilities, paste the example code, then run `make clean && make run` from the project root!
+> If you want to test these out, simply create a new `.c` file in an external repository source directory such as `contrib/coreutils/src/` for terminal apps or `contrib/netutils/src/` for network utilities, paste the example code, then run `make clean && make run` from the project root!
 
 ---

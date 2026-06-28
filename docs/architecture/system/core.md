@@ -21,7 +21,7 @@ The OS heavily relies on module separation. The `src/` directory is logically sp
 - **`net/`**: The networking stack. BoredOS relies on `lwIP` for processing IPv4 and TCP/UDP traffic, interacting with a range of NICs via `net/nic/`.
 - **`sys/`**: System calls and process management. The ELF loader resides here, alongside the Symmetric Multi-Processing (**smp.c**) bringup and Local APIC (**lapic.c**) management logic.
 - **`graphics/`**: The graphical subsystem. It handles drawing primitives, graphics contexts, font rendering, and double-buffering.
-- **`external/`**: Out-of-kernel components are organized into separate external repositories. This includes the custom SDK/compiler environment (`external/libc/`) and user applications such as `external/coreutils/`, `external/nova/`, and other external userland repositories.
+- **`contrib/`**: Out-of-kernel components are organized into separate external repositories. This includes the custom SDK/compiler environment (`contrib/libc/`) and user applications such as `contrib/coreutils/`, `contrib/nova/`, and other external userland repositories.
 
 ## Boot Process
 

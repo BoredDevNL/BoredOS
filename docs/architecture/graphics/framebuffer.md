@@ -49,7 +49,7 @@ When a userland application writes to `/dev/fb0`:
 
 ## 3. Supported Linux-Compatible Ioctls
 
-To support standard porting of unix graphic utilities (such as terminal emulators and future display servers), `/dev/fb0` implements standard Linux `ioctl` commands. These structures are defined in [`external/libc/include/sys/ioctl.h`](../../../external/libc/include/sys/ioctl.h):
+To support standard porting of unix graphic utilities (such as terminal emulators and future display servers), `/dev/fb0` implements standard Linux `ioctl` commands. These structures are defined in [`contrib/libc/include/sys/ioctl.h`](../../../contrib/libc/include/sys/ioctl.h):
 
 ### `FBIOGET_VSCREENINFO` (0x4600)
 Returns variable screen information using the `fb_var_screeninfo_t` struct:

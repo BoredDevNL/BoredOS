@@ -16,7 +16,7 @@ This advanced example demonstrates the steps required to use the raw network sys
 
 ---
 
-## The Code (e.g. `external/netutils/src/http_get.c`)
+## The Code (e.g. `contrib/netutils/src/http_get.c`)
 
 ```c
 // BOREDOS_APP_DESC: HTTP GET client — fetches a webpage over TCP.

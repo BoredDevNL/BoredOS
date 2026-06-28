@@ -10,7 +10,7 @@
 
 #define VFS_MAX_PATH 1024
 #define VFS_MAX_NAME 256
-#define VFS_MAX_MOUNTS 16
+#define VFS_MAX_MOUNTS 64
 #define VFS_MAX_OPEN_FILES 64
 
 #define POLLIN     0x0001

@@ -15,7 +15,7 @@ This example demonstrates the bare minimum structure of a BoredOS application th
 
 ---
 
-## The Code (e.g. `external/coreutils/src/hello_world.c`)
+## The Code (e.g. `contrib/coreutils/src/hello_world.c`)
 
 ```c
 // BOREDOS_APP_DESC: Hello World — a minimal CLI demo.

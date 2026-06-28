@@ -179,9 +179,9 @@ close(fd);
 
 Look at these example apps for practical Nova usage:
 
-- `external/nova/src/helloworld.c`
-- `external/nova/src/taskbar.c`
-- `external/nova/src/wallpaperd.c`
+- `contrib/nova/src/helloworld.c`
+- `contrib/nova/src/taskbar.c`
+- `contrib/nova/src/wallpaperd.c`
 
 ## Notes
 

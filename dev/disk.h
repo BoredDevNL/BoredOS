@@ -8,7 +8,7 @@
 #include <stdbool.h>
 
 #define SECTOR_SIZE 512
-#define MAX_DISKS 16
+#define MAX_DISKS 64
 
 typedef enum {
     DISK_TYPE_RAM,

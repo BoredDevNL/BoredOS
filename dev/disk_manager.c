@@ -8,6 +8,7 @@
 #include "ahci.h"
 #include "vfs.h"
 #include "fat32.h"
+#include "ext4fs.h"
 #include "spinlock.h"
 #include <stddef.h>
 #include "kutils.h"
@@ -413,7 +414,7 @@ void disk_register_partition(Disk *parent, uint32_t lba_offset, uint32_t sector_
             mount_path[0] = '/';
             mount_path[1] = 'd'; mount_path[2] = 'e'; mount_path[3] = 'v'; mount_path[4] = '/';
             strcpy(mount_path + 5, part->devname);
-            
+
             if (vfs_mount(mount_path, part->devname, "fat32", fat32_get_realfs_ops(), vol)) {
                 char ok_msg[64];
                 strcpy(ok_msg, "Mounted ");
@@ -425,6 +426,29 @@ void disk_register_partition(Disk *parent, uint32_t lba_offset, uint32_t sector_
                 strcpy(fail_msg + 16, mount_path);
                 log_fail(fail_msg);
             }
+        }
+    } else {
+        uint8_t *sb_buf = (uint8_t *)kmalloc(1024);
+        if (sb_buf) {
+            if (part->read_sector(part, 2, sb_buf) == 0 &&
+                part->read_sector(part, 3, sb_buf + 512) == 0) {
+                uint16_t magic = *(uint16_t *)(sb_buf + 56);
+                if (magic == EXT4_SUPERBLOCK_MAGIC) {
+                    void *vol = ext4fs_mount_volume(part);
+                    if (vol) {
+                        char mount_path[32] = "/dev/";
+                        strcpy(mount_path + 5, part->devname);
+                        if (vfs_mount(mount_path, part->devname, "ext4",
+                                      ext4fs_get_ops(), vol)) {
+                            char ok_msg[64];
+                            strcpy(ok_msg, "Mounted ext4 ");
+                            strcpy(ok_msg + 13, mount_path);
+                            log_ok(ok_msg);
+                        }
+                    }
+                }
+            }
+            kfree(sb_buf);
         }
     }
 }

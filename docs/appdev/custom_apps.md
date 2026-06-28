@@ -1,6 +1,6 @@
 # Creating Custom Applications & Adding External Repositories
 
-In BoredOS, all userland applications, graphical shells, network diagnostics, and tools reside inside isolated external repositories under `/external/`. 
+In BoredOS, all userland applications, graphical shells, network diagnostics, and tools reside inside isolated external repositories under `/contrib/`. 
 
 This guide details:
 1. How to develop new applications within existing repositories.
@@ -14,7 +14,7 @@ This guide details:
 If your new tool is small, lightweight, or naturally fits into an existing logical group, you should develop it directly inside one of the current external repositories. (See the repositories under the [BoredOS account.](https://github.com/BoredOS))
 
 ### Adding your application code:
-1. Navigate to the appropriate subdirectory in the corresponding `external/` repo (e.g. `external/coreutils/src/` or `external/nova/apps/`).
+1. Navigate to the appropriate subdirectory in the corresponding `contrib/` repo (e.g. `contrib/coreutils/src/` or `contrib/nova/apps/`).
 2. Add your `.c` source code file.
 3. The sub-makefiles in these repositories utilize wildcards (e.g. `$(wildcard src/*.c)`) to automatically scan and compile new files. If your new file is not covered, simply append it to the `SOURCES` variable in the repository's Makefile.
 4. Stage it in the root `Makefile`'s `$(BUILD_DIR)/initrd.tar` rule to make sure it gets copied into the `initrd` filesystem (e.g. `/bin/` or `/Library/`).
@@ -37,15 +37,15 @@ Developers should avoid bloating existing folders. Creating a **new, dedicated e
 Let's assume you are creating a new GUI calculator app named `calc`. Here is how to create, register, and integrate it into the BoredOS build pipeline:
 
 ### Step 1: Create the Local Repository
-Create the directory structure under `/external/calc/` and add your source files:
+Create the directory structure under `/contrib/calc/` and add your source files:
 ```sh
-mkdir -p external/calc/src
+mkdir -p contrib/calc/src
 ```
 
 ### Step 2: Write an Autonomic Standalone Makefile
 Every external repository Makefile must support both **Integrated Builds** (within the BoredOS workspace) and **Standalone Builds** (cloned in isolation). 
 
-Write `external/calc/Makefile`:
+Write `contrib/calc/Makefile`:
 ```makefile
 # Default to local build/sdk if not passed by root Makefile
 BOREDOS_SDK ?= $(abspath build/sdk)
@@ -94,7 +94,7 @@ To integrate your repository into the standard BoredOS distribution build:
 1. Publish your new repository on GitHub **under your own personal user account** (e.g., `https://github.com/<your-github-username>/calc.git`).
 2. Open a **Pull Request (PR)** on the parent BoredOS repository to add your repository as a submodule:
    ```sh
-   git submodule add https://github.com/<your-github-username>/calc.git external/calc
+   git submodule add https://github.com/<your-github-username>/calc.git contrib/calc
    ```
 
 ### Step 4: Configure the Root Makefile Integration
@@ -105,7 +105,7 @@ Now, wire the new repository into the top-level [Makefile](file:///Users/chris/B
    ```makefile
    userland: build/sdk
    	...
-   	$(MAKE) -C external/calc BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
+   	$(MAKE) -C contrib/calc BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
    ```
 
 2. **Initrd Copy & Staging Rules**:
@@ -115,12 +115,12 @@ Now, wire the new repository into the top-level [Makefile](file:///Users/chris/B
    	...
    	@printf "$(YELLOW)[STAGE]$(RESET) Invoking modular repository installations...\n"
    	...
-   	$(MAKE) -C external/calc BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath $(BUILD_DIR)/initrd) install
+   	$(MAKE) -C contrib/calc BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath $(BUILD_DIR)/initrd) install
    ```
 
 3. **Clean Rule Requirements**:
    - **No edits are required in the root Makefile for cleaning!**
-   - The root Makefile `clean` target dynamically scans the `external/` folder and automatically invokes `$(MAKE) -C "$$dir" clean` on any subdirectory that contains a `Makefile`.
+   - The root Makefile `clean` target dynamically scans the `contrib/` folder and automatically invokes `$(MAKE) -C "$$dir" clean` on any subdirectory that contains a `Makefile`.
    - You **must** ensure that your repository's Makefile implements a standard, working `clean:` target (as written in Step 2) so that `make clean` executes successfully.
    ```
 

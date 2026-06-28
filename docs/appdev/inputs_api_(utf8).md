@@ -4,8 +4,8 @@
 
 The userland libc provides a lightweight UTF-8 utility module located in:
 
-- external/libc/src/utf-8.c
-- external/libc/include/utf-8.h
+- contrib/libc/src/utf-8.c
+- contrib/libc/include/utf-8.h
 
 This module is designed for **direct use in applications** requiring UTF-8 handling. It provides basic primitives for decoding, encoding, and traversing UTF-8 strings safely.
 

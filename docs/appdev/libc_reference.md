@@ -1,6 +1,6 @@
 # libc Reference
 
-This page documents the current BoredOS userland libc surface from `external/libc/include/`.
+This page documents the current BoredOS userland libc surface from `contrib/libc/include/`.
 
 BoredOS libc is a compact implementation focused on the APIs used by in-tree apps. It is not a full glibc replacement.
 
@@ -173,7 +173,7 @@ Defined errno values include:
 
 ## Relationship to raw syscalls
 
-- libc high-level I/O and process APIs are backed by wrappers in `external/libc/src/syscall.c`.
+- libc high-level I/O and process APIs are backed by wrappers in `contrib/libc/src/syscall.c`.
 - Full syscall command IDs and multiplexer details are documented in `docs/appdev/syscalls.md`.
 
 ## Practical Guidance

@@ -388,10 +388,10 @@ void kmain(void) {
     
     if (bootloader_info_request.response != NULL) {
         if (bootloader_info_request.response->name) {
-            strcpy(g_bootfs_state.bootloader_name, bootloader_info_request.response->name);
+            snprintf(g_bootfs_state.bootloader_name, sizeof(g_bootfs_state.bootloader_name), "%s", bootloader_info_request.response->name);
         }
         if (bootloader_info_request.response->version) {
-            strcpy(g_bootfs_state.bootloader_version, bootloader_info_request.response->version);
+            snprintf(g_bootfs_state.bootloader_version, sizeof(g_bootfs_state.bootloader_version), "%s", bootloader_info_request.response->version);
         }
     }
     

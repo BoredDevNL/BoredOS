@@ -2,63 +2,79 @@
 	path = usr/libc
 	url = https://github.com/boredos/libc.git
 	ignore = all
+	branch = main
 [submodule "usr/bsh"]
 	path = usr/bsh
 	url = https://github.com/boredos/bsh.git
 	ignore = all
+	branch = main
 [submodule "usr/nova"]
 	path = usr/nova
 	url = https://github.com/boredos/nova.git
 	ignore = all
+	branch = main
 [submodule "usr/coreutils"]
 	path = usr/coreutils
 	url = https://github.com/boredos/coreutils.git
 	ignore = all
+	branch = main
 [submodule "usr/kilo"]
 	path = usr/kilo
 	url = https://github.com/boredos/kilo.git
 	ignore = all
+	branch = main
 [submodule "usr/boredos_install"]
 	path = usr/boredos_install
 	url = https://github.com/boredos/boredos_install.git
 	ignore = all
+	branch = main
 [submodule "usr/lua"]
 	path = usr/lua
 	url = https://github.com/boredos/lua.git
 	ignore = all
+	branch = main
 [submodule "usr/tcc"]
 	path = usr/tcc
 	url = https://github.com/boredos/tcc.git
 	ignore = all
+	branch = main
 [submodule "usr/netutils"]
 	path = usr/netutils
 	url = https://github.com/boredos/netutils.git
 	ignore = all
+	branch = main
 [submodule "usr/bart"]
 	path = usr/bart
 	url = https://github.com/boredos/bart.git
 	ignore = all
+	branch = main
 [submodule "usr/serenityicons"]
 	path = usr/serenityicons
 	url = https://github.com/BoredOS/serenity-icons.git
 	ignore = all
+	branch = main
 [submodule "usr/bfonts"]
 	path = usr/bfonts
 	url = https://github.com/boredos/bfonts.git
 	ignore = all
+	branch = main
 [submodule "usr/doomgeneric"]
 	path = usr/doomgeneric
 	url = https://github.com/boredos/doomgeneric.git
 	ignore = all
+	branch = main
 [submodule "usr/bearssl"]
 	path = usr/bearssl
 	url = https://github.com/boredos/bearssl.git
 	ignore = all
+	branch = main
 [submodule "usr/bpm"]
 	path = usr/bpm
 	url = https://github.com/boredos/bpm.git
 	ignore = all
+	branch = main
 [submodule "usr/lwext4"]
 	path = usr/lwext4
 	url = https://github.com/gkostka/lwext4.git
 	ignore = all
+	branch = master

@@ -1,64 +1,64 @@
-[submodule "contrib/libc"]
-	path = contrib/libc
+[submodule "usr/libc"]
+	path = usr/libc
 	url = https://github.com/boredos/libc.git
 	ignore = all
-[submodule "contrib/bsh"]
-	path = contrib/bsh
+[submodule "usr/bsh"]
+	path = usr/bsh
 	url = https://github.com/boredos/bsh.git
 	ignore = all
-[submodule "contrib/nova"]
-	path = contrib/nova
+[submodule "usr/nova"]
+	path = usr/nova
 	url = https://github.com/boredos/nova.git
 	ignore = all
-[submodule "contrib/coreutils"]
-	path = contrib/coreutils
+[submodule "usr/coreutils"]
+	path = usr/coreutils
 	url = https://github.com/boredos/coreutils.git
 	ignore = all
-[submodule "contrib/kilo"]
-	path = contrib/kilo
+[submodule "usr/kilo"]
+	path = usr/kilo
 	url = https://github.com/boredos/kilo.git
 	ignore = all
-[submodule "contrib/boredos_install"]
-	path = contrib/boredos_install
+[submodule "usr/boredos_install"]
+	path = usr/boredos_install
 	url = https://github.com/boredos/boredos_install.git
 	ignore = all
-[submodule "contrib/lua"]
-	path = contrib/lua
+[submodule "usr/lua"]
+	path = usr/lua
 	url = https://github.com/boredos/lua.git
 	ignore = all
-[submodule "contrib/tcc"]
-	path = contrib/tcc
+[submodule "usr/tcc"]
+	path = usr/tcc
 	url = https://github.com/boredos/tcc.git
 	ignore = all
-[submodule "contrib/netutils"]
-	path = contrib/netutils
+[submodule "usr/netutils"]
+	path = usr/netutils
 	url = https://github.com/boredos/netutils.git
 	ignore = all
-[submodule "contrib/bart"]
-	path = contrib/bart
+[submodule "usr/bart"]
+	path = usr/bart
 	url = https://github.com/boredos/bart.git
 	ignore = all
-[submodule "contrib/serenityicons"]
-	path = contrib/serenityicons
+[submodule "usr/serenityicons"]
+	path = usr/serenityicons
 	url = https://github.com/BoredOS/serenity-icons.git
 	ignore = all
-[submodule "contrib/bfonts"]
-	path = contrib/bfonts
+[submodule "usr/bfonts"]
+	path = usr/bfonts
 	url = https://github.com/boredos/bfonts.git
 	ignore = all
-[submodule "contrib/doomgeneric"]
-	path = contrib/doomgeneric
+[submodule "usr/doomgeneric"]
+	path = usr/doomgeneric
 	url = https://github.com/boredos/doomgeneric.git
 	ignore = all
-[submodule "contrib/bearssl"]
-	path = contrib/bearssl
+[submodule "usr/bearssl"]
+	path = usr/bearssl
 	url = https://github.com/boredos/bearssl.git
 	ignore = all
-[submodule "contrib/bpm"]
-	path = contrib/bpm
+[submodule "usr/bpm"]
+	path = usr/bpm
 	url = https://github.com/boredos/bpm.git
 	ignore = all
-[submodule "contrib/lwext4"]
-	path = contrib/lwext4
+[submodule "usr/lwext4"]
+	path = usr/lwext4
 	url = https://github.com/gkostka/lwext4.git
 	ignore = all

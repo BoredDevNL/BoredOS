@@ -13,7 +13,7 @@ XORRISO = xorriso
 KERNEL_DIRS = arch core dev drivers fs graphics input mem net sys
 BUILD_DIR = build
 ISO_DIR = iso_root
-FONT_SRC := contrib/bfonts/fonts
+FONT_SRC := usr/bfonts/fonts
 KERNEL_ELF = $(BUILD_DIR)/boredos.elf
 ISO_IMAGE = boredos.iso
 
@@ -52,7 +52,7 @@ CFLAGS = -g -O2 -pipe -Wall -Wextra -std=gnu11 -ffreestanding \
          -fno-stack-protector -fno-stack-check -fno-lto -fPIE \
          -m64 -march=x86-64 -msse -msse2 -mstackrealign -mno-red-zone \
          $(TOOLCHAIN_FLAGS) $(INCLUDES) \
-         -Icontrib/lwext4/include -Icontrib/lwext4/include/misc
+         -Iusr/lwext4/include -Iusr/lwext4/include/misc
 
 LDFLAGS = -m elf_x86_64 -nostdlib -static -pie --no-dynamic-linker \
           -z text -z max-page-size=0x1000 -T linker.ld
@@ -105,16 +105,16 @@ $(BUILD_DIR)/%.o: %.asm | $(BUILD_DIR)
 	$(NASM) $(NASMFLAGS) $< -o $@
 
 
-BEARSSL_LIB = contrib/bearssl/libbearssl.a
+BEARSSL_LIB = usr/bearssl/libbearssl.a
 
 $(BEARSSL_LIB): build/sdk
 	$(call PRINT_STEP,BUILDING BEARSSL)
-	$(MAKE) -C contrib/bearssl CC=$(CC) AR=$(AR) BOREDOS_SDK=$(abspath build/sdk)
+	$(MAKE) -C usr/bearssl CC=$(CC) AR=$(AR) BOREDOS_SDK=$(abspath build/sdk)
 	@printf "$(GREEN)[OK]$(RESET) BearSSL built: $@\n"
 
 # --- lwext4 static library ---
-LWEXT4_SRC_DIR = contrib/lwext4/src
-LWEXT4_INC_DIR = contrib/lwext4/include
+LWEXT4_SRC_DIR = usr/lwext4/src
+LWEXT4_INC_DIR = usr/lwext4/include
 LWEXT4_SRCS := $(wildcard $(LWEXT4_SRC_DIR)/*.c)
 LWEXT4_OBJS := $(patsubst $(LWEXT4_SRC_DIR)/%.c, $(BUILD_DIR)/lwext4/%.o, $(LWEXT4_SRCS))
 LWEXT4_LIB  = $(BUILD_DIR)/liblwext4.a
@@ -143,30 +143,30 @@ $(KERNEL_ELF): $(OBJ_FILES) $(BEARSSL_LIB) $(LWEXT4_LIB)
 	$(LD) $(LDFLAGS) -o $@ $(OBJ_FILES) $(BEARSSL_LIB) $(LWEXT4_LIB)
 	@printf "$(GREEN)[OK]$(RESET) Kernel ELF built: $@\n"
 
-contrib-fetch:
+usr-fetch:
 	$(call PRINT_STEP,FETCHING EXTERNAL REPOSITORIES)
 	@if git submodule status | grep -q "^-"; then \
 		git submodule update --init --recursive; \
 	fi
 
-build/sdk: contrib-fetch
+build/sdk: usr-fetch
 	$(call PRINT_STEP,BUILDING BOREDOS SDK (LIBC))
 	@mkdir -p build/sdk
-	$(MAKE) -C contrib/libc SDK_DIR=$(abspath build/sdk) install
+	$(MAKE) -C usr/libc SDK_DIR=$(abspath build/sdk) install
 
 userland: build/sdk
 	$(call PRINT_STEP,BUILDING USERERLAND APPLICATIONS)
 	@mkdir -p build/userland/bin
-	$(MAKE) -C contrib/bsh BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
-	$(MAKE) -C contrib/coreutils BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
-	$(MAKE) -C contrib/nova BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
-	$(MAKE) -C contrib/kilo BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
-	$(MAKE) -C contrib/boredos_install BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
-	$(MAKE) -C contrib/lua BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
-	$(MAKE) -C contrib/tcc BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
-	$(MAKE) -C contrib/netutils BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
-	$(MAKE) -C contrib/doomgeneric BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
-	$(MAKE) -C contrib/bpm BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
+	$(MAKE) -C usr/bsh BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
+	$(MAKE) -C usr/coreutils BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
+	$(MAKE) -C usr/nova BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
+	$(MAKE) -C usr/kilo BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
+	$(MAKE) -C usr/boredos_install BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
+	$(MAKE) -C usr/lua BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
+	$(MAKE) -C usr/tcc BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
+	$(MAKE) -C usr/netutils BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
+	$(MAKE) -C usr/doomgeneric BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
+	$(MAKE) -C usr/bpm BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
 	@printf "$(GREEN)[OK]$(RESET) Userland build complete.\n"
 
 .PHONY: packages
@@ -174,7 +174,7 @@ packages: build/sdk $(BEARSSL_LIB) userland
 	$(call PRINT_STEP,BUILDING BOREDOS PACKAGES)
 	@for pkg in $(PACKAGES); do \
 		printf "$(YELLOW)[PACKAGES]$(RESET) Building package $$pkg...\n"; \
-		$(MAKE) -C contrib/$$pkg BOREDOS_SDK=$(abspath build/sdk) bup || exit 1; \
+		$(MAKE) -C usr/$$pkg BOREDOS_SDK=$(abspath build/sdk) bup || exit 1; \
 	done
 
 $(BUILD_DIR)/initrd.tar: $(KERNEL_ELF) userland packages
@@ -194,18 +194,18 @@ $(BUILD_DIR)/initrd.tar: $(KERNEL_ELF) userland packages
 	@cp $(KERNEL_ELF) $(BUILD_DIR)/initrd/boot/boredos.elf
 
 	@printf "$(YELLOW)[STAGE]$(RESET) Invoking modular repository installations...\n"
-	$(MAKE) -C contrib/bsh BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath $(BUILD_DIR)/initrd) install
-	$(MAKE) -C contrib/coreutils BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath $(BUILD_DIR)/initrd) install
-	$(MAKE) -C contrib/boredos_install BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath $(BUILD_DIR)/initrd) install
-	$(MAKE) -C contrib/bpm BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath $(BUILD_DIR)/initrd) install
+	$(MAKE) -C usr/bsh BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath $(BUILD_DIR)/initrd) install
+	$(MAKE) -C usr/coreutils BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath $(BUILD_DIR)/initrd) install
+	$(MAKE) -C usr/boredos_install BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath $(BUILD_DIR)/initrd) install
+	$(MAKE) -C usr/bpm BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath $(BUILD_DIR)/initrd) install
 	@for pkg in $(PACKAGES); do \
-		$(MAKE) -C contrib/$$pkg BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath $(BUILD_DIR)/initrd) install || exit 1; \
+		$(MAKE) -C usr/$$pkg BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath $(BUILD_DIR)/initrd) install || exit 1; \
 	done
 
 	@printf "$(YELLOW)[STAGE]$(RESET) Staging package .bup files on Live CD...\n"
 	@mkdir -p $(BUILD_DIR)/initrd/usr/share/packages
 	@for pkg in $(PACKAGES); do \
-		cp contrib/$$pkg/build/$$pkg.bup $(BUILD_DIR)/initrd/usr/share/packages/ || exit 1; \
+		cp usr/$$pkg/build/$$pkg.bup $(BUILD_DIR)/initrd/usr/share/packages/ || exit 1; \
 	done
 	@printf "$(YELLOW)[PACKAGES]$(RESET) Generating exclusions list...\n"
 	@bash tools/gen_excludes.sh $(abspath $(BUILD_DIR)/initrd)
@@ -293,7 +293,7 @@ $(ISO_IMAGE): $(KERNEL_ELF) $(BUILD_DIR)/initrd.tar.lz4 limine.conf limine-setup
 clean:
 	$(call PRINT_STEP,CLEANING BUILD OUTPUT)
 	rm -rf $(BUILD_DIR) $(ISO_DIR) $(ISO_IMAGE)
-	@for dir in contrib/*; do \
+	@for dir in usr/*; do \
 		if [ -d "$$dir" ] && [ -f "$$dir/Makefile" ]; then \
 			$(MAKE) -C "$$dir" clean; \
 		fi \

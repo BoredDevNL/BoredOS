@@ -21,10 +21,10 @@ Nova is responsible for:
 
 ## Where Nova lives in source
 
-- `contrib/nova/src/nova.c` — the compositor process and the runtime manager.
-- `contrib/nova/libnovaproto/novaproto.h` — wire protocol definitions and client API declarations.
-- `contrib/nova/libnovaproto/novaproto.c` — client-side protocol implementation and event queue.
-- `contrib/nova/src/helloworld.c`, `contrib/nova/src/taskbar.c`, `contrib/nova/src/wallpaperd.c` — example Nova clients.
+- `usr/nova/src/nova.c` — the compositor process and the runtime manager.
+- `usr/nova/libnovaproto/novaproto.h` — wire protocol definitions and client API declarations.
+- `usr/nova/libnovaproto/novaproto.c` — client-side protocol implementation and event queue.
+- `usr/nova/src/helloworld.c`, `usr/nova/src/taskbar.c`, `usr/nova/src/wallpaperd.c` — example Nova clients.
 
 ## Core architecture
 

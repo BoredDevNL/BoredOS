@@ -2,7 +2,7 @@
 // This software is released under the GNU General Public License v3.0. See LICENSE file for details.
 // This header needs to maintain in any file it is present in, as per the GPL license terms.
 #include "tar.h"
-#include "fat32.h"
+#include "vfs.h"
 #include "bootfs.h"
 
 // The standard TAR header block is 512 bytes.
@@ -38,6 +38,26 @@ static uint64_t tar_parse_octal(const char *str, int size) {
     return result;
 }
 
+// VFS helper: recursively create directories
+static void vfs_mkdir_recursive(const char *path) {
+    char temp[256];
+    int len = 0;
+    while (path[len] && len < 255) {
+        temp[len] = path[len];
+        if (temp[len] == '/' && len > 0) {
+            temp[len] = '\0';
+            if (!vfs_exists(temp)) {
+                vfs_mkdir(temp);
+            }
+            temp[len] = '/';
+        }
+        len++;
+    }
+    temp[len] = '\0';
+    if (!vfs_exists(temp)) {
+        vfs_mkdir(temp);
+    }
+}
 
 void tar_parse(void *archive, uint64_t archive_size) {
     uint8_t *ptr = (uint8_t *)archive;
@@ -74,7 +94,7 @@ void tar_parse(void *archive, uint64_t archive_size) {
 
         if (header->typeflag == '5') {
             // It's a directory
-            fat32_mkdir_recursive(full_path);
+            vfs_mkdir_recursive(full_path);
         } else if (header->typeflag == '0' || header->typeflag == '\0') {
             // It's a normal file
             // First ensure the parent directory exists
@@ -88,7 +108,7 @@ void tar_parse(void *archive, uint64_t archive_size) {
             }
             if (last_slash > 0) {
                 parent_path[last_slash] = '\0';
-                fat32_mkdir_recursive(parent_path);
+                vfs_mkdir_recursive(parent_path);
             }
 
             if (full_path[0] == '/' && full_path[1] == 'b' && full_path[2] == 'o' &&
@@ -96,10 +116,10 @@ void tar_parse(void *archive, uint64_t archive_size) {
                 bootfs_register_file(full_path + 6, ptr + 512, (uint32_t)file_size);
             }
             
-            FAT32_FileHandle *fh = fat32_open(full_path, "w");
-            if (fh && fh->valid) {
-                fat32_write(fh, ptr + 512, file_size);
-                fat32_close(fh);
+            vfs_file_t *fh = vfs_open(full_path, "w");
+            if (fh) {
+                vfs_write(fh, ptr + 512, (int)file_size);
+                vfs_close(fh);
             }
         }
         

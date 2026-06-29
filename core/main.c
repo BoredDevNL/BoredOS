@@ -297,6 +297,26 @@ static void boot_parse_cmdline(const char *cmdline, uint32_t media_type) {
 }
 
 
+static void vfs_mkdir_recursive(const char *path) {
+    char temp[256];
+    int len = 0;
+    while (path[len] && len < 255) {
+        temp[len] = path[len];
+        if (temp[len] == '/' && len > 0) {
+            temp[len] = '\0';
+            if (!vfs_exists(temp)) {
+                vfs_mkdir(temp);
+            }
+            temp[len] = '/';
+        }
+        len++;
+    }
+    temp[len] = '\0';
+    if (!vfs_exists(temp)) {
+        vfs_mkdir(temp);
+    }
+}
+
 void kmain(void) {
     init_serial();
     vfs_init();
@@ -560,13 +580,13 @@ void kmain(void) {
                 if (last_slash > 0) {
                     for (int j = 0; j < last_slash; j++) dir_path[j] = clean_path[j];
                     dir_path[last_slash] = '\0';
-                    fat32_mkdir_recursive(dir_path);
+                    vfs_mkdir_recursive(dir_path);
                 }
                 
-                FAT32_FileHandle *fh = fat32_open(clean_path, "w");
-                if (fh && fh->valid) {
-                    fat32_write(fh, mod->address, mod->size);
-                    fat32_close(fh);
+                vfs_file_t *fh = vfs_open(clean_path, "w");
+                if (fh) {
+                    vfs_write(fh, mod->address, (int)mod->size);
+                    vfs_close(fh);
                 }
             }
             module_manager_register(clean_path, (uint64_t)mod->address, mod->size);

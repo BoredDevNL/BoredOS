@@ -183,7 +183,7 @@ $(BUILD_DIR)/initrd.tar: $(KERNEL_ELF) userland packages
 	rm -rf $(BUILD_DIR)/initrd
 
 	mkdir -p $(BUILD_DIR)/initrd
-	cp -R Base/. $(BUILD_DIR)/initrd/
+	cp -R base/. $(BUILD_DIR)/initrd/
 	@find $(BUILD_DIR)/initrd -name .gitkeep -delete
 	@find $(BUILD_DIR)/initrd -name .DS_Store -delete
 
@@ -268,7 +268,7 @@ $(ISO_IMAGE): $(KERNEL_ELF) $(BUILD_DIR)/initrd.tar.lz4 limine.conf limine-setup
 	printf "    module_path: boot():/initrd.tar.lz4\n" >> $(ISO_DIR)/limine.conf
 	
 	@printf "$(YELLOW)[COPY]$(RESET) Optional splash image...\n"
-	@if [ -f Base/boot/splash.jpg ]; then printf "  -> splash.jpg\n"; cp Base/boot/splash.jpg $(ISO_DIR)/splash.jpg; else printf "  -> no splash.jpg found\n"; fi
+	@if [ -f base/boot/splash.jpg ]; then printf "  -> splash.jpg\n"; cp Base/boot/splash.jpg $(ISO_DIR)/splash.jpg; else printf "  -> no splash.jpg found\n"; fi
 	
 	@printf "$(YELLOW)[COPY]$(RESET) Limine boot files...\n"
 	cp limine/limine-bios.sys $(ISO_DIR)/

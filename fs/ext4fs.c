@@ -143,7 +143,7 @@ void* ext4fs_mount_volume(void *disk_ptr) {
 
     vol->mount_point[0] = '/';
     strcpy(vol->mount_point + 1, vol->dev_name);
-    int len = strlen(vol->mount_point);
+    size_t len = strlen(vol->mount_point);
     vol->mount_point[len] = '/';
     vol->mount_point[len + 1] = '\0';
 
@@ -193,19 +193,19 @@ void ext4fs_umount_volume(void *fs_private) {
 }
 
 static void ext4fs_build_path(ext4fs_vol_t *vol, const char *rel,
-                              char *out, int out_size) {
-    int mlen = strlen(vol->mount_point);
+                              char *out, size_t out_size) {
+    size_t mlen = strlen(vol->mount_point);
     if (mlen >= out_size - 1) { out[0] = '\0'; return; }
     strcpy(out, vol->mount_point);
     while (*rel == '/') rel++;
-    int rlen = strlen(rel);
+    size_t rlen = strlen(rel);
     if (mlen + rlen >= out_size - 1) { out[0] = '\0'; return; }
     strcpy(out + mlen, rel);
 }
 
 /* Ensure path ends with a trailing slash so lwext4 treats it as a directory. */
 static void ext4fs_ensure_trailing_slash(char *path) {
-    int plen = strlen(path);
+    size_t plen = strlen(path);
     if (plen > 0 && path[plen - 1] != '/') {
         path[plen] = '/';
         path[plen + 1] = '\0';
@@ -389,7 +389,7 @@ static int vfs_ext4_get_info(void *fs_private, const char *rel_path,
     while (*p) { if (*p == '/') name = p + 1; p++; }
     if (*name == '\0') name = rel_path;
 
-    int nlen = strlen(name);
+    size_t nlen = strlen(name);
     if (nlen >= VFS_MAX_NAME) nlen = VFS_MAX_NAME - 1;
     memcpy(info->name, name, nlen);
     info->name[nlen] = '\0';

@@ -36,7 +36,7 @@ static bool vfs_starts_with(const char *str, const char *prefix) {
 }
 
 static bool vfs_path_is_parent(const char *parent, const char *child) {
-    int plen = strlen(parent);
+    size_t plen = strlen(parent);
     if (strncmp(parent, child, plen) != 0) return false;
     if (child[plen] == '\0') return true;
     if (child[plen] == '/') return true;

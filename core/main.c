@@ -227,29 +227,29 @@ static void print_verbose_boot_banner(void) {
 
 static bool cmdline_has_flag(const char *cmdline, const char *flag) {
     if (!cmdline || !flag || !flag[0]) return false;
-    int flag_len = (int)strlen(flag);
+    size_t flag_len = strlen(flag);
     const char *p = cmdline;
     while (*p) {
         while (*p == ' ') p++;
         if (!*p) break;
         const char *start = p;
         while (*p && *p != ' ') p++;
-        int len = (int)(p - start);
-        if (len == flag_len && strncmp(start, flag, (size_t)flag_len) == 0) return true;
+        size_t len = p - start;
+        if (len == flag_len && strncmp(start, flag, flag_len) == 0) return true;
     }
     return false;
 }
 
-static bool cmdline_read_value(const char *cmdline, const char *key, char *out, int out_len) {
+static bool cmdline_read_value(const char *cmdline, const char *key, char *out, size_t out_len) {
     if (!cmdline || !key || !out || out_len <= 1) return false;
-    int key_len = (int)strlen(key);
+    size_t key_len = strlen(key);
     const char *p = cmdline;
     while (*p) {
         while (*p == ' ') p++;
         if (!*p) break;
-        if (strncmp(p, key, (size_t)key_len) == 0) {
+        if (strncmp(p, key, key_len) == 0) {
             const char *val = p + key_len;
-            int i = 0;
+            size_t i = 0;
             while (*val && *val != ' ' && i < out_len - 1) {
                 out[i++] = *val++;
             }

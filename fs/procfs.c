@@ -10,7 +10,7 @@
 typedef struct {
     uint32_t pid;
     char type[32]; 
-    int offset;
+    size_t offset;
     bool is_root;
 } procfs_handle_t;
 
@@ -346,10 +346,10 @@ int procfs_read(void *fs_private, void *handle, void *buf, int size) {
         }
     }
 
-    int len = strlen(out);
+    size_t len = strlen(out);
     if (h->offset >= len) { kfree(out); return 0; }
 
-    int to_copy = len - h->offset;
+    size_t to_copy = len - h->offset;
     if (to_copy > size) to_copy = size;
 
     memcpy(buf, out + h->offset, to_copy);

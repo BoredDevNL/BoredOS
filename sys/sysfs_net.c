@@ -57,14 +57,14 @@ static int parse_ip(const char *str, ipv4_address_t *ip) {
 }
 
 // Subsystem file handlers
-static int read_net_address(char *buf, int size, int offset) {
+static int read_net_address(char *buf, size_t size, size_t offset) {
   mac_address_t mac;
   if (network_get_mac_address(&mac) == 0) {
     char out[64];
     format_mac(&mac, out);
-    int len = strlen(out);
+    size_t len = strlen(out);
     if (offset >= len) return 0;
-    int to_copy = len - offset;
+    size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
     return to_copy;
@@ -72,15 +72,15 @@ static int read_net_address(char *buf, int size, int offset) {
   return -1;
 }
 
-static int read_ip_field(char *buf, int size, int offset,
+static int read_ip_field(char *buf, size_t size, size_t offset,
                          int (*getter)(ipv4_address_t *)) {
   ipv4_address_t ip;
   if (getter(&ip) == 0) {
     char out[64];
     format_ip(&ip, out);
-    int len = strlen(out);
+    size_t len = strlen(out);
     if (offset >= len) return 0;
-    int to_copy = len - offset;
+    size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
     return to_copy;
@@ -88,22 +88,22 @@ static int read_ip_field(char *buf, int size, int offset,
   return -1;
 }
 
-static int read_net_ip(char *buf, int size, int offset) {
+static int read_net_ip(char *buf, size_t size, size_t offset) {
   return read_ip_field(buf, size, offset, network_get_ipv4_address);
 }
 
-static int read_net_gateway(char *buf, int size, int offset) {
+static int read_net_gateway(char *buf, size_t size, size_t offset) {
   return read_ip_field(buf, size, offset, network_get_gateway_ip);
 }
 
 
-static int read_net_nic(char *buf, int size, int offset) {
+static int read_net_nic(char *buf, size_t size, size_t offset) {
   char out[64];
   if (network_get_nic_name(out) == 0) {
     strcpy(out + strlen(out), "\n");
-    int len = strlen(out);
+    size_t len = strlen(out);
     if (offset >= len) return 0;
-    int to_copy = len - offset;
+    size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
     return to_copy;
@@ -111,7 +111,7 @@ static int read_net_nic(char *buf, int size, int offset) {
   return -1;
 }
 
-static int read_net_status(char *buf, int size, int offset) {
+static int read_net_status(char *buf, size_t  size, size_t offset) {
   char out[128];
   out[0] = 0;
   strcpy(out, "initialized: ");
@@ -119,15 +119,15 @@ static int read_net_status(char *buf, int size, int offset) {
   strcpy(out + strlen(out), "has_ip: ");
   strcpy(out + strlen(out), network_has_ip() ? "1\n" : "0\n");
   
-  int len = strlen(out);
+  size_t len = strlen(out);
   if (offset >= len) return 0;
-  int to_copy = len - offset;
+  size_t to_copy = len - offset;
   if (to_copy > size) to_copy = size;
   memcpy(buf, out + offset, to_copy);
   return to_copy;
 }
 
-static int read_net_stats(char *buf, int size, int offset) {
+static int read_net_stats(char *buf, size_t size, size_t offset) {
   char out[256];
   out[0] = 0;
   char s[32];
@@ -145,15 +145,15 @@ static int read_net_stats(char *buf, int size, int offset) {
   strcpy(out + strlen(out), s);
   strcpy(out + strlen(out), "\n");
 
-  int len = strlen(out);
+  size_t len = strlen(out);
   if (offset >= len) return 0;
-  int to_copy = len - offset;
+  size_t to_copy = len - offset;
   if (to_copy > size) to_copy = size;
   memcpy(buf, out + offset, to_copy);
   return to_copy;
 }
 
-static int write_net_control(const char *buf, int size, int offset) {
+static int write_net_control(const char *buf, size_t size, size_t offset) {
   (void)offset;
   if (strncmp(buf, "dhcp", 4) == 0) {
     return network_dhcp_acquire() == 0 ? size : -1;
@@ -170,12 +170,12 @@ static int write_net_control(const char *buf, int size, int offset) {
 
 
 
-static int write_ping(const char *buf, int size, int offset) {
+static int write_ping(const char *buf, size_t size, size_t offset) {
   (void)offset;
   process_t *proc = process_get_current();
   if (!proc) return -1;
   char target[64];
-  int len = size < 63 ? size : 63;
+  size_t len = size < 63 ? size : 63;
   memcpy(target, buf, len);
   target[len] = '\0';
   while (len > 0 && (target[len - 1] == '\n' || target[len - 1] == '\r' || target[len - 1] == ' ')) {
@@ -202,12 +202,12 @@ static int write_ping(const char *buf, int size, int offset) {
   return size;
 }
 
-static int read_ping(char *buf, int size, int offset) {
+static int read_ping(char *buf, size_t size, size_t offset) {
   process_t *proc = process_get_current();
   if (!proc) return -1;
-  int len = (int)strlen(proc->ping_result);
+  size_t len = strlen(proc->ping_result);
   if (offset >= len) return 0;
-  int to_copy = len - offset;
+  size_t to_copy = len - offset;
   if (to_copy > size) to_copy = size;
   memcpy(buf, proc->ping_result + offset, to_copy);
   return to_copy;

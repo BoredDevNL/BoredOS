@@ -13,7 +13,7 @@
 #include "disk.h"
 
 // --- Graphics Implementation ---
-static int read_gfx_drm(char *buf, int size, int offset) {
+static int read_gfx_drm(char *buf, size_t size, size_t offset) {
     char out[512];
     memset(out, 0, 512);
     strcpy(out, "Driver: Simple Framebuffer\n");
@@ -31,16 +31,16 @@ static int read_gfx_drm(char *buf, int size, int offset) {
     strcpy(out + strlen(out), s);
     strcpy(out + strlen(out), "\n");
 
-    int len = (int)strlen(out);
+    size_t len = strlen(out);
     if (offset >= len) return 0;
-    int to_copy = len - offset;
+    size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
     return to_copy;
 }
 
 // --- Memory Tracking Implementation ---
-static int read_mem_tracking(char *buf, int size, int offset) {
+static int read_mem_tracking(char *buf, size_t size, size_t offset) {
     MemStats stats = memory_get_stats();
     char out[1024];
     memset(out, 0, 1024);
@@ -54,16 +54,16 @@ static int read_mem_tracking(char *buf, int size, int offset) {
     strcpy(out + strlen(out), s);
     strcpy(out + strlen(out), "%\n");
 
-    int len = (int)strlen(out);
+    size_t len = strlen(out);
     if (offset >= len) return 0;
-    int to_copy = len - offset;
+    size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
     return to_copy;
 }
 
 // --- Module Implementation ---
-static int read_sys_modules(char *buf, int size, int offset) {
+static int read_sys_modules(char *buf, size_t size, size_t offset) {
     int count = module_manager_get_count();
     char out[2048] = "Loaded Modules:\n";
     
@@ -77,16 +77,16 @@ static int read_sys_modules(char *buf, int size, int offset) {
         strcpy(out + strlen(out), " KB)\n");
     }
 
-    int len = strlen(out);
+    size_t len = strlen(out);
     if (offset >= len) return 0;
-    int to_copy = len - offset;
+    size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
     return to_copy;
 }
 
 // --- PCI Bus Implementation ---
-static int read_pci_bus(char *buf, int size, int offset) {
+static int read_pci_bus(char *buf, size_t size, size_t offset) {
     pci_device_t devices[64];
     int count = pci_enumerate_devices(devices, 64);
     
@@ -120,29 +120,29 @@ static int read_pci_bus(char *buf, int size, int offset) {
         }
     }
 
-    int len = (int)strlen(out);
+    size_t len = strlen(out);
     if (offset >= len) return 0;
-    int to_copy = len - offset;
+    size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
     return to_copy;
 }
 
-static int read_ticks_info(char *buf, int size, int offset) {
+static int read_ticks_info(char *buf, size_t size, size_t offset) {
     extern uint32_t get_ticks(void);
     uint32_t ticks = get_ticks();
     char out[32];
     itoa(ticks, out);
     strcpy(out + strlen(out), "\n");
-    int len = (int)strlen(out);
+    size_t len = strlen(out);
     if (offset >= len) return 0;
-    int to_copy = len - offset;
+    size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
     return to_copy;
 }
 
-static int read_mem_info(char *buf, int size, int offset) {
+static int read_mem_info(char *buf, size_t size, size_t offset) {
     MemStats stats = memory_get_stats();
     char out[128];
     char temp[32];
@@ -156,23 +156,23 @@ static int read_mem_info(char *buf, int size, int offset) {
     strcpy(out + strlen(out), temp);
     strcpy(out + strlen(out), "\n");
     
-    int len = (int)strlen(out);
+    size_t len = size_t strlen(out);
     if (offset >= len) return 0;
-    int to_copy = len - offset;
+    size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
     return to_copy;
 }
 
-static int read_keyboard_layout(char *buf, int size, int offset) {
+static int read_keyboard_layout(char *buf, size_t size, size_t offset) {
     extern int keymap_get_current(void);
     int layout = keymap_get_current();
     char out[16];
     itoa(layout, out);
     strcpy(out + strlen(out), "\n");
-    int len = (int)strlen(out);
+    size_t len = strlen(out);
     if (offset >= len) return 0;
-    int to_copy = len - offset;
+    size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
     return to_copy;
@@ -189,7 +189,7 @@ static int write_keyboard_layout(const char *buf, int size, int offset) {
     return size;
 }
 // --- CPU System Implementation ---
-static int read_cpu_info(char *buf, int size, int offset) {
+static int read_cpu_info(char *buf, size_t size, size_t offset) {
     char *out = (char*)kmalloc(16384);
     if (!out) return 0;
     out[0] = 0;
@@ -293,9 +293,9 @@ static int read_cpu_info(char *buf, int size, int offset) {
         }
     }
     
-    int len = (int)strlen(out);
+    size_t len = strlen(out);
     if (offset >= len) { kfree(out); return 0; }
-    int to_copy = len - offset;
+    size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
     kfree(out);
@@ -303,7 +303,7 @@ static int read_cpu_info(char *buf, int size, int offset) {
 }
 
 // --- Devices Implementation ---
-static int read_sys_devices(char *buf, int size, int offset) {
+static int read_sys_devices(char *buf, size_t size, size_t offset) {
     char out[2048];
     memset(out, 0, 2048);
     
@@ -330,16 +330,16 @@ static int read_sys_devices(char *buf, int size, int offset) {
     strcpy(out + strlen(out), "  keyboard - Keyboard input\n");
     strcpy(out + strlen(out), "  framebuffer - Framebuffer device\n");
     
-    int len = (int)strlen(out);
+    size_t len = strlen(out);
     if (offset >= len) return 0;
-    int to_copy = len - offset;
+    size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
     return to_copy;
 }
 
 // --- Class Implementation ---
-static int read_sys_class(char *buf, int size, int offset) {
+static int read_sys_class(char *buf, size_t size, size_t offset) {
     char out[1024];
     memset(out, 0, 1024);
     
@@ -351,25 +351,25 @@ static int read_sys_class(char *buf, int size, int offset) {
     strcpy(out + strlen(out), "  video - Video device class\n");
     strcpy(out + strlen(out), "  net - Network device class\n");
     
-    int len = (int)strlen(out);
+    size_t len = strlen(out);
     if (offset >= len) return 0;
-    int to_copy = len - offset;
+    size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
     return to_copy;
 }
 
 // --- GPIO Implementation ---
-static int read_gpio_debug(char *buf, int size, int offset) {
+static int read_gpio_debug(char *buf, size_t size, size_t offset) {
     uint8_t p64 = inb(0x64);
     char out[64] = "Port 0x64 Status: ";
     char s[16]; itoa(p64, s);
     strcpy(out + strlen(out), s);
     strcpy(out + strlen(out), "\n");
     
-    int len = strlen(out);
+    size_t len = strlen(out);
     if (offset >= len) return 0;
-    int to_copy = len - offset;
+    size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
     return to_copy;

@@ -705,7 +705,7 @@ static void find_boot_config(char *out_path) {
     int count = vfs_list_directory("/boot/efi", entries, 32, 0);
     for (int i = 0; i < count; i++) {
         if (!entries[i].is_directory) {
-            int len = (int)strlen(entries[i].name);
+            size_t len = strlen(entries[i].name);
             if (len > 5 && (strcmp(entries[i].name + len - 5, ".conf") == 0 || strcmp(entries[i].name + len - 4, ".cfg") == 0)) {
                 strcpy(out_path, "/boot/efi/");
                 strcat(out_path, entries[i].name);
@@ -718,7 +718,7 @@ static void find_boot_config(char *out_path) {
     count = vfs_list_directory("/", entries, 32, 0);
     for (int i = 0; i < count; i++) {
         if (!entries[i].is_directory) {
-            int len = (int)strlen(entries[i].name);
+            size_t len = strlen(entries[i].name);
             if (len > 5 && (strcmp(entries[i].name + len - 5, ".conf") == 0 || strcmp(entries[i].name + len - 4, ".cfg") == 0)) {
                 strcpy(out_path, "/");
                 strcat(out_path, entries[i].name);

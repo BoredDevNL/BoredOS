@@ -115,7 +115,7 @@ void rtc_set_datetime(int year, int month, int day, int hour, int minute, int se
     outb(CMOS_DATA, prev_b & ~0x80);
 }
 
-int rtc_dev_read(void *buf, int size, uint64_t *position) {
+int rtc_dev_read(void *buf, size_t size, uint64_t *position) {
     int y, m, d, h, min, s;
     rtc_get_datetime(&y, &m, &d, &h, &min, &s);
     
@@ -152,11 +152,12 @@ int rtc_dev_read(void *buf, int size, uint64_t *position) {
     strcpy(out + strlen(out), temp);
     strcpy(out + strlen(out), "\n");
     
-    int len = (int)strlen(out);
+    size_t len = strlen(out);
     if (*position >= (uint64_t)len) return 0;
-    int to_copy = len - (int)*position;
+    size_t pos = (size_t)*position;
+    size_t to_copy = len - pos;
     if (to_copy > size) to_copy = size;
-    memcpy(buf, out + *position, to_copy);
+    memcpy(buf, out + pos, to_copy);
     *position += to_copy;
     return to_copy;
 }

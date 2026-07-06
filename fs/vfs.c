@@ -552,7 +552,7 @@ void vfs_close(vfs_file_t *file) {
     spinlock_release_irqrestore(&vfs_lock, flags);
 }
 
-int vfs_read(vfs_file_t *file, void *buf, int size) {
+int vfs_read(vfs_file_t *file, void *buf, size_t size) {
     if (VFS_FILE_INVALID(file)) return -1;
     
     if (file->is_device) {
@@ -632,7 +632,7 @@ int vfs_read(vfs_file_t *file, void *buf, int size) {
             return ac97_read(file->fs_handle, buf, size);
         }
         else if (file->device_type == DEVICE_TYPE_RTC) {
-            extern int rtc_dev_read(void *buf, int size, uint64_t *position);
+            extern int rtc_dev_read(void *buf, size_t size, uint64_t *position);
             return rtc_dev_read(buf, size, &file->position);
         }
         return -1;
@@ -645,7 +645,7 @@ int vfs_read(vfs_file_t *file, void *buf, int size) {
     return ret;
 }
 
-int vfs_write(vfs_file_t *file, const void *buf, int size) {
+int vfs_write(vfs_file_t *file, const void *buf, size_t size) {
     if (VFS_FILE_INVALID(file)) return -1;
 
     if (file->is_device) {
@@ -716,7 +716,7 @@ int vfs_write(vfs_file_t *file, const void *buf, int size) {
             return ac97_write(file->fs_handle, buf, size);
         }
         else if (file->device_type == DEVICE_TYPE_RTC) {
-            extern int rtc_dev_write(const void *buf, int size, uint64_t *position);
+            extern int rtc_dev_write(const void *buf, size_t size, uint64_t *position);
             return rtc_dev_write(buf, size, &file->position);
         }
         return -1;

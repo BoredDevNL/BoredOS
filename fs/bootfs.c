@@ -33,8 +33,8 @@ typedef struct {
 
 static void* bootfs_open(void *fs_private, const char *path, const char *mode);
 static void bootfs_close(void *fs_private, void *handle);
-static int bootfs_read(void *fs_private, void *handle, void *buf, int size);
-static int bootfs_write(void *fs_private, void *handle, const void *buf, int size);
+static int bootfs_read(void *fs_private, void *handle, void *buf, size_t size);
+static int bootfs_write(void *fs_private, void *handle, const void *buf, size_t size);
 static int bootfs_seek(void *fs_private, void *handle, int offset, int whence);
 static int bootfs_readdir(void *fs_private, const char *rel_path, vfs_dirent_t *entries, int max, int offset);
 static bool bootfs_mkdir(void *fs_private, const char *rel_path);
@@ -220,7 +220,7 @@ static int generate_metadata_content(const char *file, char *buffer, int max_siz
     return len;
 }
 
-static int bootfs_read(void *fs_private, void *handle, void *buf, int size) {
+static int bootfs_read(void *fs_private, void *handle, void *buf, size_t size) {
     bootfs_handle_t *h = (bootfs_handle_t*)handle;
     if (!h || !buf || size <= 0) return -1;
     
@@ -290,7 +290,7 @@ static int bootfs_read(void *fs_private, void *handle, void *buf, int size) {
     return read_size;
 }
 
-static int bootfs_write(void *fs_private, void *handle, const void *buf, int size) {
+static int bootfs_write(void *fs_private, void *handle, const void *buf, size_t size) {
     bootfs_handle_t *h = (bootfs_handle_t*)handle;
     if (!h || !buf || size <= 0) return -1;
     
@@ -730,7 +730,7 @@ static void find_boot_config(char *out_path) {
 
 void bootfs_refresh_from_disk(void) {
     extern vfs_file_t* vfs_open(const char *path, const char *mode);
-    extern int vfs_read(vfs_file_t *file, void *buf, int size);
+    extern int vfs_read(vfs_file_t *file, void *buf, size_t size);
     extern void vfs_close(vfs_file_t *file);
     
     char path[128];

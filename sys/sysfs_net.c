@@ -67,7 +67,7 @@ static int read_net_address(char *buf, size_t size, size_t offset) {
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
-    return to_copy;
+    return (int)to_copy;
   }
   return -1;
 }
@@ -83,7 +83,7 @@ static int read_ip_field(char *buf, size_t size, size_t offset,
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
-    return to_copy;
+    return (int)to_copy;
   }
   return -1;
 }
@@ -106,7 +106,7 @@ static int read_net_nic(char *buf, size_t size, size_t offset) {
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
-    return to_copy;
+    return (int)to_copy;
   }
   return -1;
 }
@@ -124,7 +124,7 @@ static int read_net_status(char *buf, size_t  size, size_t offset) {
   size_t to_copy = len - offset;
   if (to_copy > size) to_copy = size;
   memcpy(buf, out + offset, to_copy);
-  return to_copy;
+  return (int)to_copy;
 }
 
 static int read_net_stats(char *buf, size_t size, size_t offset) {
@@ -150,19 +150,19 @@ static int read_net_stats(char *buf, size_t size, size_t offset) {
   size_t to_copy = len - offset;
   if (to_copy > size) to_copy = size;
   memcpy(buf, out + offset, to_copy);
-  return to_copy;
+  return (int)to_copy;
 }
 
 static int write_net_control(const char *buf, size_t size, size_t offset) {
   (void)offset;
   if (strncmp(buf, "dhcp", 4) == 0) {
-    return network_dhcp_acquire() == 0 ? size : -1;
+    return network_dhcp_acquire() == 0 ? (int)size : -1;
   } else if (strncmp(buf, "init", 4) == 0) {
-    return network_init() == 0 ? size : -1;
+    return network_init() == 0 ? (int)size : -1;
   } else if (strncmp(buf, "set_ip ", 7) == 0) {
     ipv4_address_t ip;
     if (parse_ip(buf + 7, &ip) == 0) {
-      return network_set_ipv4_address(&ip) == 0 ? size : -1;
+      return network_set_ipv4_address(&ip) == 0 ? (int)size : -1;
     }
   }
   return -1;
@@ -210,7 +210,7 @@ static int read_ping(char *buf, size_t size, size_t offset) {
   size_t to_copy = len - offset;
   if (to_copy > size) to_copy = size;
   memcpy(buf, proc->ping_result + offset, to_copy);
-  return to_copy;
+  return (int)to_copy;
 }
 
 void sysfs_net_init(void) {

@@ -244,7 +244,7 @@ static void vfs_ext4_close(void *fs_private, void *file_handle) {
 }
 
 static int vfs_ext4_read(void *fs_private, void *file_handle,
-                         void *buf, int size) {
+                         void *buf, size_t size) {
     (void)fs_private;
     ext4fs_handle_t *h = (ext4fs_handle_t *)file_handle;
     if (!h || !h->valid) return -1;
@@ -256,7 +256,7 @@ static int vfs_ext4_read(void *fs_private, void *file_handle,
 }
 
 static int vfs_ext4_write(void *fs_private, void *file_handle,
-                          const void *buf, int size) {
+                          const void *buf, size_t size) {
     (void)fs_private;
     ext4fs_handle_t *h = (ext4fs_handle_t *)file_handle;
     if (!h || !h->valid) return -1;

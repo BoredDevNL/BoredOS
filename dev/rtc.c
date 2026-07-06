@@ -159,7 +159,7 @@ int rtc_dev_read(void *buf, size_t size, uint64_t *position) {
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + pos, to_copy);
     *position += to_copy;
-    return to_copy;
+    return (int)to_copy;
 }
 
 int rtc_dev_write(const void *buf, int size, uint64_t *position) {

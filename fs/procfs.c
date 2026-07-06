@@ -53,7 +53,7 @@ void procfs_close(void *fs_private, void *handle) {
     if (handle) kfree(handle);
 }
 
-int procfs_read(void *fs_private, void *handle, void *buf, int size) {
+int procfs_read(void *fs_private, void *handle, void *buf, size_t size) {
     procfs_handle_t *h = (procfs_handle_t*)handle;
     if (!h) return -1;
 
@@ -355,10 +355,10 @@ int procfs_read(void *fs_private, void *handle, void *buf, int size) {
     memcpy(buf, out + h->offset, to_copy);
     h->offset += to_copy;
     kfree(out);
-    return to_copy;
+    return (int)to_copy;
 }
 
-int procfs_write(void *fs_private, void *handle, const void *buf, int size) {
+int procfs_write(void *fs_private, void *handle, const void *buf, size_t size) {
     procfs_handle_t *h = (procfs_handle_t*)handle;
     if (!h || h->pid == 0xFFFFFFFF) return -1;
 

@@ -80,7 +80,7 @@ static uint32_t realfs_allocate_cluster(FAT32_Volume *vol);
 static int realfs_read_cluster(FAT32_Volume *vol, uint32_t cluster, uint8_t *buffer);
 static int realfs_write_cluster(FAT32_Volume *vol, uint32_t cluster, const uint8_t *buffer);
 static uint32_t realfs_next_cluster(FAT32_Volume *vol, uint32_t cluster);
-static bool realfs_find_contiguous_free(FAT32_Volume *vol, uint32_t dir_start_cluster, int n, uint32_t *out_cluster, int *out_entry_idx);
+static bool realfs_find_contiguous_free(FAT32_Volume *vol, uint32_t dir_start_cluster, int n, uint32_t *out_cluster, size_t *out_entry_idx);
 static uint8_t fat_lfn_checksum(const uint8_t *short_name);
 static void extract_lfn_chars(FAT32_LFNEntry *lfn, char *buffer);
 static void to_dos_filename(const char *filename, char *dos_name);
@@ -443,7 +443,7 @@ static FAT32_FileHandle* ramfs_open(const char *normalized_path, const char *mod
     return handle;
 }
 
-static int ramfs_read(FAT32_FileHandle *handle, void *buffer, int size) {
+static int ramfs_read(FAT32_FileHandle *handle, void *buffer, size_t size) {
     int bytes_read = 0;
     uint8_t *buf = (uint8_t *)buffer;
     
@@ -468,7 +468,7 @@ static int ramfs_read(FAT32_FileHandle *handle, void *buffer, int size) {
     return bytes_read;
 }
 
-static int ramfs_write(FAT32_FileHandle *handle, const void *buffer, int size) {
+static int ramfs_write(FAT32_FileHandle *handle, const void *buffer, size_t size) {
     int bytes_written = 0;
     const uint8_t *buf = (const uint8_t *)buffer;
     
@@ -971,7 +971,7 @@ static FAT32_FileHandle* realfs_open_from_vol(FAT32_Volume *vol, const char *pat
     return fh;
 }
 
-static int realfs_read_file(FAT32_FileHandle *handle, void *buffer, int size, uint8_t *ext_cluster_buf) {
+static int realfs_read_file(FAT32_FileHandle *handle, void *buffer, size_t size, uint8_t *ext_cluster_buf) {
     FAT32_Volume *vol = (FAT32_Volume*)handle->volume;
     if (!vol) return 0;
     
@@ -1027,7 +1027,7 @@ static int realfs_write_cluster(FAT32_Volume *vol, uint32_t cluster, const uint8
 }
 
 // Helper to find N contiguous free entries in a directory cluster chain
-static bool realfs_find_contiguous_free(FAT32_Volume *vol, uint32_t dir_start_cluster, int n, uint32_t *out_cluster, int *out_entry_idx) {
+static bool realfs_find_contiguous_free(FAT32_Volume *vol, uint32_t dir_start_cluster, int n, uint32_t *out_cluster, size_t *out_entry_idx) {
     uint32_t current = dir_start_cluster;
     uint8_t *cluster_buf = (uint8_t*)kmalloc(vol->sectors_per_cluster * 512);
     if (!cluster_buf) return false;
@@ -1161,7 +1161,7 @@ static void handle_fat32_truncate(FAT32_FileHandle *handle) {
     realfs_update_dir_entry_size(vol, handle);
 }
 
-static int realfs_write_file(FAT32_FileHandle *handle, const void *buffer, int size, uint8_t *ext_cluster_buf) {
+static int realfs_write_file(FAT32_FileHandle *handle, const void *buffer, size_t size, uint8_t *ext_cluster_buf) {
     FAT32_Volume *vol = (FAT32_Volume*)handle->volume;
     if (!vol) return 0;
     
@@ -1531,7 +1531,7 @@ static void vfs_ramfs_close(void *fs_private, void *file_handle) {
     fat32_close((FAT32_FileHandle*)file_handle);
 }
 
-static int vfs_ramfs_read(void *fs_private, void *file_handle, void *buf, int size) {
+static int vfs_ramfs_read(void *fs_private, void *file_handle, void *buf, size_t size) {
     (void)fs_private;
     uint64_t rflags = spinlock_acquire_irqsave(&ramfs_lock);
     int ret = ramfs_read((FAT32_FileHandle*)file_handle, buf, size);
@@ -1539,7 +1539,7 @@ static int vfs_ramfs_read(void *fs_private, void *file_handle, void *buf, int si
     return ret;
 }
 
-static int vfs_ramfs_write(void *fs_private, void *file_handle, const void *buf, int size) {
+static int vfs_ramfs_write(void *fs_private, void *file_handle, const void *buf, size_t size) {
     (void)fs_private;
     uint64_t rflags = spinlock_acquire_irqsave(&ramfs_lock);
     int ret = ramfs_write((FAT32_FileHandle*)file_handle, buf, size);
@@ -1755,7 +1755,7 @@ static void vfs_realfs_close(void *fs_private, void *file_handle) {
     fat32_close((FAT32_FileHandle*)file_handle);
 }
 
-static int vfs_realfs_read(void *fs_private, void *file_handle, void *buf, int size) {
+static int vfs_realfs_read(void *fs_private, void *file_handle, void *buf, size_t size) {
     (void)fs_private;
     FAT32_FileHandle *handle = (FAT32_FileHandle*)file_handle;
     FAT32_Volume *vol = (FAT32_Volume*)handle->volume;
@@ -1783,7 +1783,7 @@ static int vfs_realfs_read(void *fs_private, void *file_handle, void *buf, int s
     return total_read;
 }
 
-static int vfs_realfs_write(void *fs_private, void *file_handle, const void *buf, int size) {
+static int vfs_realfs_write(void *fs_private, void *file_handle, const void *buf, size_t size) {
     (void)fs_private;
     FAT32_FileHandle *handle = (FAT32_FileHandle*)file_handle;
     FAT32_Volume *vol = (FAT32_Volume*)handle->volume;
@@ -2155,7 +2155,7 @@ void fat32_close(FAT32_FileHandle *handle) {
     spinlock_release_irqrestore(&ramfs_lock, rflags);
 }
 
-int fat32_read(FAT32_FileHandle *handle, void *buffer, int size) {
+int fat32_read(FAT32_FileHandle *handle, void *buffer, size_t size) {
     // SMP: Use FAT32 spinlock
     uint64_t rflags = spinlock_acquire_irqsave(&ramfs_lock);
     if (!handle || !handle->valid || handle->mode != 0) {
@@ -2174,7 +2174,7 @@ int fat32_read(FAT32_FileHandle *handle, void *buffer, int size) {
     return ret;
 }
 
-int fat32_write(FAT32_FileHandle *handle, const void *buffer, int size) {
+int fat32_write(FAT32_FileHandle *handle, const void *buffer, size_t size) {
     // SMP: Use FAT32 spinlock
     uint64_t rflags = spinlock_acquire_irqsave(&ramfs_lock);
     if (!handle || !handle->valid || (handle->mode != 1 && handle->mode != 2)) {
@@ -2770,7 +2770,7 @@ bool fat32_chdir(const char *path) {
     return false;
 }
 
-void fat32_get_current_dir(char *buffer, int size) {
+void fat32_get_current_dir(char *buffer, size_t size) {
     // SMP: Use FAT32 spinlock
     uint64_t rflags = spinlock_acquire_irqsave(&ramfs_lock);
     

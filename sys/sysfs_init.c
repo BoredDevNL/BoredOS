@@ -36,7 +36,7 @@ static int read_gfx_drm(char *buf, size_t size, size_t offset) {
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
-    return to_copy;
+    return (int)to_copy;
 }
 
 // --- Memory Tracking Implementation ---
@@ -59,7 +59,7 @@ static int read_mem_tracking(char *buf, size_t size, size_t offset) {
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
-    return to_copy;
+    return (int)to_copy;
 }
 
 // --- Module Implementation ---
@@ -82,7 +82,7 @@ static int read_sys_modules(char *buf, size_t size, size_t offset) {
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
-    return to_copy;
+    return (int)to_copy;
 }
 
 // --- PCI Bus Implementation ---
@@ -125,7 +125,7 @@ static int read_pci_bus(char *buf, size_t size, size_t offset) {
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
-    return to_copy;
+    return (int)to_copy;
 }
 
 static int read_ticks_info(char *buf, size_t size, size_t offset) {
@@ -139,7 +139,7 @@ static int read_ticks_info(char *buf, size_t size, size_t offset) {
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
-    return to_copy;
+    return (int)to_copy;
 }
 
 static int read_mem_info(char *buf, size_t size, size_t offset) {
@@ -156,12 +156,12 @@ static int read_mem_info(char *buf, size_t size, size_t offset) {
     strcpy(out + strlen(out), temp);
     strcpy(out + strlen(out), "\n");
     
-    size_t len = size_t strlen(out);
+    size_t len = strlen(out);
     if (offset >= len) return 0;
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
-    return to_copy;
+    return (int)to_copy;
 }
 
 static int read_keyboard_layout(char *buf, size_t size, size_t offset) {
@@ -175,18 +175,18 @@ static int read_keyboard_layout(char *buf, size_t size, size_t offset) {
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
-    return to_copy;
+    return (int)to_copy;
 }
 
-static int write_keyboard_layout(const char *buf, int size, int offset) {
+static int write_keyboard_layout(const char *buf, size_t size, size_t offset) {
     (void)offset;
     int val = 0;
-    for (int i = 0; i < size && buf[i] >= '0' && buf[i] <= '9'; i++) {
+    for (size_t i = 0; i < size && buf[i] >= '0' && buf[i] <= '9'; i++) {
         val = val * 10 + (buf[i] - '0');
     }
     extern void keymap_set_current(int id);
     keymap_set_current(val);
-    return size;
+    return (int)size;
 }
 // --- CPU System Implementation ---
 static int read_cpu_info(char *buf, size_t size, size_t offset) {
@@ -299,7 +299,7 @@ static int read_cpu_info(char *buf, size_t size, size_t offset) {
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
     kfree(out);
-    return to_copy;
+    return (int)to_copy;
 }
 
 // --- Devices Implementation ---
@@ -335,7 +335,7 @@ static int read_sys_devices(char *buf, size_t size, size_t offset) {
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
-    return to_copy;
+    return (int)to_copy;
 }
 
 // --- Class Implementation ---
@@ -356,7 +356,7 @@ static int read_sys_class(char *buf, size_t size, size_t offset) {
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
-    return to_copy;
+    return (int)to_copy;
 }
 
 // --- GPIO Implementation ---
@@ -372,7 +372,7 @@ static int read_gpio_debug(char *buf, size_t size, size_t offset) {
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     memcpy(buf, out + offset, to_copy);
-    return to_copy;
+    return (int)to_copy;
 }
 
 void sysfs_init_subsystems(void) {

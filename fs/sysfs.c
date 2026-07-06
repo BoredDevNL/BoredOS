@@ -44,7 +44,7 @@ static void sysfs_close(void *fs_private, void *handle) {
     if (handle) kfree(handle);
 }
 
-static int sysfs_read(void *fs_private, void *handle, void *buf, int size) {
+static int sysfs_read(void *fs_private, void *handle, void *buf, size_t size) {
     sysfs_handle_t *h = (sysfs_handle_t*)handle;
     if (!h || !h->file || !h->file->read) return -1;
 
@@ -53,7 +53,7 @@ static int sysfs_read(void *fs_private, void *handle, void *buf, int size) {
     return bytes;
 }
 
-static int sysfs_write(void *fs_private, void *handle, const void *buf, int size) {
+static int sysfs_write(void *fs_private, void *handle, const void *buf, size_t size) {
     sysfs_handle_t *h = (sysfs_handle_t*)handle;
     if (!h || !h->file || !h->file->write) return -1;
 

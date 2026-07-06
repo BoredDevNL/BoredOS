@@ -10,8 +10,8 @@
 
 typedef struct {
     char name[64];
-    int (*read)(char *buffer, int size, int offset);
-    int (*write)(const char *buffer, int size, int offset);
+    int (*read)(char *buffer, size_t size, size_t offset);
+    int (*write)(const char *buffer, size_t size, size_t offset);
 } subsystem_file_t;
 
 typedef struct {
@@ -22,8 +22,8 @@ typedef struct {
 
 void subsystem_register(const char *name, kernel_subsystem_t **out_sub);
 void subsystem_add_file(kernel_subsystem_t *sub, const char *name, 
-                        int (*read)(char*, int, int), 
-                        int (*write)(const char*, int, int));
+                        int (*read)(char*, size_t, size_t), 
+                        int (*write)(const char*, size_t, size_t));
 
 kernel_subsystem_t* subsystem_get_by_name(const char *name);
 int subsystem_get_count(void);

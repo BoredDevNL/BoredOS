@@ -1109,10 +1109,10 @@ static uint64_t fs_cmd_exists(const syscall_args_t *args) {
 static uint64_t fs_cmd_getcwd(const syscall_args_t *args) {
   process_t *proc = process_get_current();
   char *buf = (char *)args->arg2;
-  int size = (int)args->arg3;
+  size_t size = args->arg3;
   if (!buf || size <= 0)
     return -1;
-  int len = (int)strlen(proc->cwd);
+  size_t len = strlen(proc->cwd);
   if (len >= size)
     return -1;
   strcpy(buf, proc->cwd);

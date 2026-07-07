@@ -373,8 +373,8 @@ void disk_register_partition(Disk *parent, uint32_t lba_offset, uint32_t sector_
     if (!part) return;
 
     // Build name: parent_devname + partition number (e.g. "sda1")
-    int len = strlen(parent->devname);
-    for (int i = 0; i < len; i++) part->devname[i] = parent->devname[i];
+    size_t len = strlen(parent->devname);
+    for (size_t i = 0; i < len; i++) part->devname[i] = parent->devname[i];
     part->devname[len] = '0' + part_num;
     part->devname[len + 1] = 0;
 

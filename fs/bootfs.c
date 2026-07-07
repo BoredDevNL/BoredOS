@@ -33,8 +33,8 @@ typedef struct {
 
 static void* bootfs_open(void *fs_private, const char *path, const char *mode);
 static void bootfs_close(void *fs_private, void *handle);
-static int bootfs_read(void *fs_private, void *handle, void *buf, int size);
-static int bootfs_write(void *fs_private, void *handle, const void *buf, int size);
+static ssize_t bootfs_read(void *fs_private, void *handle, void *buf, size_t size);
+static ssize_t bootfs_write(void *fs_private, void *handle, const void *buf, size_t size);
 static int bootfs_seek(void *fs_private, void *handle, int offset, int whence);
 static int bootfs_readdir(void *fs_private, const char *rel_path, vfs_dirent_t *entries, int max, int offset);
 static bool bootfs_mkdir(void *fs_private, const char *rel_path);
@@ -220,86 +220,158 @@ static int generate_metadata_content(const char *file, char *buffer, int max_siz
     return len;
 }
 
-static int bootfs_read(void *fs_private, void *handle, void *buf, int size) {
+static ssize_t bootfs_read(void *fs_private, void *handle, void *buf, size_t size) {
+    (void)fs_private;
+
+    if (!buf && size > 0)
+        return -1;
+
     bootfs_handle_t *h = (bootfs_handle_t*)handle;
-    if (!h || !buf || size <= 0) return -1;
-    
+
+    if (!h || size == 0)
+        return -1;
+
     if (h->disk_file) {
-        int ret = vfs_read(h->disk_file, buf, size);
-        if (ret > 0) h->offset += ret;
+        ssize_t ret = vfs_read(h->disk_file, buf, size);
+
+        if (ret > 0)
+            h->offset += (size_t)ret;
+
         return ret;
     }
-    
+
     char *content_buffer = (char*)kmalloc(4096);
-    if (!content_buffer) return -1;
-    
-    int content_len = 0;
-    
+
+    if (!content_buffer)
+        return -1;
+
+    ssize_t content_len = 0;
+
     if (strcmp(h->path, "kernel") == 0) {
         strcpy(content_buffer, "Kernel reference\nSize: ");
+
         char size_buf[32];
+
         itoa(g_bootfs_state.kernel_size, size_buf);
+
         strcpy(content_buffer + strlen(content_buffer), size_buf);
         strcpy(content_buffer + strlen(content_buffer), " bytes\n");
+
         content_len = strlen(content_buffer);
+
     } else if (strcmp(h->path, "initrd") == 0) {
         strcpy(content_buffer, "Initial ramdisk reference\nSize: ");
+
         char size_buf[32];
+
         itoa(g_bootfs_state.initrd_size, size_buf);
+
         strcpy(content_buffer + strlen(content_buffer), size_buf);
         strcpy(content_buffer + strlen(content_buffer), " bytes\n");
+
         content_len = strlen(content_buffer);
+
     } else if (strcmp(h->path, "initrd.tar") == 0) {
         kfree(content_buffer);
-        if (h->offset >= (int)g_bootfs_state.initrd_size) return 0;
-        int avail = (int)g_bootfs_state.initrd_size - h->offset;
-        int to_read = (size < avail) ? size : avail;
-        memcpy(buf, (uint8_t*)g_bootfs_state.initrd_ptr + h->offset, to_read);
+
+        if (h->offset >= g_bootfs_state.initrd_size)
+            return 0;
+
+        size_t avail = g_bootfs_state.initrd_size - h->offset;
+
+        size_t to_read = (size < avail) ? size : avail;
+
+        if (to_read > SSIZE_MAX)
+            return -1;
+
+        memcpy(buf,
+               (uint8_t*)g_bootfs_state.initrd_ptr + h->offset,
+               to_read);
+
         h->offset += to_read;
-        return to_read;
+
+        return (ssize_t)to_read;
+
     } else if (is_metadata_file(h->path)) {
-        content_len = generate_metadata_content(h->path, content_buffer, 4096);
+        content_len = generate_metadata_content(h->path,
+                                                content_buffer,
+                                                4096);
+
+        if (content_len < 0) {
+            kfree(content_buffer);
+            return -1;
+        }
+
     } else {
         bootfs_custom_file_t *cf = bootfs_find_custom(h->path);
+
         if (cf) {
             kfree(content_buffer);
-            if (h->offset >= (int)cf->size) return 0;
-            int avail = (int)cf->size - h->offset;
-            int to_read = (avail < size) ? avail : size;
+
+            if (h->offset >= cf->size)
+                return 0;
+
+            size_t avail = cf->size - h->offset;
+
+            size_t to_read = (size < avail) ? size : avail;
+
+            if (to_read > SSIZE_MAX)
+                return -1;
+
             memcpy(buf, cf->data + h->offset, to_read);
+
             h->offset += to_read;
-            return to_read;
+
+            return (ssize_t)to_read;
         }
+
         kfree(content_buffer);
         return -1;
     }
-    
-    // Handle offset and reading
-    if (h->offset >= content_len) {
+
+    if ((size_t)h->offset >= (size_t)content_len) {
         kfree(content_buffer);
         return 0;
     }
-    
-    int available = content_len - h->offset;
-    int read_size = (available < size) ? available : size;
-    
+
+    size_t available = (size_t)content_len - h->offset;
+
+    size_t read_size = (available < size) ? available : size;
+
+    if (read_size > SSIZE_MAX) {
+        kfree(content_buffer);
+        return -1;
+    }
+
     memcpy(buf, content_buffer + h->offset, read_size);
+
     h->offset += read_size;
-    
+
     kfree(content_buffer);
-    return read_size;
+
+    return (ssize_t)read_size;
 }
 
-static int bootfs_write(void *fs_private, void *handle, const void *buf, int size) {
+static ssize_t bootfs_write(void *fs_private, void *handle, const void *buf, size_t size) {
+    (void)fs_private;
+
+    if (!buf && size > 0)
+        return -1;
+
     bootfs_handle_t *h = (bootfs_handle_t*)handle;
-    if (!h || !buf || size <= 0) return -1;
-    
+
+    if (!h || size == 0)
+        return -1;
+
     if (h->disk_file) {
-        int ret = vfs_write(h->disk_file, buf, size);
-        if (ret > 0) h->offset += ret;
+        ssize_t ret = vfs_write(h->disk_file, buf, size);
+
+        if (ret > 0)
+            h->offset += (size_t)ret;
+
         return ret;
     }
-    
+
     return -1;
 }
 
@@ -705,7 +777,7 @@ static void find_boot_config(char *out_path) {
     int count = vfs_list_directory("/boot/efi", entries, 32, 0);
     for (int i = 0; i < count; i++) {
         if (!entries[i].is_directory) {
-            int len = (int)strlen(entries[i].name);
+            size_t len = strlen(entries[i].name);
             if (len > 5 && (strcmp(entries[i].name + len - 5, ".conf") == 0 || strcmp(entries[i].name + len - 4, ".cfg") == 0)) {
                 strcpy(out_path, "/boot/efi/");
                 strcat(out_path, entries[i].name);
@@ -718,7 +790,7 @@ static void find_boot_config(char *out_path) {
     count = vfs_list_directory("/", entries, 32, 0);
     for (int i = 0; i < count; i++) {
         if (!entries[i].is_directory) {
-            int len = (int)strlen(entries[i].name);
+            size_t len = strlen(entries[i].name);
             if (len > 5 && (strcmp(entries[i].name + len - 5, ".conf") == 0 || strcmp(entries[i].name + len - 4, ".cfg") == 0)) {
                 strcpy(out_path, "/");
                 strcat(out_path, entries[i].name);
@@ -730,7 +802,7 @@ static void find_boot_config(char *out_path) {
 
 void bootfs_refresh_from_disk(void) {
     extern vfs_file_t* vfs_open(const char *path, const char *mode);
-    extern int vfs_read(vfs_file_t *file, void *buf, int size);
+    extern int vfs_read(vfs_file_t *file, void *buf, size_t size);
     extern void vfs_close(vfs_file_t *file);
     
     char path[128];

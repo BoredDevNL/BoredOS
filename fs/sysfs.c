@@ -44,21 +44,41 @@ static void sysfs_close(void *fs_private, void *handle) {
     if (handle) kfree(handle);
 }
 
-static int sysfs_read(void *fs_private, void *handle, void *buf, int size) {
-    sysfs_handle_t *h = (sysfs_handle_t*)handle;
-    if (!h || !h->file || !h->file->read) return -1;
+static ssize_t sysfs_read(void *fs_private, void *handle, void *buf, size_t size) {
+    (void)fs_private;
 
-    int bytes = h->file->read((char*)buf, size, h->offset);
-    if (bytes > 0) h->offset += bytes;
+    if (!buf && size > 0)
+        return -1;
+
+    sysfs_handle_t *h = (sysfs_handle_t*)handle;
+
+    if (!h || !h->file || !h->file->read)
+        return -1;
+
+    ssize_t bytes = h->file->read((char*)buf, size, h->offset);
+
+    if (bytes > 0)
+        h->offset += (size_t)bytes;
+
     return bytes;
 }
 
-static int sysfs_write(void *fs_private, void *handle, const void *buf, int size) {
-    sysfs_handle_t *h = (sysfs_handle_t*)handle;
-    if (!h || !h->file || !h->file->write) return -1;
+static ssize_t sysfs_write(void *fs_private, void *handle, const void *buf, size_t size) {
+    (void)fs_private;
 
-    int bytes = h->file->write((const char*)buf, size, h->offset);
-    if (bytes > 0) h->offset += bytes;
+    if (!buf && size > 0)
+        return -1;
+
+    sysfs_handle_t *h = (sysfs_handle_t*)handle;
+
+    if (!h || !h->file || !h->file->write)
+        return -1;
+
+    ssize_t bytes = h->file->write((const char*)buf, size, h->offset);
+
+    if (bytes > 0)
+        h->offset += (size_t)bytes;
+
     return bytes;
 }
 
@@ -97,14 +117,14 @@ static int sysfs_readdir(void *fs_private, const char *path, vfs_dirent_t *entri
     }
 
     int count = subsystem_get_count();
-    int path_len = strlen(path);
+    size_t path_len = strlen(path);
 
     for (int i = 0; i < count && out < max; i++) {
         kernel_subsystem_t *s = subsystem_get_by_index(i);
         if (path_len == 0 || (strlen(s->name) > path_len && strncmp(s->name, path, path_len) == 0 && s->name[path_len] == '/')) {
             const char *sub_path = s->name + (path_len ? path_len + 1 : 0);
             char comp[64];
-            int j = 0;
+            size_t j = 0;
             while (sub_path[j] && sub_path[j] != '/' && j < 63) {
                 comp[j] = sub_path[j];
                 j++;
@@ -119,7 +139,7 @@ static int sysfs_readdir(void *fs_private, const char *path, vfs_dirent_t *entri
                 if (path_len == 0 || (strlen(ps->name) > path_len && strncmp(ps->name, path, path_len) == 0 && ps->name[path_len] == '/')) {
                     const char *p_sub_path = ps->name + (path_len ? path_len + 1 : 0);
                     char p_comp[64];
-                    int pj = 0;
+                    size_t pj = 0;
                     while (p_sub_path[pj] && p_sub_path[pj] != '/' && pj < 63) {
                         p_comp[pj] = p_sub_path[pj];
                         pj++;
@@ -178,7 +198,7 @@ static bool sysfs_exists(void *fs_private, const char *path) {
     }
 
     int count = subsystem_get_count();
-    int path_len = strlen(path);
+    size_t path_len = strlen(path);
     for (int i = 0; i < count; i++) {
         kernel_subsystem_t *s = subsystem_get_by_index(i);
         if (strlen(s->name) > path_len && strncmp(s->name, path, path_len) == 0 && s->name[path_len] == '/') return true;

@@ -81,7 +81,7 @@ static void ptext(int x, int y, const char *s, uint32_t col) {
 }
 
 static void ptext_centered(int y, const char *s, uint32_t col) {
-    int x = (g_sw - strlen(s) * 8) / 2;
+    int x = (int)((g_sw - strlen(s) * 8) / 2);
     if (x < 0) x = 0;
     draw_string(x, y, s, col);
 }
@@ -220,9 +220,9 @@ void kernel_panic(registers_t *regs, const char *error_name) {
         fmt_reg(buf, "Error Code: 0x", regs->err_code);
         if (regs->int_no == 14) {
             char pf[24]; decode_pf_error(regs->err_code, pf);
-            int bp = strlen(buf);
+            size_t bp = strlen(buf);
             buf[bp++] = ' ';
-            int pi = 0; while (pf[pi]) buf[bp++] = pf[pi++];
+            size_t pi = 0; while (pf[pi]) buf[bp++] = pf[pi++];
             buf[bp] = 0;
         }
         ptext(margin, dump_y, buf, COL_HIGHLIGHT); dump_y += 14;

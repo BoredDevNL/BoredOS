@@ -148,7 +148,7 @@ void platform_get_cpu_flags(char *flags_str) {
     if (ecx & (1 << 5)) strcpy(flags_str + strlen(flags_str), "abm ");
     
     // Remove trailing space
-    int len = strlen(flags_str);
+    size_t len = strlen(flags_str);
     if (len > 0 && flags_str[len-1] == ' ') {
         flags_str[len-1] = '\0';
     }

@@ -4,6 +4,7 @@
 #ifndef FAT32_H
 #define FAT32_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -135,8 +136,8 @@ void fat32_init(void);
 // File Operations (backward-compat wrappers — dispatch through VFS)
 FAT32_FileHandle* fat32_open(const char *path, const char *mode);
 void fat32_close(FAT32_FileHandle *handle);
-int fat32_read(FAT32_FileHandle *handle, void *buffer, int size);
-int fat32_write(FAT32_FileHandle *handle, const void *buffer, int size);
+int fat32_read(FAT32_FileHandle *handle, void *buffer, size_t size);
+int fat32_write(FAT32_FileHandle *handle, const void *buffer, size_t size);
 int fat32_seek(FAT32_FileHandle *handle, int offset, int whence);
 
 // Directory Operations
@@ -156,7 +157,7 @@ int fat32_get_info(const char *path, FAT32_FileInfo *info);
 
 // Working Directory (backward compat — wraps VFS path tracking)
 bool fat32_chdir(const char *path);
-void fat32_get_current_dir(char *buffer, int size);
+void fat32_get_current_dir(char *buffer, size_t size);
 bool fat32_change_drive(char drive);
 char fat32_get_current_drive(void);
 

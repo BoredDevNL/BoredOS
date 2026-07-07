@@ -3,6 +3,7 @@
 
 #include "ext4_config.h"
 
+#include "types.h"
 #include "ext4fs.h"
 #include "disk.h"
 #include "memory_manager.h"
@@ -243,28 +244,54 @@ static void vfs_ext4_close(void *fs_private, void *file_handle) {
     kfree(h);
 }
 
-static int vfs_ext4_read(void *fs_private, void *file_handle,
-                         void *buf, size_t size) {
+static ssize_t vfs_ext4_read(void *fs_private, void *file_handle,
+                             void *buf, size_t size) {
     (void)fs_private;
+
+    if (!buf && size > 0)
+        return -1;
+
     ext4fs_handle_t *h = (ext4fs_handle_t *)file_handle;
-    if (!h || !h->valid) return -1;
+
+    if (!h || !h->valid)
+        return -1;
 
     size_t rcnt = 0;
-    int r = ext4_fread(&h->file, buf, (size_t)size, &rcnt);
-    if (r != EOK && rcnt == 0) return -1;
-    return (int)rcnt;
+
+    int r = ext4_fread(&h->file, buf, size, &rcnt);
+
+    if (r != EOK && rcnt == 0)
+        return -1;
+
+    if (rcnt > SSIZE_MAX)
+        return -1;
+
+    return (ssize_t)rcnt;
 }
 
-static int vfs_ext4_write(void *fs_private, void *file_handle,
-                          const void *buf, size_t size) {
+static ssize_t vfs_ext4_write(void *fs_private, void *file_handle,
+                              const void *buf, size_t size) {
     (void)fs_private;
+
+    if (!buf && size > 0)
+        return -1;
+
     ext4fs_handle_t *h = (ext4fs_handle_t *)file_handle;
-    if (!h || !h->valid) return -1;
+
+    if (!h || !h->valid)
+        return -1;
 
     size_t wcnt = 0;
-    int r = ext4_fwrite(&h->file, buf, (size_t)size, &wcnt);
-    if (r != EOK && wcnt == 0) return -1;
-    return (int)wcnt;
+
+    int r = ext4_fwrite(&h->file, buf, size, &wcnt);
+
+    if (r != EOK && wcnt == 0)
+        return -1;
+
+    if (wcnt > SSIZE_MAX)
+        return -1;
+
+    return (ssize_t)wcnt;
 }
 
 static int vfs_ext4_seek(void *fs_private, void *file_handle,

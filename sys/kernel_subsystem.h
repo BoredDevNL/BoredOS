@@ -1,6 +1,7 @@
 #ifndef KERNEL_SUBSYSTEM_H
 #define KERNEL_SUBSYSTEM_H
 
+#include "types.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -10,8 +11,8 @@
 
 typedef struct {
     char name[64];
-    int (*read)(char *buffer, size_t size, size_t offset);
-    int (*write)(const char *buffer, size_t size, size_t offset);
+    ssize_t (*read)(char *buffer, size_t size, size_t offset);
+    ssize_t (*write)(const char *buffer, size_t size, size_t offset);
 } subsystem_file_t;
 
 typedef struct {
@@ -22,8 +23,8 @@ typedef struct {
 
 void subsystem_register(const char *name, kernel_subsystem_t **out_sub);
 void subsystem_add_file(kernel_subsystem_t *sub, const char *name, 
-                        int (*read)(char*, size_t, size_t), 
-                        int (*write)(const char*, size_t, size_t));
+                        ssize_t (*read)(char*, size_t, size_t), 
+                        ssize_t (*write)(const char*, size_t, size_t));
 
 kernel_subsystem_t* subsystem_get_by_name(const char *name);
 int subsystem_get_count(void);

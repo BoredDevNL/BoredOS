@@ -1,4 +1,4 @@
-// Copyright (c) 2023-2026 Christiaan (chris@boreddev.nl)
+// Copyright (c) 2026 Zerfithel (https://github.com/zerfithel)
 // This software is released under the GNU General Public License v3.0. See LICENSE file for details.
 // This header needs to maintain in any file it is present in, as per the GPL license terms.
 #ifndef TYPES_H

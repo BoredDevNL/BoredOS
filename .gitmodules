@@ -74,7 +74,13 @@
 	ignore = all
 	branch = main
 [submodule "usr/lwext4"]
-	path = usr/lwext4
+	path = fs/vendor/lwext4
 	url = https://github.com/gkostka/lwext4.git
 	ignore = all
 	branch = master
+[submodule "usr/mlibc"]
+	path = usr/mlibc
+	url = https://github.com/BoredOS/mlibc
+	ignore = all
+	branch = master
+

@@ -33,13 +33,19 @@ define PRINT_STEP
 endef
 
 C_SOURCES := $(shell find $(KERNEL_DIRS) -type f -name '*.c' \
-                ! -path '*/third_party/lwip/netif/slipif.c')
-ASM_SOURCES := $(shell find $(KERNEL_DIRS) -type f -name '*.asm')
+                ! -path '*/third_party/lwip/netif/slipif.c' \
+                ! -path 'fs/vendor/*' \
+                ! -path '*/fs/vendor/*')
+ASM_SOURCES := $(shell find $(KERNEL_DIRS) -type f -name '*.asm' \
+                ! -path 'fs/vendor/*' \
+                ! -path '*/fs/vendor/*')
 
 OBJ_FILES := $(patsubst %.c, $(BUILD_DIR)/%.o, $(C_SOURCES)) \
              $(patsubst %.asm, $(BUILD_DIR)/%.o, $(ASM_SOURCES))
 
-INCLUDE_DIRS := $(shell find $(KERNEL_DIRS) -type d)
+INCLUDE_DIRS := $(shell find $(KERNEL_DIRS) -type d \
+                ! -path 'fs/vendor/*' \
+                ! -path '*/fs/vendor/*')
 INCLUDES := $(patsubst %, -I%, $(INCLUDE_DIRS))
 
 # Detect clang wrapper (FreeBSD) vs freestanding GCC cross (macOS/Linux)
@@ -52,7 +58,7 @@ CFLAGS = -g -O2 -pipe -Wall -Wextra -std=gnu11 -ffreestanding \
          -fno-stack-protector -fno-stack-check -fno-lto -fPIE \
          -m64 -march=x86-64 -msse -msse2 -mstackrealign -mno-red-zone \
          $(TOOLCHAIN_FLAGS) $(INCLUDES) \
-         -Iusr/lwext4/include -Iusr/lwext4/include/misc
+         -Ifs/vendor/lwext4/include -Ifs/vendor/lwext4/include/misc
 
 LDFLAGS = -m elf_x86_64 -nostdlib -static -pie --no-dynamic-linker \
           -z text -z max-page-size=0x1000 -T linker.ld
@@ -113,8 +119,8 @@ $(BEARSSL_LIB): build/sdk
 	@printf "$(GREEN)[OK]$(RESET) BearSSL built: $@\n"
 
 # --- lwext4 static library ---
-LWEXT4_SRC_DIR = usr/lwext4/src
-LWEXT4_INC_DIR = usr/lwext4/include
+LWEXT4_SRC_DIR = fs/vendor/lwext4/src
+LWEXT4_INC_DIR = fs/vendor/lwext4/include
 LWEXT4_SRCS := $(wildcard $(LWEXT4_SRC_DIR)/*.c)
 LWEXT4_OBJS := $(patsubst $(LWEXT4_SRC_DIR)/%.c, $(BUILD_DIR)/lwext4/%.o, $(LWEXT4_SRCS))
 LWEXT4_LIB  = $(BUILD_DIR)/liblwext4.a

@@ -229,7 +229,7 @@ fi
 echo
 echo -e "${BLUE}[INFO]${NC} Downloading GCC prerequisites..."
 cd "gcc-${GCC_VER}"
-./usr/download_prerequisites
+./contrib/download_prerequisites
 cd ..
 
 echo

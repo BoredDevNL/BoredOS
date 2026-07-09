@@ -1531,20 +1531,52 @@ static void vfs_ramfs_close(void *fs_private, void *file_handle) {
     fat32_close((FAT32_FileHandle*)file_handle);
 }
 
-static int vfs_ramfs_read(void *fs_private, void *file_handle, void *buf, size_t size) {
+static ssize_t vfs_ramfs_read(void *fs_private, void *file_handle, void *buf, size_t size) {
     (void)fs_private;
+
+    if (!buf && size > 0)
+        return -1;
+
+    if (!file_handle)
+        return -1;
+
     uint64_t rflags = spinlock_acquire_irqsave(&ramfs_lock);
+
     int ret = ramfs_read((FAT32_FileHandle*)file_handle, buf, size);
+
     spinlock_release_irqrestore(&ramfs_lock, rflags);
-    return ret;
+
+    if (ret < 0)
+        return -1;
+
+    if ((size_t)ret > SSIZE_MAX)
+        return -1;
+
+    return (ssize_t)ret;
 }
 
-static int vfs_ramfs_write(void *fs_private, void *file_handle, const void *buf, size_t size) {
+static ssize_t vfs_ramfs_write(void *fs_private, void *file_handle, const void *buf, size_t size) {
     (void)fs_private;
+
+    if (!buf && size > 0)
+        return -1;
+
+    if (!file_handle)
+        return -1;
+
     uint64_t rflags = spinlock_acquire_irqsave(&ramfs_lock);
+
     int ret = ramfs_write((FAT32_FileHandle*)file_handle, buf, size);
+
     spinlock_release_irqrestore(&ramfs_lock, rflags);
-    return ret;
+
+    if (ret < 0)
+        return -1;
+
+    if ((size_t)ret > SSIZE_MAX)
+        return -1;
+
+    return (ssize_t)ret;
 }
 
 static int vfs_ramfs_seek(void *fs_private, void *file_handle, int offset, int whence) {
@@ -1755,63 +1787,115 @@ static void vfs_realfs_close(void *fs_private, void *file_handle) {
     fat32_close((FAT32_FileHandle*)file_handle);
 }
 
-static int vfs_realfs_read(void *fs_private, void *file_handle, void *buf, size_t size) {
+static ssize_t vfs_realfs_read(void *fs_private, void *file_handle, void *buf, size_t size) {
     (void)fs_private;
-    FAT32_FileHandle *handle = (FAT32_FileHandle*)file_handle;
-    FAT32_Volume *vol = (FAT32_Volume*)handle->volume;
-    
-    // Allocate cluster buffer OUTSIDE the spinlock
-    uint32_t cluster_size = vol->sectors_per_cluster * 512;
-    uint8_t *cluster_buf = (uint8_t*)kmalloc(cluster_size);
-    if (!cluster_buf) return -1;
 
-    int total_read = 0;
+    if (!buf && size > 0)
+        return -1;
+
+    FAT32_FileHandle *handle = (FAT32_FileHandle*)file_handle;
+
+    if (!handle || !handle->volume)
+        return -1;
+
+    FAT32_Volume *vol = (FAT32_Volume*)handle->volume;
+
+    uint32_t cluster_size = vol->sectors_per_cluster * 512;
+
+    uint8_t *cluster_buf = (uint8_t*)kmalloc(cluster_size);
+
+    if (!cluster_buf)
+        return -1;
+
+    size_t total_read = 0;
+
     while (total_read < size) {
-        int to_read = size - total_read;
-        if (to_read > (int)cluster_size) to_read = (int)cluster_size;
+        size_t to_read = size - total_read;
+
+        if (to_read > cluster_size)
+            to_read = cluster_size;
 
         uint64_t rflags = spinlock_acquire_irqsave(&vol->lock);
-        int ret = realfs_read_file(handle, (uint8_t*)buf + total_read, to_read, cluster_buf);
+
+        int ret = realfs_read_file(handle,
+                                   (uint8_t*)buf + total_read,
+                                   to_read,
+                                   cluster_buf);
+
         spinlock_release_irqrestore(&vol->lock, rflags);
 
-        if (ret <= 0) break;
+        if (ret <= 0)
+            break;
+
         total_read += ret;
-        if (ret < to_read) break; 
+
+        if ((size_t)ret < to_read)
+            break;
     }
 
     kfree(cluster_buf);
-    return total_read;
+
+    if (total_read > SSIZE_MAX)
+        return -1;
+
+    return (ssize_t)total_read;
 }
 
-static int vfs_realfs_write(void *fs_private, void *file_handle, const void *buf, size_t size) {
+static ssize_t vfs_realfs_write(void *fs_private, void *file_handle, const void *buf, size_t size) {
     (void)fs_private;
+
+    if (!buf && size > 0)
+        return -1;
+
     FAT32_FileHandle *handle = (FAT32_FileHandle*)file_handle;
+
+    if (!handle || !handle->volume)
+        return -1;
+
     FAT32_Volume *vol = (FAT32_Volume*)handle->volume;
-    
-    // Allocate cluster buffer OUTSIDE the spinlock
+
     uint32_t cluster_size = vol->sectors_per_cluster * 512;
+
     uint8_t *cluster_buf = (uint8_t*)kmalloc(cluster_size);
-    if (!cluster_buf) return -1;
-    
-    int total_written = 0;
+
+    if (!cluster_buf)
+        return -1;
+
+    size_t total_written = 0;
+
     while (total_written < size) {
-        int to_write = size - total_written;
-        if (to_write > (int)cluster_size) to_write = (int)cluster_size;
+        size_t to_write = size - total_written;
+
+        if (to_write > cluster_size)
+            to_write = cluster_size;
 
         uint64_t rflags = spinlock_acquire_irqsave(&vol->lock);
-        int ret = realfs_write_file(handle, (const uint8_t*)buf + total_written, to_write, cluster_buf);
+
+        int ret = realfs_write_file(handle,
+                                    (const uint8_t*)buf + total_written,
+                                    to_write,
+                                    cluster_buf);
+
         spinlock_release_irqrestore(&vol->lock, rflags);
 
-        if (ret <= 0) break;
+        if (ret <= 0)
+            break;
+
         total_written += ret;
-        if (ret < to_write) break; 
+
+        if ((size_t)ret < to_write)
+            break;
     }
 
-    if (total_written > 0) {
+    if (total_written > 0)
         fat32_sync_if_root(vol);
-    }
+
     kfree(cluster_buf);
-    return total_written;
+
+    if (total_written > SSIZE_MAX)
+        return -1;
+
+    return (ssize_t)total_written;
 }
 
 static int vfs_realfs_seek(void *fs_private, void *file_handle, int offset, int whence) {

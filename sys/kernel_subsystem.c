@@ -36,8 +36,8 @@ void subsystem_register(const char *name, kernel_subsystem_t **out_sub) {
 }
 
 void subsystem_add_file(kernel_subsystem_t *sub, const char *name, 
-                        int (*read)(char*, size_t, size_t), 
-                        int (*write)(const char*, size_t, size_t)) {
+                        ssize_t (*read)(char*, size_t, size_t), 
+                        ssize_t (*write)(const char*, size_t, size_t)) {
     if (!sub || sub->file_count >= MAX_SUBSYSTEM_FILES) return;
     
     subsystem_file_t *f = &sub->files[sub->file_count++];

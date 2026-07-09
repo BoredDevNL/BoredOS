@@ -374,8 +374,8 @@ run-linux: $(ISO_IMAGE) disk.qcow2
 	$(call PRINT_STEP,RUNNING BOREDOS IN QEMU ON LINUX)
 	qemu-system-x86_64 -m 4G -serial stdio -cdrom $< -boot d \
 	    -smp 4 \
-		-audiodev pa,id=audio0 -machine pcspk-audiodev=audio0
-		-device AC97,audiodev=audio0
+		-audiodev pa,id=audio0 -machine pcspk-audiodev=audio0 \
+		-device AC97,audiodev=audio0 \
 		-vga std -global VGA.xres=1920 -global VGA.yres=1080 \
 		-display gtk,show-cursor=off \
 		-device ahci,id=ahci -drive file=disk.qcow2,format=qcow2,if=none,id=disk0 -device ide-hd,bus=ahci.0,drive=disk0 \

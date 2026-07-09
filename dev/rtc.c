@@ -4,6 +4,7 @@
 #include "rtc.h"
 #include "io.h"
 #include "kutils.h"
+#include "types.h"
 #include <string.h>
 #include <stddef.h>
 #include <limits.h>
@@ -116,52 +117,70 @@ void rtc_set_datetime(int year, int month, int day, int hour, int minute, int se
     outb(CMOS_DATA, prev_b & ~0x80);
 }
 
-int rtc_dev_read(void *buf, size_t size, uint64_t *position) {
+ssize_t rtc_dev_read(void *buf, size_t size, uint64_t *position) {
+    if (!position || (!buf && size))
+        return -1;
+
     int y, m, d, h, min, s;
     rtc_get_datetime(&y, &m, &d, &h, &min, &s);
-    
+
     char out[64];
     char temp[16];
+
     out[0] = 0;
-    
+
     itoa(y, temp);
     strcpy(out, temp);
     strcpy(out + strlen(out), "-");
-    
+
     itoa(m, temp);
-    if (m < 10) strcpy(out + strlen(out), "0");
+    if (m < 10)
+        strcpy(out + strlen(out), "0");
     strcpy(out + strlen(out), temp);
     strcpy(out + strlen(out), "-");
-    
+
     itoa(d, temp);
-    if (d < 10) strcpy(out + strlen(out), "0");
+    if (d < 10)
+        strcpy(out + strlen(out), "0");
     strcpy(out + strlen(out), temp);
     strcpy(out + strlen(out), " ");
-    
+
     itoa(h, temp);
-    if (h < 10) strcpy(out + strlen(out), "0");
+    if (h < 10)
+        strcpy(out + strlen(out), "0");
     strcpy(out + strlen(out), temp);
     strcpy(out + strlen(out), ":");
-    
+
     itoa(min, temp);
-    if (min < 10) strcpy(out + strlen(out), "0");
+    if (min < 10)
+        strcpy(out + strlen(out), "0");
     strcpy(out + strlen(out), temp);
     strcpy(out + strlen(out), ":");
-    
+
     itoa(s, temp);
-    if (s < 10) strcpy(out + strlen(out), "0");
+    if (s < 10)
+        strcpy(out + strlen(out), "0");
     strcpy(out + strlen(out), temp);
     strcpy(out + strlen(out), "\n");
-    
+
     size_t len = strlen(out);
-    if (*position >= (uint64_t)len) return 0;
+
+    if (*position >= (uint64_t)len)
+        return 0;
+
+    if (*position > SIZE_MAX)
+        return -1;
+
     size_t pos = (size_t)*position;
+
     size_t to_copy = len - pos;
     if (to_copy > size) to_copy = size;
     if (to_copy > INT_MAX) return 0;
     memcpy(buf, out + pos, to_copy);
+
     *position += to_copy;
-    return (int)to_copy;
+
+    return (ssize_t)to_copy;
 }
 
 int rtc_dev_write(const void *buf, int size, uint64_t *position) {

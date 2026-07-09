@@ -1,3 +1,4 @@
+#include "types.h"
 #include "vfs.h"
 #include "process.h"
 #include "syscall.h"
@@ -54,18 +55,25 @@ void procfs_close(void *fs_private, void *handle) {
     if (handle) kfree(handle);
 }
 
-int procfs_read(void *fs_private, void *handle, void *buf, size_t size) {
+ssize_t procfs_read(void *fs_private, void *handle, void *buf, size_t size) {
+    (void)fs_private;
+
+    if (!handle) return -1;
+    if (!buf && size > 0) return -1;
+
     procfs_handle_t *h = (procfs_handle_t*)handle;
-    if (!h) return -1;
+    if (!h->type) return -1;
 
     char *out = (char*)kmalloc(16384);
     if (!out) return -1;
+
     out[0] = 0;
 
     if (h->pid == 0xFFFFFFFF) {
         if (strcmp(h->type, "version") == 0) {
             os_info_t info;
             get_os_info(&info);
+
             strcpy(out, info.os_name);
             strcpy(out + strlen(out), " [");
             strcpy(out + strlen(out), info.os_codename);
@@ -80,301 +88,296 @@ int procfs_read(void *fs_private, void *handle, void *buf, size_t size) {
             strcpy(out + strlen(out), " ");
             strcpy(out + strlen(out), info.build_time);
             strcpy(out + strlen(out), "\n");
+
         } else if (strcmp(h->type, "uptime") == 0) {
             extern uint32_t get_ticks(void);
+
             uint32_t ticks = get_ticks();
+
             itoa(ticks / 60, out);
             strcpy(out + strlen(out), " seconds\nRaw_Ticks:");
-            char t_s[16]; itoa(ticks, t_s);
+
+            char t_s[16];
+            itoa(ticks, t_s);
+
             strcpy(out + strlen(out), t_s);
             strcpy(out + strlen(out), "\n");
+
         } else if (strcmp(h->type, "cpuinfo") == 0) {
             extern uint32_t smp_cpu_count(void);
             extern void platform_get_cpu_model(char *model);
             extern void platform_get_cpu_vendor(char *vendor);
             extern void platform_get_cpu_info(cpu_info_t *info);
             extern void platform_get_cpu_flags(char *flags_str);
-            
+
             char model[64];
             char vendor[16];
             char flags[1024];
             cpu_info_t info;
-            
+
             platform_get_cpu_model(model);
             platform_get_cpu_vendor(vendor);
             platform_get_cpu_info(&info);
             platform_get_cpu_flags(flags);
-            
+
             uint32_t cpu_count = smp_cpu_count();
+
             out[0] = '\0';
-            
-            // Output info for each processor
+
             for (uint32_t i = 0; i < cpu_count; i++) {
-                char buf[32];
-                
+                char b[32];
+
                 strcpy(out + strlen(out), "processor\t: ");
-                itoa(i, buf);
-                strcpy(out + strlen(out), buf);
+                itoa(i, b);
+                strcpy(out + strlen(out), b);
                 strcpy(out + strlen(out), "\n");
-                
+
                 strcpy(out + strlen(out), "vendor_id\t: ");
                 strcpy(out + strlen(out), vendor);
                 strcpy(out + strlen(out), "\n");
-                
+
                 strcpy(out + strlen(out), "cpu family\t: ");
-                itoa(info.family, buf);
-                strcpy(out + strlen(out), buf);
+                itoa(info.family, b);
+                strcpy(out + strlen(out), b);
                 strcpy(out + strlen(out), "\n");
-                
+
                 strcpy(out + strlen(out), "model\t\t: ");
-                itoa(info.model, buf);
-                strcpy(out + strlen(out), buf);
+                itoa(info.model, b);
+                strcpy(out + strlen(out), b);
                 strcpy(out + strlen(out), "\n");
-                
+
                 strcpy(out + strlen(out), "model name\t: ");
                 strcpy(out + strlen(out), model);
                 strcpy(out + strlen(out), "\n");
-                
+
                 strcpy(out + strlen(out), "stepping\t: ");
-                itoa(info.stepping, buf);
-                strcpy(out + strlen(out), buf);
+                itoa(info.stepping, b);
+                strcpy(out + strlen(out), b);
                 strcpy(out + strlen(out), "\n");
-                
+
                 strcpy(out + strlen(out), "microcode\t: 0x");
+
                 char hex[16];
                 itoa_hex32(info.microcode, hex);
+
                 strcpy(out + strlen(out), hex);
                 strcpy(out + strlen(out), "\n");
-                
+
                 strcpy(out + strlen(out), "cache size\t: ");
-                itoa(info.cache_size, buf);
-                strcpy(out + strlen(out), buf);
+                itoa(info.cache_size, b);
+                strcpy(out + strlen(out), b);
                 strcpy(out + strlen(out), " KB\n");
-                
+
                 strcpy(out + strlen(out), "physical id\t: 0\n");
+
                 strcpy(out + strlen(out), "siblings\t: ");
-                itoa(cpu_count, buf);
-                strcpy(out + strlen(out), buf);
+                itoa(cpu_count, b);
+                strcpy(out + strlen(out), b);
                 strcpy(out + strlen(out), "\n");
-                
+
                 strcpy(out + strlen(out), "core id\t\t: ");
-                itoa(i, buf);
-                strcpy(out + strlen(out), buf);
+                itoa(i, b);
+                strcpy(out + strlen(out), b);
                 strcpy(out + strlen(out), "\n");
-                
+
                 strcpy(out + strlen(out), "cpu cores\t: ");
-                itoa(cpu_count, buf);
-                strcpy(out + strlen(out), buf);
+                itoa(cpu_count, b);
+                strcpy(out + strlen(out), b);
                 strcpy(out + strlen(out), "\n");
-                
+
                 strcpy(out + strlen(out), "apicid\t\t: ");
-                itoa(i, buf);
-                strcpy(out + strlen(out), buf);
+                itoa(i, b);
+                strcpy(out + strlen(out), b);
                 strcpy(out + strlen(out), "\n");
-                
+
                 strcpy(out + strlen(out), "initial apicid\t: ");
-                itoa(i, buf);
-                strcpy(out + strlen(out), buf);
+                itoa(i, b);
+                strcpy(out + strlen(out), b);
                 strcpy(out + strlen(out), "\n");
-                
+
                 strcpy(out + strlen(out), "fpu\t\t: yes\n");
                 strcpy(out + strlen(out), "fpu_exception\t: yes\n");
-                
                 strcpy(out + strlen(out), "cpuid level\t: 13\n");
-                
                 strcpy(out + strlen(out), "wp\t\t: yes\n");
-                
+
                 strcpy(out + strlen(out), "flags\t\t: ");
                 strcpy(out + strlen(out), flags);
                 strcpy(out + strlen(out), "\n");
-                
+
                 strcpy(out + strlen(out), "bugs\t\t: \n");
                 strcpy(out + strlen(out), "bogomips\t: 4800.00\n");
-                
-                if (i < cpu_count - 1) {
-                    strcpy(out + strlen(out), "\n");
-                }
-            }
-        } else if (strcmp(h->type, "datetime") == 0) {
-            extern void rtc_get_datetime(int *year, int *month, int *day, int *hour, int *minute, int *second);
-            int y, m, d, h_val, min, s;
-            rtc_get_datetime(&y, &m, &d, &h_val, &min, &s);
-            
-            char buf[16];
-            itoa(y, buf);
-            strcpy(out, buf);
-            strcpy(out + strlen(out), "-");
-            if (m < 10) strcpy(out + strlen(out), "0");
-            itoa(m, buf);
-            strcpy(out + strlen(out), buf);
-            strcpy(out + strlen(out), "-");
-            if (d < 10) strcpy(out + strlen(out), "0");
-            itoa(d, buf);
-            strcpy(out + strlen(out), buf);
-            strcpy(out + strlen(out), " ");
-            if (h_val < 10) strcpy(out + strlen(out), "0");
-            itoa(h_val, buf);
-            strcpy(out + strlen(out), buf);
-            strcpy(out + strlen(out), ":");
-            if (min < 10) strcpy(out + strlen(out), "0");
-            itoa(min, buf);
-            strcpy(out + strlen(out), buf);
-            strcpy(out + strlen(out), ":");
-            if (s < 10) strcpy(out + strlen(out), "0");
-            itoa(s, buf);
-            strcpy(out + strlen(out), buf);
-            strcpy(out + strlen(out), "\n");
-        } else if (strcmp(h->type, "meminfo") == 0) {
-            extern MemStats memory_get_stats(void);
-            MemStats stats = memory_get_stats();
-            char m_s[32];
-            
-            strcpy(out, "MemTotal:\t");
-            itoa(stats.total_memory / 1024, m_s);
-            strcpy(out + strlen(out), m_s);
-            strcpy(out + strlen(out), " kB\n");
-            
-            strcpy(out + strlen(out), "MemFree:\t");
-            itoa(stats.available_memory / 1024, m_s);
-            strcpy(out + strlen(out), m_s);
-            strcpy(out + strlen(out), " kB\n");
-            
-            strcpy(out + strlen(out), "MemAvailable:\t");
-            itoa(stats.available_memory / 1024, m_s);
-            strcpy(out + strlen(out), m_s);
-            strcpy(out + strlen(out), " kB\n");
-            
-            strcpy(out + strlen(out), "Buffers:\t0 kB\n");
-            strcpy(out + strlen(out), "Cached:\t\t0 kB\n");
-            
-            strcpy(out + strlen(out), "MemUsed:\t");
-            itoa(stats.used_memory / 1024, m_s);
-            strcpy(out + strlen(out), m_s);
-            strcpy(out + strlen(out), " kB\n");
-            
-            strcpy(out + strlen(out), "MemPeak:\t");
-            itoa(stats.peak_memory_used / 1024, m_s);
-            strcpy(out + strlen(out), m_s);
-            strcpy(out + strlen(out), " kB\n");
-            
-            strcpy(out + strlen(out), "SwapTotal:\t0 kB\n");
-            strcpy(out + strlen(out), "SwapFree:\t0 kB\n");
-            
-            strcpy(out + strlen(out), "Dirty:\t\t0 kB\n");
-            strcpy(out + strlen(out), "Writeback:\t0 kB\n");
-            strcpy(out + strlen(out), "AnonPages:\t");
-            itoa(stats.used_memory / 1024, m_s);
-            strcpy(out + strlen(out), m_s);
-            strcpy(out + strlen(out), " kB\n");
-            
-            strcpy(out + strlen(out), "Mapped:\t\t0 kB\n");
-            strcpy(out + strlen(out), "Shmem:\t\t0 kB\n");
-            
-            strcpy(out + strlen(out), "Blocks:\t\t");
-            itoa(stats.allocated_blocks, m_s);
-            strcpy(out + strlen(out), m_s);
-            strcpy(out + strlen(out), "\n");
-            
-            strcpy(out + strlen(out), "FreeBlocks:\t");
-            itoa(stats.free_blocks, m_s);
-            strcpy(out + strlen(out), m_s);
-            strcpy(out + strlen(out), "\n");
-            
-            strcpy(out + strlen(out), "Fragmentation:\t");
-            itoa(stats.fragmentation_percent, m_s);
-            strcpy(out + strlen(out), m_s);
-            strcpy(out + strlen(out), "%\n");
-        } else if (strcmp(h->type, "devices") == 0) {
-            extern int disk_get_count(void);
-            extern Disk* disk_get_by_index(int index);
-            int dcount = disk_get_count();
-            out[0] = '\0';
-            
-            strcpy(out, "Character devices:\n");
-            strcpy(out + strlen(out), "  1 mem\n");
-            strcpy(out + strlen(out), "  4 tty\n");
-            strcpy(out + strlen(out), "  5 cua\n");
-            strcpy(out + strlen(out), "  7 vcs\n");
-            strcpy(out + strlen(out), "  8 stdin\n");
-            strcpy(out + strlen(out), " 13 input\n");
-            strcpy(out + strlen(out), " 14 sound\n");
-            strcpy(out + strlen(out), " 29 fb\n");
-            strcpy(out + strlen(out), "189 usb\n\n");
-            
-            strcpy(out + strlen(out), "Block devices:\n");
-            for (int i = 0; i < dcount; i++) {
-                Disk *d = disk_get_by_index(i);
-                if (d && !d->is_partition) {
-                    strcpy(out + strlen(out), "  8 ");
-                    strcpy(out + strlen(out), d->devname);
-                    strcpy(out + strlen(out), "\n");
-                }
-            }
-            strcpy(out + strlen(out), " 11 sr\n");
-            strcpy(out + strlen(out), "253 virtblk\n");
-        }
-    }
- else {
-        process_t *proc = process_get_by_pid(h->pid);
-        if (!proc) { kfree(out); return -1; }
 
-        if (strcmp(h->type, "name") == 0 || strcmp(h->type, "cmdline") == 0) {
+                if (i < cpu_count - 1)
+                    strcpy(out + strlen(out), "\n");
+            }
+
+        } else if (strcmp(h->type, "datetime") == 0) {
+            extern void rtc_get_datetime(int *year, int *month, int *day,
+                                         int *hour, int *minute, int *second);
+
+            int y, m, d, h_val, min, s;
+
+            rtc_get_datetime(&y, &m, &d, &h_val, &min, &s);
+
+            char b[16];
+
+            itoa(y, b);
+            strcpy(out, b);
+
+            strcpy(out + strlen(out), "-");
+
+            if (m < 10)
+                strcpy(out + strlen(out), "0");
+
+            itoa(m, b);
+            strcpy(out + strlen(out), b);
+
+            strcpy(out + strlen(out), "-");
+
+            if (d < 10)
+                strcpy(out + strlen(out), "0");
+
+            itoa(d, b);
+            strcpy(out + strlen(out), b);
+
+            strcpy(out + strlen(out), " ");
+
+            if (h_val < 10)
+                strcpy(out + strlen(out), "0");
+
+            itoa(h_val, b);
+            strcpy(out + strlen(out), b);
+
+            strcpy(out + strlen(out), ":");
+
+            if (min < 10)
+                strcpy(out + strlen(out), "0");
+
+            itoa(min, b);
+            strcpy(out + strlen(out), b);
+
+            strcpy(out + strlen(out), ":");
+
+            if (s < 10)
+                strcpy(out + strlen(out), "0");
+
+            itoa(s, b);
+            strcpy(out + strlen(out), b);
+
+            strcpy(out + strlen(out), "\n");
+        }
+
+    } else {
+        process_t *proc = process_get_by_pid(h->pid);
+
+        if (!proc) {
+            kfree(out);
+            return -1;
+        }
+
+        if (strcmp(h->type, "name") == 0 ||
+            strcmp(h->type, "cmdline") == 0) {
+
             strcpy(out, proc->name);
             strcpy(out + strlen(out), "\n");
+
         } else if (strcmp(h->type, "cwd") == 0) {
+
             strcpy(out, proc->cwd);
             strcpy(out + strlen(out), "\n");
+
         } else if (strcmp(h->type, "status") == 0) {
+
             strcpy(out, "Name: ");
             strcpy(out + strlen(out), proc->name);
+
             strcpy(out + strlen(out), "\nPID: ");
-            char pid_s[16]; itoa(proc->pid, pid_s);
+
+            char pid_s[16];
+            itoa(proc->pid, pid_s);
+
             strcpy(out + strlen(out), pid_s);
+
             strcpy(out + strlen(out), "\nState: RUNNING\nMemory: ");
+
             uint64_t mem_val = proc->used_memory;
+
             if (h->pid == 0) {
                 extern MemStats memory_get_stats(void);
                 mem_val = memory_get_stats().used_memory;
             }
-            char mem_s[32]; itoa(mem_val / 1024, mem_s);
+
+            char mem_s[32];
+            itoa(mem_val / 1024, mem_s);
+
             strcpy(out + strlen(out), mem_s);
             strcpy(out + strlen(out), " KB\nTicks: ");
-            char tick_s[32]; itoa(proc->ticks, tick_s);
+
+            char tick_s[32];
+            itoa(proc->ticks, tick_s);
+
             strcpy(out + strlen(out), tick_s);
             strcpy(out + strlen(out), "\nIdle: ");
+
             strcpy(out + strlen(out), proc->is_idle ? "1" : "0");
             strcpy(out + strlen(out), "\n");
         }
     }
 
     size_t len = strlen(out);
-    if (h->offset >= len) { kfree(out); return 0; }
+
+    if (h->offset >= len) {
+        kfree(out);
+        return 0;
+    }
 
     size_t to_copy = len - h->offset;
     if (to_copy > size) to_copy = size;
     if (to_copy > INT_MAX) return 0;
 
     memcpy(buf, out + h->offset, to_copy);
+
+    if (h->offset > SIZE_MAX - to_copy) {
+        kfree(out);
+        return -1;
+    }
+
     h->offset += to_copy;
+
     kfree(out);
-    return (int)to_copy;
+
+    return (ssize_t)to_copy;
 }
 
-int procfs_write(void *fs_private, void *handle, const void *buf, size_t size) {
+ssize_t procfs_write(void *fs_private, void *handle, const void *buf, size_t size) {
+    (void)fs_private;
+
+    if (!buf && size > 0)
+        return -1;
+
     procfs_handle_t *h = (procfs_handle_t*)handle;
-    if (!h || h->pid == 0xFFFFFFFF) return -1;
+
+    if (!h || h->pid == 0xFFFFFFFF)
+        return -1;
 
     if (strcmp(h->type, "signal") == 0) {
         char cmd[16];
-        int to_copy = size < 15 ? size : 15;
+
+        size_t to_copy = size < 15 ? size : 15;
+
         memcpy(cmd, buf, to_copy);
         cmd[to_copy] = 0;
 
         if (strcmp(cmd, "9") == 0 || strcmp(cmd, "kill") == 0) {
             process_t *proc = process_get_by_pid(h->pid);
+
             if (proc && proc->pid != 0) {
                 process_terminate(proc);
-                return size;
+
+                if (size > SSIZE_MAX)
+                    return -1;
+
+                return (ssize_t)size;
             }
         }
     }

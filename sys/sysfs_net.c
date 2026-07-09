@@ -1,6 +1,7 @@
 // Copyright (c) 2023-2026 Christiaan (chris@boreddev.nl)
 // This software is released under the GNU General Public License v3.0. See LICENSE file for details.
 // This header needs to maintain in any file it is present in, as per the GPL license terms.
+#include "types.h"
 #include "kernel_subsystem.h"
 #include "process.h"
 #include "network.h"
@@ -10,51 +11,84 @@
 
 // Helpers to format IPs and MACs
 static void format_ip(const ipv4_address_t *ip, char *out) {
-  char temp[16];
-  out[0] = 0;
-  for (int i = 0; i < 4; i++) {
-    itoa(ip->bytes[i], temp);
-    strcpy(out + strlen(out), temp);
-    if (i < 3) strcpy(out + strlen(out), ".");
-  }
-  strcpy(out + strlen(out), "\n");
+    if (!ip || !out)
+        return;
+
+    char temp[16];
+    out[0] = 0;
+
+    for (int i = 0; i < 4; i++) {
+        itoa(ip->bytes[i], temp);
+        strcpy(out + strlen(out), temp);
+
+        if (i < 3)
+            strcpy(out + strlen(out), ".");
+    }
+
+    strcpy(out + strlen(out), "\n");
 }
 
 static void format_mac(const mac_address_t *mac, char *out) {
-  char temp[8];
-  out[0] = 0;
-  for (int i = 0; i < 6; i++) {
-    itoa_hex(mac->bytes[i], temp);
-    if (strlen(temp) == 1) {
-      strcpy(out + strlen(out), "0");
+    if (!mac || !out)
+        return;
+
+    char temp[8];
+    out[0] = 0;
+
+    for (int i = 0; i < 6; i++) {
+        itoa_hex(mac->bytes[i], temp);
+
+        if (strlen(temp) == 1)
+            strcpy(out + strlen(out), "0");
+
+        strcpy(out + strlen(out), temp);
+
+        if (i < 5)
+            strcpy(out + strlen(out), ":");
     }
-    strcpy(out + strlen(out), temp);
-    if (i < 5) strcpy(out + strlen(out), ":");
-  }
-  strcpy(out + strlen(out), "\n");
+
+    strcpy(out + strlen(out), "\n");
 }
 
 // IP/MAC parsing
 static int parse_ip(const char *str, ipv4_address_t *ip) {
-  int val = 0;
-  int part = 0;
-  const char *p = str;
-  while (*p && *p != '\n' && *p != ' ' && *p != '\r') {
-    if (*p >= '0' && *p <= '9') {
-      val = val * 10 + (*p - '0');
-      if (val > 255) return -1;
-    } else if (*p == '.') {
-      if (part > 3) return -1;
-      ip->bytes[part++] = (uint8_t)val;
-      val = 0;
-    } else {
-      return -1;
+    if (!str || !ip)
+        return -1;
+
+    int val = 0;
+    int part = 0;
+    const char *p = str;
+
+    while (*p && *p != '\n' && *p != ' ' && *p != '\r') {
+        if (*p >= '0' && *p <= '9') {
+            if (val > 255)
+                return -1;
+
+            val = val * 10 + (*p - '0');
+
+            if (val > 255)
+                return -1;
+
+        } else if (*p == '.') {
+            if (part >= 3)
+                return -1;
+
+            ip->bytes[part++] = (uint8_t)val;
+            val = 0;
+
+        } else {
+            return -1;
+        }
+
+        p++;
     }
-    p++;
-  }
-  if (part != 3) return -1;
-  ip->bytes[3] = (uint8_t)val;
-  return 0;
+
+    if (part != 3)
+        return -1;
+
+    ip->bytes[3] = (uint8_t)val;
+
+    return 0;
 }
 
 // Subsystem file handlers
@@ -74,46 +108,144 @@ static int read_net_address(char *buf, size_t size, size_t offset) {
   return -1;
 }
 
-static int read_ip_field(char *buf, size_t size, size_t offset,
-                         int (*getter)(ipv4_address_t *)) {
-  ipv4_address_t ip;
-  if (getter(&ip) == 0) {
+static ssize_t read_ip_field(char *buf, size_t size, size_t offset,
+                             int (*getter)(ipv4_address_t *)) {
+    if (!buf && size > 0)
+        return -1;
+
+    if (!getter)
+        return -1;
+
+    ipv4_address_t ip;
+
+    if (getter(&ip) == 0) {
+        char out[64];
+
+        format_ip(&ip, out);
+
+        size_t len = strlen(out);
+
+        if (offset >= len)
+            return 0;
+
+        size_t to_copy = len - offset;
+
+        if (to_copy > size)
+            to_copy = size;
+
+        if (to_copy > SSIZE_MAX)
+            return -1;
+
+        memcpy(buf, out + offset, to_copy);
+
+        return (ssize_t)to_copy;
+    }
+
+    return -1;
+}
+
+static ssize_t read_net_ip(char *buf, size_t size, size_t offset) {
+    return read_ip_field(buf, size, offset, network_get_ipv4_address);
+}
+
+static ssize_t read_net_gateway(char *buf, size_t size, size_t offset) {
+    return read_ip_field(buf, size, offset, network_get_gateway_ip);
+}
+
+
+static ssize_t read_net_nic(char *buf, size_t size, size_t offset) {
+    if (!buf && size > 0)
+        return -1;
+
     char out[64];
-    format_ip(&ip, out);
+
+    if (network_get_nic_name(out) == 0) {
+        strcpy(out + strlen(out), "\n");
+
+        size_t len = strlen(out);
+
+        if (offset >= len)
+            return 0;
+
+        size_t to_copy = len - offset;
+
+        if (to_copy > size)
+            to_copy = size;
+
+        if (to_copy > SSIZE_MAX)
+            return -1;
+
+        memcpy(buf, out + offset, to_copy);
+
+        return (ssize_t)to_copy;
+    }
+
+    return -1;
+}
+
+static ssize_t read_net_status(char *buf, size_t size, size_t offset) {
+    if (!buf && size > 0)
+        return -1;
+
+    char out[128];
+
+    out[0] = 0;
+
+    strcpy(out, "initialized: ");
+    strcpy(out + strlen(out), network_is_initialized() ? "1\n" : "0\n");
+
+    strcpy(out + strlen(out), "has_ip: ");
+    strcpy(out + strlen(out), network_has_ip() ? "1\n" : "0\n");
+
     size_t len = strlen(out);
-    if (offset >= len) return 0;
+
+    if (offset >= len)
+        return 0;
+
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     if (to_copy > INT_MAX) return 0;
     memcpy(buf, out + offset, to_copy);
-    return (int)to_copy;
-  }
-  return -1;
+
+    return (ssize_t)to_copy;
 }
 
-static int read_net_ip(char *buf, size_t size, size_t offset) {
-  return read_ip_field(buf, size, offset, network_get_ipv4_address);
-}
+static ssize_t read_net_stats(char *buf, size_t size, size_t offset) {
+    if (!buf && size > 0)
+        return -1;
 
-static int read_net_gateway(char *buf, size_t size, size_t offset) {
-  return read_ip_field(buf, size, offset, network_get_gateway_ip);
-}
+    char out[256];
 
+    out[0] = 0;
 
-static int read_net_nic(char *buf, size_t size, size_t offset) {
-  char out[64];
-  if (network_get_nic_name(out) == 0) {
+    char s[32];
+
+    strcpy(out, "rx_frames: ");
+
+    itoa(network_get_frames_received(), s);
+    strcpy(out + strlen(out), s);
+
+    strcpy(out + strlen(out), "\ntx_frames: ");
+
+    itoa(network_get_frames_sent(), s);
+    strcpy(out + strlen(out), s);
+
+    strcpy(out + strlen(out), "\nrx_udp: ");
+
+    itoa(network_get_udp_packets_received(), s);
+    strcpy(out + strlen(out), s);
+
     strcpy(out + strlen(out), "\n");
+
     size_t len = strlen(out);
-    if (offset >= len) return 0;
+
+    if (offset >= len)
+        return 0;
+
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
     if (to_copy > INT_MAX) return 0;
     memcpy(buf, out + offset, to_copy);
-    return (int)to_copy;
-  }
-  return -1;
-}
 
 static int read_net_status(char *buf, size_t  size, size_t offset) {
   char out[128];
@@ -159,53 +291,83 @@ static int read_net_stats(char *buf, size_t size, size_t offset) {
   return (int)to_copy;
 }
 
-static int write_net_control(const char *buf, size_t size, size_t offset) {
-  (void)offset;
-  if (strncmp(buf, "dhcp", 4) == 0) {
-    return network_dhcp_acquire() == 0 ? (int)size : -1;
-  } else if (strncmp(buf, "init", 4) == 0) {
-    return network_init() == 0 ? (int)size : -1;
-  } else if (strncmp(buf, "set_ip ", 7) == 0) {
-    ipv4_address_t ip;
-    if (parse_ip(buf + 7, &ip) == 0) {
-      return network_set_ipv4_address(&ip) == 0 ? (int)size : -1;
+    if (!buf && size > 0)
+        return -1;
+
+    if (size > SSIZE_MAX)
+        return -1;
+
+    if (strncmp(buf, "dhcp", 4) == 0) {
+        return network_dhcp_acquire() == 0 ? (ssize_t)size : -1;
+
+    } else if (strncmp(buf, "init", 4) == 0) {
+        return network_init() == 0 ? (ssize_t)size : -1;
+
+    } else if (strncmp(buf, "set_ip ", 7) == 0) {
+        ipv4_address_t ip;
+
+        if (parse_ip(buf + 7, &ip) == 0) {
+            return network_set_ipv4_address(&ip) == 0 ? (ssize_t)size : -1;
+        }
     }
-  }
-  return -1;
+
+    return -1;
 }
 
+static ssize_t write_ping(const char *buf, size_t size, size_t offset) {
+    (void)offset;
 
+    if (!buf && size > 0)
+        return -1;
 
-static int write_ping(const char *buf, size_t size, size_t offset) {
-  (void)offset;
-  process_t *proc = process_get_current();
-  if (!proc) return -1;
-  char target[64];
-  size_t len = size < 63 ? size : 63;
-  memcpy(target, buf, len);
-  target[len] = '\0';
-  while (len > 0 && (target[len - 1] == '\n' || target[len - 1] == '\r' || target[len - 1] == ' ')) {
-    target[--len] = '\0';
-  }
-  
-  ipv4_address_t ip;
-  if (parse_ip(target, &ip) == 0) {
-    extern int network_icmp_single_ping(ipv4_address_t *ip);
-    int rc = network_icmp_single_ping(&ip);
-    if (rc >= 0) {
-      char rtt_str[32];
-      itoa(rc, rtt_str);
-      char *r = proc->ping_result;
-      strcpy(r, "success ");
-      strcpy(r + strlen(r), rtt_str);
-      strcpy(r + strlen(r), "\n");
-    } else {
-      strcpy(proc->ping_result, "failed\n");
+    process_t *proc = process_get_current();
+
+    if (!proc)
+        return -1;
+
+    char target[64];
+
+    size_t len = size < 63 ? size : 63;
+
+    memcpy(target, buf, len);
+    target[len] = '\0';
+
+    while (len > 0 &&
+           (target[len - 1] == '\n' ||
+            target[len - 1] == '\r' ||
+            target[len - 1] == ' ')) {
+        target[--len] = '\0';
     }
-  } else {
-    strcpy(proc->ping_result, "invalid\n");
-  }
-  return size;
+
+    ipv4_address_t ip;
+
+    if (parse_ip(target, &ip) == 0) {
+        extern int network_icmp_single_ping(ipv4_address_t *ip);
+
+        int rc = network_icmp_single_ping(&ip);
+
+        if (rc >= 0) {
+            char rtt_str[32];
+
+            itoa(rc, rtt_str);
+
+            char *r = proc->ping_result;
+
+            strcpy(r, "success ");
+            strcpy(r + strlen(r), rtt_str);
+            strcpy(r + strlen(r), "\n");
+        } else {
+            strcpy(proc->ping_result, "failed\n");
+        }
+
+    } else {
+        strcpy(proc->ping_result, "invalid\n");
+    }
+
+    if (size > SSIZE_MAX)
+        return -1;
+
+    return (ssize_t)size;
 }
 
 static int read_ping(char *buf, size_t size, size_t offset) {

@@ -6,6 +6,7 @@
 #include "kutils.h"
 #include "platform.h"
 #include "version.h"
+#include <limits.h>
 
 typedef struct {
     uint32_t pid;
@@ -351,6 +352,7 @@ int procfs_read(void *fs_private, void *handle, void *buf, size_t size) {
 
     size_t to_copy = len - h->offset;
     if (to_copy > size) to_copy = size;
+    if (to_copy > INT_MAX) return 0;
 
     memcpy(buf, out + h->offset, to_copy);
     h->offset += to_copy;

@@ -11,6 +11,7 @@
 #include "graphics.h"
 #include "platform.h"
 #include "disk.h"
+#include <limits.h>
 
 // --- Graphics Implementation ---
 static int read_gfx_drm(char *buf, size_t size, size_t offset) {
@@ -35,6 +36,7 @@ static int read_gfx_drm(char *buf, size_t size, size_t offset) {
     if (offset >= len) return 0;
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
+    if (to_copy > INT_MAX) return 0;
     memcpy(buf, out + offset, to_copy);
     return (int)to_copy;
 }
@@ -58,6 +60,7 @@ static int read_mem_tracking(char *buf, size_t size, size_t offset) {
     if (offset >= len) return 0;
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
+    if (to_copy > INT_MAX) return 0;
     memcpy(buf, out + offset, to_copy);
     return (int)to_copy;
 }
@@ -81,6 +84,7 @@ static int read_sys_modules(char *buf, size_t size, size_t offset) {
     if (offset >= len) return 0;
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
+    if (to_copy > INT_MAX) return 0;
     memcpy(buf, out + offset, to_copy);
     return (int)to_copy;
 }
@@ -124,6 +128,7 @@ static int read_pci_bus(char *buf, size_t size, size_t offset) {
     if (offset >= len) return 0;
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
+    if (to_copy > INT_MAX) return 0;
     memcpy(buf, out + offset, to_copy);
     return (int)to_copy;
 }
@@ -138,6 +143,7 @@ static int read_ticks_info(char *buf, size_t size, size_t offset) {
     if (offset >= len) return 0;
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
+    if (to_copy > INT_MAX) return 0;
     memcpy(buf, out + offset, to_copy);
     return (int)to_copy;
 }
@@ -148,11 +154,11 @@ static int read_mem_info(char *buf, size_t size, size_t offset) {
     char temp[32];
     out[0] = 0;
     
-    itoa(stats.total_memory, temp);
+    utoa(stats.total_memory, temp);
     strcpy(out, temp);
     strcpy(out + strlen(out), "\n");
     
-    itoa(stats.used_memory, temp);
+    utoa(stats.used_memory, temp);
     strcpy(out + strlen(out), temp);
     strcpy(out + strlen(out), "\n");
     
@@ -160,6 +166,7 @@ static int read_mem_info(char *buf, size_t size, size_t offset) {
     if (offset >= len) return 0;
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
+    if (to_copy > INT_MAX) return 0;
     memcpy(buf, out + offset, to_copy);
     return (int)to_copy;
 }
@@ -174,6 +181,7 @@ static int read_keyboard_layout(char *buf, size_t size, size_t offset) {
     if (offset >= len) return 0;
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
+    if (to_copy > INT_MAX) return 0;
     memcpy(buf, out + offset, to_copy);
     return (int)to_copy;
 }
@@ -297,6 +305,7 @@ static int read_cpu_info(char *buf, size_t size, size_t offset) {
     if (offset >= len) { kfree(out); return 0; }
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
+    if (to_copy > INT_MAX) return 0;
     memcpy(buf, out + offset, to_copy);
     kfree(out);
     return (int)to_copy;
@@ -334,6 +343,7 @@ static int read_sys_devices(char *buf, size_t size, size_t offset) {
     if (offset >= len) return 0;
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
+    if (to_copy > INT_MAX) return 0;
     memcpy(buf, out + offset, to_copy);
     return (int)to_copy;
 }
@@ -355,6 +365,7 @@ static int read_sys_class(char *buf, size_t size, size_t offset) {
     if (offset >= len) return 0;
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
+    if (to_copy > INT_MAX) return 0;
     memcpy(buf, out + offset, to_copy);
     return (int)to_copy;
 }
@@ -371,6 +382,7 @@ static int read_gpio_debug(char *buf, size_t size, size_t offset) {
     if (offset >= len) return 0;
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
+    if (to_copy > INT_MAX) return 0;
     memcpy(buf, out + offset, to_copy);
     return (int)to_copy;
 }

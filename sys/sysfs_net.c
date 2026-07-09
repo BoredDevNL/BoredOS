@@ -6,6 +6,7 @@
 #include "network.h"
 #include "memory_manager.h"
 #include "kutils.h"
+#include <limits.h>
 
 // Helpers to format IPs and MACs
 static void format_ip(const ipv4_address_t *ip, char *out) {
@@ -66,6 +67,7 @@ static int read_net_address(char *buf, size_t size, size_t offset) {
     if (offset >= len) return 0;
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
+    if (to_copy > INT_MAX) return 0;
     memcpy(buf, out + offset, to_copy);
     return (int)to_copy;
   }
@@ -82,6 +84,7 @@ static int read_ip_field(char *buf, size_t size, size_t offset,
     if (offset >= len) return 0;
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
+    if (to_copy > INT_MAX) return 0;
     memcpy(buf, out + offset, to_copy);
     return (int)to_copy;
   }
@@ -105,6 +108,7 @@ static int read_net_nic(char *buf, size_t size, size_t offset) {
     if (offset >= len) return 0;
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
+    if (to_copy > INT_MAX) return 0;
     memcpy(buf, out + offset, to_copy);
     return (int)to_copy;
   }
@@ -123,6 +127,7 @@ static int read_net_status(char *buf, size_t  size, size_t offset) {
   if (offset >= len) return 0;
   size_t to_copy = len - offset;
   if (to_copy > size) to_copy = size;
+  if (to_copy > INT_MAX) return 0;
   memcpy(buf, out + offset, to_copy);
   return (int)to_copy;
 }
@@ -149,6 +154,7 @@ static int read_net_stats(char *buf, size_t size, size_t offset) {
   if (offset >= len) return 0;
   size_t to_copy = len - offset;
   if (to_copy > size) to_copy = size;
+  if (to_copy > INT_MAX) return 0;
   memcpy(buf, out + offset, to_copy);
   return (int)to_copy;
 }
@@ -209,6 +215,7 @@ static int read_ping(char *buf, size_t size, size_t offset) {
   if (offset >= len) return 0;
   size_t to_copy = len - offset;
   if (to_copy > size) to_copy = size;
+  if (to_copy > INT_MAX) return 0;
   memcpy(buf, proc->ping_result + offset, to_copy);
   return (int)to_copy;
 }

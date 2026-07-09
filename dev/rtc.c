@@ -6,6 +6,7 @@
 #include "kutils.h"
 #include <string.h>
 #include <stddef.h>
+#include <limits.h>
 
 #define CMOS_ADDRESS 0x70
 #define CMOS_DATA    0x71
@@ -157,6 +158,7 @@ int rtc_dev_read(void *buf, size_t size, uint64_t *position) {
     size_t pos = (size_t)*position;
     size_t to_copy = len - pos;
     if (to_copy > size) to_copy = size;
+    if (to_copy > INT_MAX) return 0;
     memcpy(buf, out + pos, to_copy);
     *position += to_copy;
     return (int)to_copy;

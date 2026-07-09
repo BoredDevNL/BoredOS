@@ -21,6 +21,7 @@ char *strncpy(char *dest, const char *src, size_t n);
 char *strcat(char *dest, const char *src);
 int atoi(const char *str);
 void itoa(int n, char *buf);
+void utoa(size_t n, char *buf);
 void itoa_hex(uint64_t n, char *buf);
 void itoa_hex32(uint32_t n, char *buf);
 int text_encode_utf8(uint32_t cp, char *out);

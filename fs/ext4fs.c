@@ -3,13 +3,13 @@
 
 #include "ext4_config.h"
 
-#include "types.h"
 #include "ext4fs.h"
 #include "disk.h"
 #include "memory_manager.h"
 #include "spinlock.h"
 #include <stddef.h>
 #include <string.h>
+#include <limits.h>
 
 #include <ext4.h>
 #include <ext4_blockdev.h>
@@ -244,7 +244,7 @@ static void vfs_ext4_close(void *fs_private, void *file_handle) {
     kfree(h);
 }
 
-static ssize_t vfs_ext4_read(void *fs_private, void *file_handle,
+static int vfs_ext4_read(void *fs_private, void *file_handle,
                              void *buf, size_t size) {
     (void)fs_private;
 
@@ -263,13 +263,13 @@ static ssize_t vfs_ext4_read(void *fs_private, void *file_handle,
     if (r != EOK && rcnt == 0)
         return -1;
 
-    if (rcnt > SSIZE_MAX)
+    if (rcnt > INT_MAX)
         return -1;
 
-    return (ssize_t)rcnt;
+    return (int)rcnt;
 }
 
-static ssize_t vfs_ext4_write(void *fs_private, void *file_handle,
+static int vfs_ext4_write(void *fs_private, void *file_handle,
                               const void *buf, size_t size) {
     (void)fs_private;
 
@@ -288,10 +288,10 @@ static ssize_t vfs_ext4_write(void *fs_private, void *file_handle,
     if (r != EOK && wcnt == 0)
         return -1;
 
-    if (wcnt > SSIZE_MAX)
+    if (wcnt > INT_MAX)
         return -1;
 
-    return (ssize_t)wcnt;
+    return (int)wcnt;
 }
 
 static int vfs_ext4_seek(void *fs_private, void *file_handle,

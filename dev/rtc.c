@@ -4,7 +4,6 @@
 #include "rtc.h"
 #include "io.h"
 #include "kutils.h"
-#include "types.h"
 #include <string.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -118,7 +117,7 @@ void rtc_set_datetime(int year, int month, int day, int hour, int minute, int se
     outb(CMOS_DATA, prev_b & ~0x80);
 }
 
-ssize_t rtc_dev_read(void *buf, size_t size, uint64_t *position) {
+int rtc_dev_read(void *buf, size_t size, uint64_t *position) {
     if (!position || (!buf && size))
         return -1;
 
@@ -179,14 +178,14 @@ ssize_t rtc_dev_read(void *buf, size_t size, uint64_t *position) {
     if (to_copy > size)
         to_copy = size;
 
-    if (to_copy > SSIZE_MAX)
+    if (to_copy > INT_MAX)
         return -1;
 
     memcpy(buf, out + pos, to_copy);
 
     *position += to_copy;
 
-    return (ssize_t)to_copy;
+    return (int)to_copy;
 }
 
 int rtc_dev_write(const void *buf, int size, uint64_t *position) {

@@ -11,6 +11,7 @@
 #include "platform.h"
 #include "kconsole.h"
 #include "memory_manager.h"
+#include <limits.h>
 
 extern void serial_write(const char *str);
 extern void serial_write_hex(uint64_t value);
@@ -33,8 +34,8 @@ typedef struct {
 
 static void* bootfs_open(void *fs_private, const char *path, const char *mode);
 static void bootfs_close(void *fs_private, void *handle);
-static ssize_t bootfs_read(void *fs_private, void *handle, void *buf, size_t size);
-static ssize_t bootfs_write(void *fs_private, void *handle, const void *buf, size_t size);
+static int bootfs_read(void *fs_private, void *handle, void *buf, size_t size);
+static int bootfs_write(void *fs_private, void *handle, const void *buf, size_t size);
 static int bootfs_seek(void *fs_private, void *handle, int offset, int whence);
 static int bootfs_readdir(void *fs_private, const char *rel_path, vfs_dirent_t *entries, int max, int offset);
 static bool bootfs_mkdir(void *fs_private, const char *rel_path);
@@ -220,7 +221,7 @@ static int generate_metadata_content(const char *file, char *buffer, int max_siz
     return len;
 }
 
-static ssize_t bootfs_read(void *fs_private, void *handle, void *buf, size_t size) {
+static int bootfs_read(void *fs_private, void *handle, void *buf, size_t size) {
     (void)fs_private;
 
     if (!buf && size > 0)
@@ -232,7 +233,7 @@ static ssize_t bootfs_read(void *fs_private, void *handle, void *buf, size_t siz
         return -1;
 
     if (h->disk_file) {
-        ssize_t ret = vfs_read(h->disk_file, buf, size);
+        int ret = vfs_read(h->disk_file, buf, size);
 
         if (ret > 0)
             h->offset += (size_t)ret;
@@ -245,7 +246,7 @@ static ssize_t bootfs_read(void *fs_private, void *handle, void *buf, size_t siz
     if (!content_buffer)
         return -1;
 
-    ssize_t content_len = 0;
+    int content_len = 0;
 
     if (strcmp(h->path, "kernel") == 0) {
         strcpy(content_buffer, "Kernel reference\nSize: ");
@@ -281,7 +282,7 @@ static ssize_t bootfs_read(void *fs_private, void *handle, void *buf, size_t siz
 
         size_t to_read = (size < avail) ? size : avail;
 
-        if (to_read > SSIZE_MAX)
+        if (to_read > INT_MAX)
             return -1;
 
         memcpy(buf,
@@ -290,7 +291,7 @@ static ssize_t bootfs_read(void *fs_private, void *handle, void *buf, size_t siz
 
         h->offset += to_read;
 
-        return (ssize_t)to_read;
+        return (int)to_read;
 
     } else if (is_metadata_file(h->path)) {
         content_len = generate_metadata_content(h->path,
@@ -315,14 +316,14 @@ static ssize_t bootfs_read(void *fs_private, void *handle, void *buf, size_t siz
 
             size_t to_read = (size < avail) ? size : avail;
 
-            if (to_read > SSIZE_MAX)
+            if (to_read > INT_MAX)
                 return -1;
 
             memcpy(buf, cf->data + h->offset, to_read);
 
             h->offset += to_read;
 
-            return (ssize_t)to_read;
+            return (int)to_read;
         }
 
         kfree(content_buffer);
@@ -338,7 +339,7 @@ static ssize_t bootfs_read(void *fs_private, void *handle, void *buf, size_t siz
 
     size_t read_size = (available < size) ? available : size;
 
-    if (read_size > SSIZE_MAX) {
+    if (read_size > INT_MAX) {
         kfree(content_buffer);
         return -1;
     }
@@ -349,10 +350,10 @@ static ssize_t bootfs_read(void *fs_private, void *handle, void *buf, size_t siz
 
     kfree(content_buffer);
 
-    return (ssize_t)read_size;
+    return (int)read_size;
 }
 
-static ssize_t bootfs_write(void *fs_private, void *handle, const void *buf, size_t size) {
+static int bootfs_write(void *fs_private, void *handle, const void *buf, size_t size) {
     (void)fs_private;
 
     if (!buf && size > 0)
@@ -364,7 +365,7 @@ static ssize_t bootfs_write(void *fs_private, void *handle, const void *buf, siz
         return -1;
 
     if (h->disk_file) {
-        ssize_t ret = vfs_write(h->disk_file, buf, size);
+        int ret = vfs_write(h->disk_file, buf, size);
 
         if (ret > 0)
             h->offset += (size_t)ret;

@@ -1,7 +1,6 @@
 // Copyright (c) 2023-2026 Christiaan (chris@boreddev.nl)
 // This software is released under the GNU General Public License v3.0. See LICENSE file for details.
 // This header needs to maintain in any file it is present in, as per the GPL license terms.
-#include "types.h"
 #include "kernel_subsystem.h"
 #include "smp.h"
 #include "pci.h"
@@ -15,7 +14,7 @@
 #include <limits.h>
 
 // --- Graphics Implementation ---
-static ssize_t read_gfx_drm(char *buf, size_t size, size_t offset) {
+static int read_gfx_drm(char *buf, size_t size, size_t offset) {
     if (!buf && size > 0) return -1;
 
     char out[512];
@@ -56,16 +55,16 @@ static ssize_t read_gfx_drm(char *buf, size_t size, size_t offset) {
     if (to_copy > size)
         to_copy = size;
 
-    if (to_copy > SSIZE_MAX)
+    if (to_copy > INT_MAX)
         return -1;
 
     memcpy(buf, out + offset, to_copy);
 
-    return (ssize_t)to_copy;
+    return (int)to_copy;
 }
 
 // --- Memory Tracking Implementation ---
-static ssize_t read_mem_tracking(char *buf, size_t size, size_t offset) {
+static int read_mem_tracking(char *buf, size_t size, size_t offset) {
     if (!buf && size > 0) return -1;
 
     MemStats stats = memory_get_stats();
@@ -98,16 +97,16 @@ static ssize_t read_mem_tracking(char *buf, size_t size, size_t offset) {
     if (to_copy > size)
         to_copy = size;
 
-    if (to_copy > SSIZE_MAX)
+    if (to_copy > INT_MAX)
         return -1;
 
     memcpy(buf, out + offset, to_copy);
 
-    return (ssize_t)to_copy;
+    return (int)to_copy;
 }
 
 // --- Module Implementation ---
-static ssize_t read_sys_modules(char *buf, size_t size, size_t offset) {
+static int read_sys_modules(char *buf, size_t size, size_t offset) {
     if (!buf && size > 0) return -1;
 
     int count = module_manager_get_count();
@@ -145,16 +144,16 @@ static ssize_t read_sys_modules(char *buf, size_t size, size_t offset) {
     if (to_copy > size)
         to_copy = size;
 
-    if (to_copy > SSIZE_MAX)
+    if (to_copy > INT_MAX)
         return -1;
 
     memcpy(buf, out + offset, to_copy);
 
-    return (ssize_t)to_copy;
+    return (int)to_copy;
 }
 
 // --- PCI Bus Implementation ---
-static ssize_t read_pci_bus(char *buf, size_t size, size_t offset) {
+static int read_pci_bus(char *buf, size_t size, size_t offset) {
     if (!buf && size > 0)
         return -1;
 
@@ -222,15 +221,15 @@ static ssize_t read_pci_bus(char *buf, size_t size, size_t offset) {
     if (to_copy > size)
         to_copy = size;
 
-    if (to_copy > SSIZE_MAX)
+    if (to_copy > INT_MAX)
         return -1;
 
     memcpy(buf, out + offset, to_copy);
 
-    return (ssize_t)to_copy;
+    return (int)to_copy;
 }
 
-static ssize_t read_ticks_info(char *buf, size_t size, size_t offset) {
+static int read_ticks_info(char *buf, size_t size, size_t offset) {
     if (!buf && size > 0) return -1;
 
     extern uint32_t get_ticks(void);
@@ -252,15 +251,15 @@ static ssize_t read_ticks_info(char *buf, size_t size, size_t offset) {
     if (to_copy > size)
         to_copy = size;
 
-    if (to_copy > SSIZE_MAX)
+    if (to_copy > INT_MAX)
         return -1;
 
     memcpy(buf, out + offset, to_copy);
 
-    return (ssize_t)to_copy;
+    return (int)to_copy;
 }
 
-static ssize_t read_mem_info(char *buf, size_t size, size_t offset) {
+static int read_mem_info(char *buf, size_t size, size_t offset) {
     if (!buf && size > 0) return -1;
 
     MemStats stats = memory_get_stats();
@@ -270,11 +269,11 @@ static ssize_t read_mem_info(char *buf, size_t size, size_t offset) {
 
     out[0] = 0;
 
-    itoa(stats.total_memory, temp);
+    utoa(stats.total_memory, temp);
     strcpy(out, temp);
     strcpy(out + strlen(out), "\n");
 
-    itoa(stats.used_memory, temp);
+    utoa(stats.used_memory, temp);
     strcpy(out + strlen(out), temp);
     strcpy(out + strlen(out), "\n");
 
@@ -288,15 +287,15 @@ static ssize_t read_mem_info(char *buf, size_t size, size_t offset) {
     if (to_copy > size)
         to_copy = size;
 
-    if (to_copy > SSIZE_MAX)
+    if (to_copy > INT_MAX)
         return -1;
 
     memcpy(buf, out + offset, to_copy);
 
-    return (ssize_t)to_copy;
+    return (int)to_copy;
 }
 
-static ssize_t read_keyboard_layout(char *buf, size_t size, size_t offset) {
+static int read_keyboard_layout(char *buf, size_t size, size_t offset) {
     if (!buf && size > 0) return -1;
 
     extern int keymap_get_current(void);
@@ -318,15 +317,15 @@ static ssize_t read_keyboard_layout(char *buf, size_t size, size_t offset) {
     if (to_copy > size)
         to_copy = size;
 
-    if (to_copy > SSIZE_MAX)
+    if (to_copy > INT_MAX)
         return -1;
 
     memcpy(buf, out + offset, to_copy);
 
-    return (ssize_t)to_copy;
+    return (int)to_copy;
 }
 
-static ssize_t write_keyboard_layout(const char *buf, size_t size, size_t offset) {
+static int write_keyboard_layout(const char *buf, size_t size, size_t offset) {
     (void)offset;
 
     if (!buf && size > 0)
@@ -345,14 +344,14 @@ static ssize_t write_keyboard_layout(const char *buf, size_t size, size_t offset
 
     keymap_set_current(val);
 
-    if (size > SSIZE_MAX)
+    if (size > INT_MAX)
         return -1;
 
-    return (ssize_t)size;
+    return (int)size;
 }
 
 // --- CPU System Implementation ---
-static ssize_t read_cpu_info(char *buf, size_t size, size_t offset) {
+static int read_cpu_info(char *buf, size_t size, size_t offset) {
     if (!buf && size > 0)
         return -1;
 
@@ -475,7 +474,7 @@ static ssize_t read_cpu_info(char *buf, size_t size, size_t offset) {
     if (to_copy > size)
         to_copy = size;
 
-    if (to_copy > SSIZE_MAX) {
+    if (to_copy > INT_MAX) {
         kfree(out);
         return -1;
     }
@@ -484,11 +483,11 @@ static ssize_t read_cpu_info(char *buf, size_t size, size_t offset) {
 
     kfree(out);
 
-    return (ssize_t)to_copy;
+    return (int)to_copy;
 }
 
 // --- Devices Implementation ---
-static ssize_t read_sys_devices(char *buf, size_t size, size_t offset) {
+static int read_sys_devices(char *buf, size_t size, size_t offset) {
     if (!buf && size > 0)
         return -1;
 
@@ -534,16 +533,16 @@ static ssize_t read_sys_devices(char *buf, size_t size, size_t offset) {
     if (to_copy > size)
         to_copy = size;
 
-    if (to_copy > SSIZE_MAX)
+    if (to_copy > INT_MAX)
         return -1;
 
     memcpy(buf, out + offset, to_copy);
 
-    return (ssize_t)to_copy;
+    return (int)to_copy;
 }
 
 // --- Class Implementation ---
-static ssize_t read_sys_class(char *buf, size_t size, size_t offset) {
+static int read_sys_class(char *buf, size_t size, size_t offset) {
     if (!buf && size > 0)
         return -1;
 
@@ -568,17 +567,17 @@ static ssize_t read_sys_class(char *buf, size_t size, size_t offset) {
     if (to_copy > size)
         to_copy = size;
 
-    if (to_copy > SSIZE_MAX)
+    if (to_copy > INT_MAX)
         return -1;
 
     memcpy(buf, out + offset, to_copy);
 
-    return (ssize_t)to_copy;
+    return (int)to_copy;
 }
 
 
 // --- GPIO Implementation ---
-static ssize_t read_gpio_debug(char *buf, size_t size, size_t offset) {
+static int read_gpio_debug(char *buf, size_t size, size_t offset) {
     if (!buf && size > 0)
         return -1;
 
@@ -603,12 +602,12 @@ static ssize_t read_gpio_debug(char *buf, size_t size, size_t offset) {
     if (to_copy > size)
         to_copy = size;
 
-    if (to_copy > SSIZE_MAX)
+    if (to_copy > INT_MAX)
         return -1;
 
     memcpy(buf, out + offset, to_copy);
 
-    return (ssize_t)to_copy;
+    return (int)to_copy;
 }
 
 void sysfs_init_subsystems(void) {

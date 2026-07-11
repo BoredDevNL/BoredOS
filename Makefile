@@ -4,9 +4,10 @@
 
 export MAKEFLAGS += -j4
 
-# Auto-detect toolchain location and prepend to PATH if not already in environment
+COMPILER_IN_PATH := $(shell command -v x86_64-boredos-gcc >/dev/null 2>&1 && echo yes)
+
 TOOLCHAIN_PATH := $(shell \
-	if command -v x86_64-boredos-gcc >/dev/null 2>&1; then \
+	if [ -n "$(COMPILER_IN_PATH)" ]; then \
 		echo ""; \
 	elif [ -x /opt/boredos-toolchain/bin/x86_64-boredos-gcc ]; then \
 		echo "/opt/boredos-toolchain/bin"; \
@@ -17,7 +18,7 @@ TOOLCHAIN_PATH := $(shell \
 ifneq ($(TOOLCHAIN_PATH),)
 export PATH := $(TOOLCHAIN_PATH):$(PATH)
 
-ifeq ($(shell command -v x86_64-boredos-gcc >/dev/null 2>&1 && echo yes),)
+ifeq ($(COMPILER_IN_PATH),)
 .SUFFIXES:
 .DEFAULT:
 	@PATH="$(TOOLCHAIN_PATH):$(PATH)" $(MAKE) -f $(firstword $(MAKEFILE_LIST)) $(MAKECMDGOALS)

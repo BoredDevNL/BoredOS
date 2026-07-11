@@ -16,7 +16,20 @@ TOOLCHAIN_PATH := $(shell \
 
 ifneq ($(TOOLCHAIN_PATH),)
 export PATH := $(TOOLCHAIN_PATH):$(PATH)
+
+ifeq ($(shell command -v x86_64-boredos-gcc >/dev/null 2>&1 && echo yes),)
+.SUFFIXES:
+.DEFAULT:
+	@PATH="$(TOOLCHAIN_PATH):$(PATH)" $(MAKE) -f $(firstword $(MAKEFILE_LIST)) $(MAKECMDGOALS)
+
+all:
+	@PATH="$(TOOLCHAIN_PATH):$(PATH)" $(MAKE) -f $(firstword $(MAKEFILE_LIST)) all
+
+REEXEC := 1
 endif
+endif
+
+ifndef REEXEC
 
 CC = x86_64-boredos-gcc
 LD = x86_64-boredos-ld
@@ -441,3 +454,5 @@ run-hd-linux: disk.qcow2 $(OVMF_VARS)
 		-device ahci,id=ahci \
 		-drive file=disk.qcow2,format=qcow2,if=none,id=disk0 -device ide-hd,bus=ahci.0,drive=disk0 \
 		-cpu max
+
+endif

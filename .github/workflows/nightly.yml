@@ -63,18 +63,40 @@ jobs:
             meson \
             ninja-build \
             lz4
-          # Create compiler wrappers to isolate builds from host Linux headers (emulating real x86_64-elf-gcc)
+          # Create compiler wrappers to isolate userland builds from host Linux headers (emulating real x86_64-elf-gcc)
           sudo tee /usr/local/bin/x86_64-elf-gcc << 'EOF'
           #!/bin/bash
           REAL_GCC="/usr/bin/x86_64-linux-gnu-gcc-14"
-          exec $REAL_GCC -nostdinc -isystem "$($REAL_GCC -print-file-name=include)" "$@"
+          IS_USERLAND=0
+          for arg in "$@"; do
+              if [[ "$arg" == *"sdk"* ]]; then
+                  IS_USERLAND=1
+                  break
+              fi
+          done
+          if [ "$IS_USERLAND" -eq 1 ]; then
+              exec $REAL_GCC -nostdinc -isystem "$($REAL_GCC -print-file-name=include)" "$@"
+          else
+              exec $REAL_GCC "$@"
+          fi
           EOF
           sudo chmod +x /usr/local/bin/x86_64-elf-gcc
 
           sudo tee /usr/local/bin/x86_64-elf-g++ << 'EOF'
           #!/bin/bash
           REAL_GXX="/usr/bin/x86_64-linux-gnu-g++-14"
-          exec $REAL_GXX -nostdinc -isystem "$($REAL_GXX -print-file-name=include)" "$@"
+          IS_USERLAND=0
+          for arg in "$@"; do
+              if [[ "$arg" == *"sdk"* ]]; then
+                  IS_USERLAND=1
+                  break
+              fi
+          done
+          if [ "$IS_USERLAND" -eq 1 ]; then
+              exec $REAL_GXX -nostdinc -isystem "$($REAL_GXX -print-file-name=include)" "$@"
+          else
+              exec $REAL_GXX "$@"
+          fi
           EOF
           sudo chmod +x /usr/local/bin/x86_64-elf-g++
 

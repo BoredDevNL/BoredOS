@@ -64,16 +64,16 @@ jobs:
             ninja-build \
             lz4
           # Create compiler wrappers to isolate userland builds from host Linux headers (emulating real x86_64-elf-gcc)
+          sudo rm -f /usr/local/bin/x86_64-elf-gcc
           sudo tee /usr/local/bin/x86_64-elf-gcc << 'EOF'
           #!/bin/bash
           REAL_GCC="/usr/bin/x86_64-linux-gnu-gcc-14"
           IS_USERLAND=0
-          for arg in "$@"; do
-              if [[ "$arg" == *"sdk"* ]]; then
+          case "$*" in
+              *sdk*)
                   IS_USERLAND=1
-                  break
-              fi
-          done
+                  ;;
+          esac
           if [ "$IS_USERLAND" -eq 1 ]; then
               exec $REAL_GCC -nostdinc -isystem "$($REAL_GCC -print-file-name=include)" "$@"
           else
@@ -82,16 +82,16 @@ jobs:
           EOF
           sudo chmod +x /usr/local/bin/x86_64-elf-gcc
 
+          sudo rm -f /usr/local/bin/x86_64-elf-g++
           sudo tee /usr/local/bin/x86_64-elf-g++ << 'EOF'
           #!/bin/bash
           REAL_GXX="/usr/bin/x86_64-linux-gnu-g++-14"
           IS_USERLAND=0
-          for arg in "$@"; do
-              if [[ "$arg" == *"sdk"* ]]; then
+          case "$*" in
+              *sdk*)
                   IS_USERLAND=1
-                  break
-              fi
-          done
+                  ;;
+          esac
           if [ "$IS_USERLAND" -eq 1 ]; then
               exec $REAL_GXX -nostdinc -isystem "$($REAL_GXX -print-file-name=include)" "$@"
           else

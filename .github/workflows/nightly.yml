@@ -55,16 +55,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             make \
-            gcc-x86-64-linux-gnu \
-            g++-x86-64-linux-gnu \
+            gcc-14-x86-64-linux-gnu \
+            g++-14-x86-64-linux-gnu \
             binutils-x86-64-linux-gnu \
             nasm \
             xorriso \
             meson \
             ninja-build \
             lz4
-          sudo ln -sf /usr/bin/x86_64-linux-gnu-gcc /usr/local/bin/x86_64-elf-gcc
-          sudo ln -sf /usr/bin/x86_64-linux-gnu-g++ /usr/local/bin/x86_64-elf-g++
+          sudo ln -sf /usr/bin/x86_64-linux-gnu-gcc-14 /usr/local/bin/x86_64-elf-gcc
+          sudo ln -sf /usr/bin/x86_64-linux-gnu-g++-14 /usr/local/bin/x86_64-elf-g++
           sudo ln -sf /usr/bin/x86_64-linux-gnu-ld  /usr/local/bin/x86_64-elf-ld
           sudo ln -sf /usr/bin/x86_64-linux-gnu-ar  /usr/local/bin/x86_64-elf-ar
           sudo ln -sf /usr/bin/x86_64-linux-gnu-strip  /usr/local/bin/x86_64-elf-strip

@@ -63,11 +63,26 @@ jobs:
             meson \
             ninja-build \
             lz4
-          sudo ln -sf /usr/bin/x86_64-linux-gnu-gcc-14 /usr/local/bin/x86_64-elf-gcc
-          sudo ln -sf /usr/bin/x86_64-linux-gnu-g++-14 /usr/local/bin/x86_64-elf-g++
+          # Create compiler wrappers to isolate builds from host Linux headers (emulating real x86_64-elf-gcc)
+          sudo tee /usr/local/bin/x86_64-elf-gcc << 'EOF'
+          #!/bin/bash
+          REAL_GCC="/usr/bin/x86_64-linux-gnu-gcc-14"
+          exec $REAL_GCC -nostdinc -isystem "$($REAL_GCC -print-file-name=include)" "$@"
+          EOF
+          sudo chmod +x /usr/local/bin/x86_64-elf-gcc
+
+          sudo tee /usr/local/bin/x86_64-elf-g++ << 'EOF'
+          #!/bin/bash
+          REAL_GXX="/usr/bin/x86_64-linux-gnu-g++-14"
+          exec $REAL_GXX -nostdinc -isystem "$($REAL_GXX -print-file-name=include)" "$@"
+          EOF
+          sudo chmod +x /usr/local/bin/x86_64-elf-g++
+
+          # Keep standard symlinks for other tools
           sudo ln -sf /usr/bin/x86_64-linux-gnu-ld  /usr/local/bin/x86_64-elf-ld
           sudo ln -sf /usr/bin/x86_64-linux-gnu-ar  /usr/local/bin/x86_64-elf-ar
           sudo ln -sf /usr/bin/x86_64-linux-gnu-strip  /usr/local/bin/x86_64-elf-strip
+
 
       - name: Build ISO
         run: make -j4

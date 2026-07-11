@@ -264,6 +264,18 @@ int procfs_read(void *fs_private, void *handle, void *buf, size_t size) {
             strcpy(out + strlen(out), b);
 
             strcpy(out + strlen(out), "\n");
+        } else if (strcmp(h->type, "meminfo") == 0) {
+            extern MemStats memory_get_stats(void);
+            MemStats stats = memory_get_stats();
+
+            char temp[32];
+            strcpy(out, "MemTotal: ");
+            utoa(stats.total_memory / 1024, temp);
+            strcpy(out + strlen(out), temp);
+            strcpy(out + strlen(out), " kB\nMemUsed: ");
+            utoa(stats.used_memory / 1024, temp);
+            strcpy(out + strlen(out), temp);
+            strcpy(out + strlen(out), " kB\n");
         }
 
     } else {

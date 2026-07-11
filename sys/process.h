@@ -9,7 +9,7 @@
 #include <stddef.h>
 
 #define MAX_PROCESS_FDS 64
-#define MAX_SIGNALS 32
+#define MAX_SIGNALS 64
 
 #define PROC_STATE_RUNNING 0
 #define PROC_STATE_BLOCKED 1

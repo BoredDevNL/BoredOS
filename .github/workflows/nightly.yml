@@ -55,56 +55,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             make \
-            gcc-14-x86-64-linux-gnu \
-            g++-14-x86-64-linux-gnu \
-            binutils-x86-64-linux-gnu \
             nasm \
             xorriso \
             meson \
             ninja-build \
             lz4
-          # Create compiler wrappers to isolate userland builds from host Linux headers (emulating real x86_64-elf-gcc)
-          sudo rm -f /usr/local/bin/x86_64-elf-gcc
-          sudo tee /usr/local/bin/x86_64-elf-gcc << 'EOF'
-          #!/bin/bash
-          REAL_GCC="/usr/bin/x86_64-linux-gnu-gcc-14"
-          IS_USERLAND=0
-          case "$*" in
-              *sdk*)
-                  IS_USERLAND=1
-                  ;;
-          esac
-          if [ "$IS_USERLAND" -eq 1 ]; then
-              exec $REAL_GCC -nostdinc -isystem "$($REAL_GCC -print-file-name=include)" "$@"
-          else
-              exec $REAL_GCC "$@"
-          fi
-          EOF
-          sudo chmod +x /usr/local/bin/x86_64-elf-gcc
 
-          sudo rm -f /usr/local/bin/x86_64-elf-g++
-          sudo tee /usr/local/bin/x86_64-elf-g++ << 'EOF'
-          #!/bin/bash
-          REAL_GXX="/usr/bin/x86_64-linux-gnu-g++-14"
-          IS_USERLAND=0
-          case "$*" in
-              *sdk*)
-                  IS_USERLAND=1
-                  ;;
-          esac
-          if [ "$IS_USERLAND" -eq 1 ]; then
-              exec $REAL_GXX -nostdinc -isystem "$($REAL_GXX -print-file-name=include)" "$@"
-          else
-              exec $REAL_GXX "$@"
-          fi
-          EOF
-          sudo chmod +x /usr/local/bin/x86_64-elf-g++
-
-          # Keep standard symlinks for other tools
-          sudo ln -sf /usr/bin/x86_64-linux-gnu-ld  /usr/local/bin/x86_64-elf-ld
-          sudo ln -sf /usr/bin/x86_64-linux-gnu-ar  /usr/local/bin/x86_64-elf-ar
-          sudo ln -sf /usr/bin/x86_64-linux-gnu-strip  /usr/local/bin/x86_64-elf-strip
-
+      - name: Install BoredOS toolchain
+        run: |
+          bash toolchain/install.sh $HOME/boredos-toolchain
+          echo "$HOME/boredos-toolchain/bin" >> $GITHUB_PATH
 
       - name: Build ISO
         run: make -j4

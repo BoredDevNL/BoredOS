@@ -1,8 +1,3 @@
-[submodule "usr/libc"]
-	path = usr/libc
-	url = https://github.com/boredos/libc.git
-	ignore = all
-	branch = main
 [submodule "usr/bsh"]
 	path = usr/bsh
 	url = https://github.com/boredos/bsh.git
@@ -84,3 +79,7 @@
 	ignore = all
 	branch = master
 
+[submodule "toolchain"]
+	path = toolchain
+	url = https://github.com/BoredOS/toolchain.git
+	branch = main

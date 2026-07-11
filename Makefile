@@ -4,9 +4,24 @@
 
 export MAKEFLAGS += -j4
 
-CC = x86_64-elf-gcc
-LD = x86_64-elf-ld
-AR = x86_64-elf-ar
+# Auto-detect toolchain location and prepend to PATH if not already in environment
+TOOLCHAIN_PATH := $(shell \
+	if command -v x86_64-boredos-gcc >/dev/null 2>&1; then \
+		echo ""; \
+	elif [ -x /opt/boredos-toolchain/bin/x86_64-boredos-gcc ]; then \
+		echo "/opt/boredos-toolchain/bin"; \
+	elif [ -x $(HOME)/boredos-toolchain/bin/x86_64-boredos-gcc ]; then \
+		echo "$(HOME)/boredos-toolchain/bin"; \
+	fi)
+
+ifneq ($(TOOLCHAIN_PATH),)
+export PATH := $(TOOLCHAIN_PATH):$(PATH)
+endif
+
+CC = x86_64-boredos-gcc
+LD = x86_64-boredos-ld
+AR = x86_64-boredos-ar
+STRIP = x86_64-boredos-strip
 NASM = nasm
 XORRISO = xorriso
 

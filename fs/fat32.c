@@ -8,6 +8,7 @@
 #include "disk.h"
 #include <stdbool.h>
 #include <stddef.h>
+#include <limits.h>
 #include "spinlock.h"
 #include "kutils.h"
 
@@ -1531,7 +1532,7 @@ static void vfs_ramfs_close(void *fs_private, void *file_handle) {
     fat32_close((FAT32_FileHandle*)file_handle);
 }
 
-static ssize_t vfs_ramfs_read(void *fs_private, void *file_handle, void *buf, size_t size) {
+static int vfs_ramfs_read(void *fs_private, void *file_handle, void *buf, size_t size) {
     (void)fs_private;
 
     if (!buf && size > 0)
@@ -1549,13 +1550,13 @@ static ssize_t vfs_ramfs_read(void *fs_private, void *file_handle, void *buf, si
     if (ret < 0)
         return -1;
 
-    if ((size_t)ret > SSIZE_MAX)
+    if ((size_t)ret > INT_MAX)
         return -1;
 
-    return (ssize_t)ret;
+    return (int)ret;
 }
 
-static ssize_t vfs_ramfs_write(void *fs_private, void *file_handle, const void *buf, size_t size) {
+static int vfs_ramfs_write(void *fs_private, void *file_handle, const void *buf, size_t size) {
     (void)fs_private;
 
     if (!buf && size > 0)
@@ -1573,10 +1574,10 @@ static ssize_t vfs_ramfs_write(void *fs_private, void *file_handle, const void *
     if (ret < 0)
         return -1;
 
-    if ((size_t)ret > SSIZE_MAX)
+    if ((size_t)ret > INT_MAX)
         return -1;
 
-    return (ssize_t)ret;
+    return (int)ret;
 }
 
 static int vfs_ramfs_seek(void *fs_private, void *file_handle, int offset, int whence) {
@@ -1787,7 +1788,7 @@ static void vfs_realfs_close(void *fs_private, void *file_handle) {
     fat32_close((FAT32_FileHandle*)file_handle);
 }
 
-static ssize_t vfs_realfs_read(void *fs_private, void *file_handle, void *buf, size_t size) {
+static int vfs_realfs_read(void *fs_private, void *file_handle, void *buf, size_t size) {
     (void)fs_private;
 
     if (!buf && size > 0)
@@ -1835,13 +1836,13 @@ static ssize_t vfs_realfs_read(void *fs_private, void *file_handle, void *buf, s
 
     kfree(cluster_buf);
 
-    if (total_read > SSIZE_MAX)
+    if (total_read > INT_MAX)
         return -1;
 
-    return (ssize_t)total_read;
+    return (int)total_read;
 }
 
-static ssize_t vfs_realfs_write(void *fs_private, void *file_handle, const void *buf, size_t size) {
+static int vfs_realfs_write(void *fs_private, void *file_handle, const void *buf, size_t size) {
     (void)fs_private;
 
     if (!buf && size > 0)
@@ -1892,10 +1893,10 @@ static ssize_t vfs_realfs_write(void *fs_private, void *file_handle, const void 
 
     kfree(cluster_buf);
 
-    if (total_written > SSIZE_MAX)
+    if (total_written > INT_MAX)
         return -1;
 
-    return (ssize_t)total_written;
+    return (int)total_written;
 }
 
 static int vfs_realfs_seek(void *fs_private, void *file_handle, int offset, int whence) {

@@ -4,7 +4,6 @@
 #ifndef VFS_H
 #define VFS_H
 
-#include "types.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -48,8 +47,8 @@ typedef struct vfs_fs_ops {
     // File operations — return opaque FS handle
     void* (*open)(void *fs_private, const char *rel_path, const char *mode);
     void  (*close)(void *fs_private, void *file_handle);
-    ssize_t   (*read)(void *fs_private, void *file_handle, void *buf, size_t size);
-    ssize_t   (*write)(void *fs_private, void *file_handle, const void *buf, size_t size);
+    int   (*read)(void *fs_private, void *file_handle, void *buf, size_t size);
+    int   (*write)(void *fs_private, void *file_handle, const void *buf, size_t size);
     int   (*seek)(void *fs_private, void *file_handle, int offset, int whence);
 
     // Directory operations

@@ -44,7 +44,7 @@ static void sysfs_close(void *fs_private, void *handle) {
     if (handle) kfree(handle);
 }
 
-static ssize_t sysfs_read(void *fs_private, void *handle, void *buf, size_t size) {
+static int sysfs_read(void *fs_private, void *handle, void *buf, size_t size) {
     (void)fs_private;
 
     if (!buf && size > 0)
@@ -55,7 +55,7 @@ static ssize_t sysfs_read(void *fs_private, void *handle, void *buf, size_t size
     if (!h || !h->file || !h->file->read)
         return -1;
 
-    ssize_t bytes = h->file->read((char*)buf, size, h->offset);
+    int bytes = h->file->read((char*)buf, size, h->offset);
 
     if (bytes > 0)
         h->offset += (size_t)bytes;
@@ -63,7 +63,7 @@ static ssize_t sysfs_read(void *fs_private, void *handle, void *buf, size_t size
     return bytes;
 }
 
-static ssize_t sysfs_write(void *fs_private, void *handle, const void *buf, size_t size) {
+static int sysfs_write(void *fs_private, void *handle, const void *buf, size_t size) {
     (void)fs_private;
 
     if (!buf && size > 0)
@@ -74,7 +74,7 @@ static ssize_t sysfs_write(void *fs_private, void *handle, const void *buf, size
     if (!h || !h->file || !h->file->write)
         return -1;
 
-    ssize_t bytes = h->file->write((const char*)buf, size, h->offset);
+    int bytes = h->file->write((const char*)buf, size, h->offset);
 
     if (bytes > 0)
         h->offset += (size_t)bytes;

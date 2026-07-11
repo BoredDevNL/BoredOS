@@ -1,4 +1,3 @@
-#include "types.h"
 #include "vfs.h"
 #include "process.h"
 #include "syscall.h"
@@ -7,6 +6,7 @@
 #include "kutils.h"
 #include "platform.h"
 #include "version.h"
+#include <limits.h>
 
 typedef struct {
     uint32_t pid;
@@ -54,7 +54,7 @@ void procfs_close(void *fs_private, void *handle) {
     if (handle) kfree(handle);
 }
 
-ssize_t procfs_read(void *fs_private, void *handle, void *buf, size_t size) {
+int procfs_read(void *fs_private, void *handle, void *buf, size_t size) {
     (void)fs_private;
 
     if (!handle) return -1;
@@ -335,7 +335,7 @@ ssize_t procfs_read(void *fs_private, void *handle, void *buf, size_t size) {
     if (to_copy > size)
         to_copy = size;
 
-    if (to_copy > SSIZE_MAX) {
+    if (to_copy > INT_MAX) {
         kfree(out);
         return -1;
     }
@@ -351,10 +351,10 @@ ssize_t procfs_read(void *fs_private, void *handle, void *buf, size_t size) {
 
     kfree(out);
 
-    return (ssize_t)to_copy;
+    return (int)to_copy;
 }
 
-ssize_t procfs_write(void *fs_private, void *handle, const void *buf, size_t size) {
+int procfs_write(void *fs_private, void *handle, const void *buf, size_t size) {
     (void)fs_private;
 
     if (!buf && size > 0)
@@ -379,10 +379,10 @@ ssize_t procfs_write(void *fs_private, void *handle, const void *buf, size_t siz
             if (proc && proc->pid != 0) {
                 process_terminate(proc);
 
-                if (size > SSIZE_MAX)
+                if (size > INT_MAX)
                     return -1;
 
-                return (ssize_t)size;
+                return (int)size;
             }
         }
     }

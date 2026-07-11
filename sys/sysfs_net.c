@@ -1,12 +1,12 @@
 // Copyright (c) 2023-2026 Christiaan (chris@boreddev.nl)
 // This software is released under the GNU General Public License v3.0. See LICENSE file for details.
 // This header needs to maintain in any file it is present in, as per the GPL license terms.
-#include "types.h"
 #include "kernel_subsystem.h"
 #include "process.h"
 #include "network.h"
 #include "memory_manager.h"
 #include "kutils.h"
+#include <limits.h>
 
 // Helpers to format IPs and MACs
 static void format_ip(const ipv4_address_t *ip, char *out) {
@@ -91,7 +91,7 @@ static int parse_ip(const char *str, ipv4_address_t *ip) {
 }
 
 // Subsystem file handlers
-static ssize_t read_net_address(char *buf, size_t size, size_t offset) {
+static int read_net_address(char *buf, size_t size, size_t offset) {
     if (!buf && size > 0)
         return -1;
 
@@ -112,18 +112,18 @@ static ssize_t read_net_address(char *buf, size_t size, size_t offset) {
         if (to_copy > size)
             to_copy = size;
 
-        if (to_copy > SSIZE_MAX)
+        if (to_copy > INT_MAX)
             return -1;
 
         memcpy(buf, out + offset, to_copy);
 
-        return (ssize_t)to_copy;
+        return (int)to_copy;
     }
 
     return -1;
 }
 
-static ssize_t read_ip_field(char *buf, size_t size, size_t offset,
+static int read_ip_field(char *buf, size_t size, size_t offset,
                              int (*getter)(ipv4_address_t *)) {
     if (!buf && size > 0)
         return -1;
@@ -148,27 +148,27 @@ static ssize_t read_ip_field(char *buf, size_t size, size_t offset,
         if (to_copy > size)
             to_copy = size;
 
-        if (to_copy > SSIZE_MAX)
+        if (to_copy > INT_MAX)
             return -1;
 
         memcpy(buf, out + offset, to_copy);
 
-        return (ssize_t)to_copy;
+        return (int)to_copy;
     }
 
     return -1;
 }
 
-static ssize_t read_net_ip(char *buf, size_t size, size_t offset) {
+static int read_net_ip(char *buf, size_t size, size_t offset) {
     return read_ip_field(buf, size, offset, network_get_ipv4_address);
 }
 
-static ssize_t read_net_gateway(char *buf, size_t size, size_t offset) {
+static int read_net_gateway(char *buf, size_t size, size_t offset) {
     return read_ip_field(buf, size, offset, network_get_gateway_ip);
 }
 
 
-static ssize_t read_net_nic(char *buf, size_t size, size_t offset) {
+static int read_net_nic(char *buf, size_t size, size_t offset) {
     if (!buf && size > 0)
         return -1;
 
@@ -187,18 +187,18 @@ static ssize_t read_net_nic(char *buf, size_t size, size_t offset) {
         if (to_copy > size)
             to_copy = size;
 
-        if (to_copy > SSIZE_MAX)
+        if (to_copy > INT_MAX)
             return -1;
 
         memcpy(buf, out + offset, to_copy);
 
-        return (ssize_t)to_copy;
+        return (int)to_copy;
     }
 
     return -1;
 }
 
-static ssize_t read_net_status(char *buf, size_t size, size_t offset) {
+static int read_net_status(char *buf, size_t size, size_t offset) {
     if (!buf && size > 0)
         return -1;
 
@@ -222,15 +222,15 @@ static ssize_t read_net_status(char *buf, size_t size, size_t offset) {
     if (to_copy > size)
         to_copy = size;
 
-    if (to_copy > SSIZE_MAX)
+    if (to_copy > INT_MAX)
         return -1;
 
     memcpy(buf, out + offset, to_copy);
 
-    return (ssize_t)to_copy;
+    return (int)to_copy;
 }
 
-static ssize_t read_net_stats(char *buf, size_t size, size_t offset) {
+static int read_net_stats(char *buf, size_t size, size_t offset) {
     if (!buf && size > 0)
         return -1;
 
@@ -267,41 +267,41 @@ static ssize_t read_net_stats(char *buf, size_t size, size_t offset) {
     if (to_copy > size)
         to_copy = size;
 
-    if (to_copy > SSIZE_MAX)
+    if (to_copy > INT_MAX)
         return -1;
 
     memcpy(buf, out + offset, to_copy);
 
-    return (ssize_t)to_copy;
+    return (int)to_copy;
 }
 
-static ssize_t write_net_control(const char *buf, size_t size, size_t offset) {
+static int write_net_control(const char *buf, size_t size, size_t offset) {
     (void)offset;
 
     if (!buf && size > 0)
         return -1;
 
-    if (size > SSIZE_MAX)
+    if (size > INT_MAX)
         return -1;
 
     if (strncmp(buf, "dhcp", 4) == 0) {
-        return network_dhcp_acquire() == 0 ? (ssize_t)size : -1;
+        return network_dhcp_acquire() == 0 ? (int)size : -1;
 
     } else if (strncmp(buf, "init", 4) == 0) {
-        return network_init() == 0 ? (ssize_t)size : -1;
+        return network_init() == 0 ? (int)size : -1;
 
     } else if (strncmp(buf, "set_ip ", 7) == 0) {
         ipv4_address_t ip;
 
         if (parse_ip(buf + 7, &ip) == 0) {
-            return network_set_ipv4_address(&ip) == 0 ? (ssize_t)size : -1;
+            return network_set_ipv4_address(&ip) == 0 ? (int)size : -1;
         }
     }
 
     return -1;
 }
 
-static ssize_t write_ping(const char *buf, size_t size, size_t offset) {
+static int write_ping(const char *buf, size_t size, size_t offset) {
     (void)offset;
 
     if (!buf && size > 0)
@@ -351,14 +351,14 @@ static ssize_t write_ping(const char *buf, size_t size, size_t offset) {
         strcpy(proc->ping_result, "invalid\n");
     }
 
-    if (size > SSIZE_MAX)
+    if (size > INT_MAX)
         return -1;
 
-    return (ssize_t)size;
+    return (int)size;
 }
 
 
-static ssize_t read_ping(char *buf, size_t size, size_t offset) {
+static int read_ping(char *buf, size_t size, size_t offset) {
     if (!buf && size > 0)
         return -1;
 
@@ -377,12 +377,12 @@ static ssize_t read_ping(char *buf, size_t size, size_t offset) {
     if (to_copy > size)
         to_copy = size;
 
-    if (to_copy > SSIZE_MAX)
+    if (to_copy > INT_MAX)
         return -1;
 
     memcpy(buf, proc->ping_result + offset, to_copy);
 
-    return (ssize_t)to_copy;
+    return (int)to_copy;
 }
 
 void sysfs_net_init(void) {

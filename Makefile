@@ -156,9 +156,21 @@ usr-fetch:
 	fi
 
 build/sdk: usr-fetch
-	$(call PRINT_STEP,BUILDING BOREDOS SDK (LIBC))
+	$(call PRINT_STEP,BUILDING BOREDOS SDK (MLIBC))
 	@mkdir -p build/sdk
-	$(MAKE) -C usr/libc SDK_DIR=$(abspath build/sdk) install
+	@if [ ! -d build/mlibc_build ]; then \
+		meson setup build/mlibc_build usr/mlibc \
+			--cross-file tools/cross_file.txt \
+			--prefix=$(abspath build/sdk) \
+			--libdir=lib \
+			-Ddefault_library=static \
+			-Dheaders_only=false \
+			-Dposix_option=enabled \
+			-Dlinux_option=disabled \
+			-Dglibc_option=disabled \
+			-Dbsd_option=disabled; \
+	fi
+	ninja -C build/mlibc_build install
 
 userland: build/sdk
 	$(call PRINT_STEP,BUILDING USERERLAND APPLICATIONS)
@@ -218,10 +230,12 @@ $(BUILD_DIR)/initrd.tar: $(KERNEL_ELF) userland packages
 
 	@printf "$(YELLOW)[COPY]$(RESET) Staging SDK development environment files in initrd...\n"
 	@cp build/sdk/lib/libc.a $(BUILD_DIR)/initrd/usr/lib/
-	@cp build/sdk/lib/libc.a $(BUILD_DIR)/initrd/usr/lib/libboredos.a
-	@cp build/sdk/lib/libc.a $(BUILD_DIR)/initrd/usr/lib/libm.a
+	@if [ -f build/sdk/lib/libm.a ]; then \
+		cp build/sdk/lib/libm.a $(BUILD_DIR)/initrd/usr/lib/; \
+	else \
+		cp build/sdk/lib/libc.a $(BUILD_DIR)/initrd/usr/lib/libm.a; \
+	fi
 	@x86_64-elf-strip -S $(BUILD_DIR)/initrd/usr/lib/libc.a
-	@x86_64-elf-strip -S $(BUILD_DIR)/initrd/usr/lib/libboredos.a
 	@x86_64-elf-strip -S $(BUILD_DIR)/initrd/usr/lib/libm.a
 	@cp build/sdk/lib/crt0.o $(BUILD_DIR)/initrd/usr/lib/crt0.o
 	@cp build/sdk/lib/crt1.o $(BUILD_DIR)/initrd/usr/lib/crt1.o
@@ -243,6 +257,13 @@ $(BUILD_DIR)/initrd.tar: $(KERNEL_ELF) userland packages
 	@if [ -f LICENSE ]; then printf "  -> LICENSE\n"; mkdir -p $(BUILD_DIR)/initrd/docs; cp LICENSE $(BUILD_DIR)/initrd/docs/; fi
 	@if [ -f limine.conf ]; then printf "  -> limine.conf\n"; cp limine.conf $(BUILD_DIR)/initrd/; fi
 	
+	@printf "$(YELLOW)[STRIP]$(RESET) Stripping ELF binaries to reduce initrd size...\n"
+	@find $(BUILD_DIR)/initrd/bin $(BUILD_DIR)/initrd/usr/bin -name '*.elf' 2>/dev/null | while read f; do \
+		printf "  stripping $$f\n"; \
+		x86_64-elf-strip --strip-unneeded "$$f" || true; \
+	done
+	@printf "$(GREEN)[STRIP]$(RESET) Done stripping binaries.\n"
+
 	@printf "$(YELLOW)[TAR]$(RESET) Creating initrd.tar...\n"
 	cd $(BUILD_DIR)/initrd && COPYFILE_DISABLE=1 tar --exclude="._*" -cf ../initrd.tar *
 	@printf "$(GREEN)[OK]$(RESET) Initrd created: $(BUILD_DIR)/initrd.tar\n"

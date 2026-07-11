@@ -1,0 +1,15 @@
+[binaries]
+c = 'x86_64-elf-gcc'
+cpp = 'x86_64-elf-g++'
+ar = 'x86_64-elf-ar'
+strip = 'x86_64-elf-strip'
+
+[host_machine]
+system = 'boredos'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'
+
+[properties]
+c_args = ['-D_GNU_SOURCE', '-D_DEFAULT_SOURCE']
+cpp_args = ['-D_GNU_SOURCE', '-D_DEFAULT_SOURCE']

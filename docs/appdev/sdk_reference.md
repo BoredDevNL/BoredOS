@@ -10,7 +10,7 @@ This page is the high-level map; detailed API references now live in dedicated p
 
 ## SDK Structure
 
-Primary headers are in `usr/libc/include/`.
+Primary headers are in `build/sdk/include/` (installed from `mlibc`).
 
 - `stdlib.h`, `string.h`, `stdio.h`, `unistd.h`: core libc surface
 - `syscall.h`: raw syscall wrappers and command constants

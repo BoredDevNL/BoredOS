@@ -94,6 +94,8 @@ wget
 tar
 xz
 patch
+meson
+ninja
 ```
 
 ### Optional Tools
@@ -214,7 +216,9 @@ brew install \
     nasm \
     xorriso \
     gnu-tar \
-    git
+    git \
+    meson \
+    ninja
 ```
 
 ## Build the Toolchain
@@ -270,7 +274,9 @@ pacman -S \
     wget \
     tar \
     lz4 \
-    xz
+    xz \
+    meson \
+    ninja
 ```
 
 ---

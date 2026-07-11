@@ -1958,7 +1958,7 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
   vfs_file_t *file = ref->file;
 
   if (file->is_device && file->device_type == DEVICE_TYPE_FRAMEBUFFER) {
-    framebuffer_info_t fb = graphics_get_fb_params();
+    framebuffer_info_t fb = graphics_get_fb_backing_params();
     if (!fb.address)
       return (uint64_t)MAP_FAILED;
 
@@ -2429,9 +2429,10 @@ static uint64_t handle_sys_unlink(const syscall_args_t *args) {
 }
 
 static uint64_t handle_sys_arch_prctl(const syscall_args_t *args) {
-  syscall_args_t shifted = *args;
-  shifted.arg2 = args->arg1; // base
-  return sys_cmd_set_fs_base(&shifted);
+  if (args->arg1 == 0x1002) { // ARCH_SET_FS
+    return sys_cmd_set_fs_base(args);
+  }
+  return (uint64_t)-1;
 }
 
 

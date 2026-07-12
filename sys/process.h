@@ -154,7 +154,8 @@ typedef struct process {
 // If 'proc' is provided, the physical segments are tracked for later reclamation.
 // Returns entry point address on success, or 0 on failure.
 struct process;
-uint64_t elf_load(const char *path, uint64_t user_pml4, size_t *out_load_size, struct process *proc);
+uint64_t elf_load(const char *path, uint64_t user_pml4, size_t *out_load_size, struct process *proc,
+                  uint64_t *out_phdr_vaddr, uint64_t *out_phdr_num);
 
 typedef struct {
     uint32_t pid;

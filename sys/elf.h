@@ -119,6 +119,7 @@ typedef struct __attribute__((packed)) {
 // Loads the ELF executable at 'path' using fat32 into the pagemap given by user_pml4.
 // Returns entry point address on success, or 0 on failure.
 struct process;
-uint64_t elf_load(const char *path, uint64_t user_pml4, size_t *out_load_size, struct process *proc);
+uint64_t elf_load(const char *path, uint64_t user_pml4, size_t *out_load_size, struct process *proc,
+                  uint64_t *out_phdr_vaddr, uint64_t *out_phdr_num);
 
 #endif

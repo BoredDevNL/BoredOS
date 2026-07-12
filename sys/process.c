@@ -489,7 +489,8 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
 
     // 2. Load ELF executable
     size_t elf_load_size = 0;
-    uint64_t entry_point = elf_load(filepath, new_proc->pml4_phys, &elf_load_size, new_proc);
+    uint64_t phdr_vaddr = 0, phdr_num = 0;
+    uint64_t entry_point = elf_load(filepath, new_proc->pml4_phys, &elf_load_size, new_proc, &phdr_vaddr, &phdr_num);
     if (entry_point == 0) {
         serial_write("[PROC] Failed to load ELF: ");
         serial_write(filepath);
@@ -582,7 +583,7 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
     //        [auxv[0] key = AT_NULL]
     //        [auxv[0] val = 0]
     
-    int total_elements = 1 + (argc + 1) + 1 + 2; 
+    int total_elements = 1 + (argc + 1) + 1 + 10; 
     int total_size = total_elements * (int)sizeof(uint64_t);
 
     uint64_t current_user_sp = user_args_buf;
@@ -595,12 +596,15 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
     
     args_buf = (char *)((uint64_t)stack + (current_user_sp - (0x800000 - user_stack_size)));
 
-    // 1. Push AUXV (AT_NULL)
-    args_buf -= 2 * sizeof(uint64_t);
-    current_user_sp -= 2 * sizeof(uint64_t);
+    // 1. Push AUXV (mlibc mandatory entries + AT_NULL terminator)
+    args_buf -= 10 * sizeof(uint64_t);
+    current_user_sp -= 10 * sizeof(uint64_t);
     uint64_t *user_auxv = (uint64_t *)args_buf;
-    user_auxv[0] = 0;
-    user_auxv[1] = 0;
+    user_auxv[0] = 9;  user_auxv[1] = entry_point;  // AT_ENTRY
+    user_auxv[2] = 6;  user_auxv[3] = 4096;          // AT_PAGESZ
+    user_auxv[4] = 3;  user_auxv[5] = phdr_vaddr;    // AT_PHDR
+    user_auxv[6] = 5;  user_auxv[7] = phdr_num;      // AT_PHNUM
+    user_auxv[8] = 0;  user_auxv[9] = 0;             // AT_NULL
 
     // 2. Push ENVP (empty)
     args_buf -= 1 * sizeof(uint64_t);
@@ -1259,7 +1263,8 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
     proc->sbrk_allocation_count = 0;
 
     size_t elf_load_size = 0;
-    uint64_t entry_point = elf_load(filepath, new_pml4, &elf_load_size, proc);
+    uint64_t phdr_vaddr = 0, phdr_num = 0;
+    uint64_t entry_point = elf_load(filepath, new_pml4, &elf_load_size, proc, &phdr_vaddr, &phdr_num);
     if (entry_point == 0) {
         extern void paging_destroy_user_pml4_phys(uint64_t pml4_phys, bool free_mapped);
         paging_destroy_user_pml4_phys(new_pml4, true);
@@ -1331,7 +1336,7 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
     //        [auxv[0] key = AT_NULL]
     //        [auxv[0] val = 0]
     
-    int total_elements = 1 + (argc + 1) + 1 + 2; 
+    int total_elements = 1 + (argc + 1) + 1 + 10; 
     int total_size = total_elements * (int)sizeof(uint64_t);
 
     uint64_t current_user_sp = user_args_buf;
@@ -1344,12 +1349,15 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
     
     args_buf = (char *)((uint64_t)stack + (current_user_sp - (0x800000 - user_stack_size)));
 
-    // 1. Push AUXV (AT_NULL)
-    args_buf -= 2 * sizeof(uint64_t);
-    current_user_sp -= 2 * sizeof(uint64_t);
+    // 1. Push AUXV (mlibc mandatory entries + AT_NULL terminator)
+    args_buf -= 10 * sizeof(uint64_t);
+    current_user_sp -= 10 * sizeof(uint64_t);
     uint64_t *user_auxv = (uint64_t *)args_buf;
-    user_auxv[0] = 0;
-    user_auxv[1] = 0;
+    user_auxv[0] = 9;  user_auxv[1] = entry_point;  // AT_ENTRY
+    user_auxv[2] = 6;  user_auxv[3] = 4096;          // AT_PAGESZ
+    user_auxv[4] = 3;  user_auxv[5] = phdr_vaddr;    // AT_PHDR
+    user_auxv[6] = 5;  user_auxv[7] = phdr_num;      // AT_PHNUM
+    user_auxv[8] = 0;  user_auxv[9] = 0;             // AT_NULL
 
     // 2. Push ENVP (empty)
     args_buf -= 1 * sizeof(uint64_t);

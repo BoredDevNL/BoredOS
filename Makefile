@@ -206,6 +206,7 @@ build/sdk: usr-fetch
 		mkdir -p "$$SYSROOT/usr/include" "$$SYSROOT/usr/lib"; \
 		cp -R build/sdk/include/. "$$SYSROOT/usr/include/"; \
 		cp -R build/sdk/lib/. "$$SYSROOT/usr/lib/"; \
+		cp -R build/sdk/lib/. "$$SYSROOT/lib/"; \
 	else \
 		printf "$(YELLOW)[SDK]$(RESET) Native sysroot not found; skipping toolchain sysroot auto-population.\n"; \
 	fi

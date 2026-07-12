@@ -12,7 +12,8 @@
 extern void serial_print(const char *s);
 extern void serial_write(const char *str);
 
-uint64_t elf_load(const char *path, uint64_t user_pml4, size_t *out_load_size, struct process *proc) {
+uint64_t elf_load(const char *path, uint64_t user_pml4, size_t *out_load_size, struct process *proc,
+                  uint64_t *out_phdr_vaddr, uint64_t *out_phdr_num) {
     if (out_load_size) *out_load_size = 0;
     vfs_file_t *file = vfs_open(path, "r");
     if (!file) {
@@ -58,6 +59,10 @@ uint64_t elf_load(const char *path, uint64_t user_pml4, size_t *out_load_size, s
         return 0;
     }
 
+    if (out_phdr_num) *out_phdr_num = ehdr.e_phnum;
+    uint64_t first_load_vaddr = 0;
+    uint64_t phoff = ehdr.e_phoff;
+
     // Iterate Over Program Headers
     for (int i = 0; i < ehdr.e_phnum; i++) {
         vfs_seek(file, ehdr.e_phoff + (i * ehdr.e_phentsize), 0);
@@ -73,7 +78,8 @@ uint64_t elf_load(const char *path, uint64_t user_pml4, size_t *out_load_size, s
             uint64_t p_memsz = phdr.p_memsz;
             uint64_t p_filesz = phdr.p_filesz;
             uint64_t p_offset = phdr.p_offset;
-            
+            if (first_load_vaddr == 0) first_load_vaddr = p_vaddr;
+
             if (p_memsz == 0) continue;
 
             // Calculate boundaries for bulk allocation
@@ -117,5 +123,6 @@ uint64_t elf_load(const char *path, uint64_t user_pml4, size_t *out_load_size, s
     }
 
     vfs_close(file);
+    if (out_phdr_vaddr) *out_phdr_vaddr = (first_load_vaddr & ~0xFFFULL) + phoff;
     return ehdr.e_entry;
 }

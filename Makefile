@@ -200,6 +200,15 @@ build/sdk: usr-fetch
 			-Dbsd_option=disabled; \
 	fi
 	ninja -C build/mlibc_build install
+	@SYSROOT=$$(x86_64-boredos-gcc -print-sysroot 2>/dev/null); \
+	if [ -n "$$SYSROOT" ] && [ -d "$$SYSROOT" ]; then \
+		printf "$(GREEN)[SDK]$(RESET) Installing mlibc SDK to toolchain sysroot: $$SYSROOT\n"; \
+		mkdir -p "$$SYSROOT/usr/include" "$$SYSROOT/usr/lib"; \
+		cp -R build/sdk/include/. "$$SYSROOT/usr/include/"; \
+		cp -R build/sdk/lib/. "$$SYSROOT/usr/lib/"; \
+	else \
+		printf "$(YELLOW)[SDK]$(RESET) Native sysroot not found; skipping toolchain sysroot auto-population.\n"; \
+	fi
 
 userland: build/sdk
 	$(call PRINT_STEP,BUILDING USERERLAND APPLICATIONS)
@@ -264,8 +273,8 @@ $(BUILD_DIR)/initrd.tar: $(KERNEL_ELF) userland packages
 	else \
 		cp build/sdk/lib/libc.a $(BUILD_DIR)/initrd/usr/lib/libm.a; \
 	fi
-	@x86_64-elf-strip -S $(BUILD_DIR)/initrd/usr/lib/libc.a
-	@x86_64-elf-strip -S $(BUILD_DIR)/initrd/usr/lib/libm.a
+	@$(STRIP) -S $(BUILD_DIR)/initrd/usr/lib/libc.a
+	@$(STRIP) -S $(BUILD_DIR)/initrd/usr/lib/libm.a
 	@cp build/sdk/lib/crt0.o $(BUILD_DIR)/initrd/usr/lib/crt0.o
 	@cp build/sdk/lib/crt1.o $(BUILD_DIR)/initrd/usr/lib/crt1.o
 	@cp build/sdk/lib/crti.o $(BUILD_DIR)/initrd/usr/lib/crti.o
@@ -289,7 +298,7 @@ $(BUILD_DIR)/initrd.tar: $(KERNEL_ELF) userland packages
 	@printf "$(YELLOW)[STRIP]$(RESET) Stripping ELF binaries to reduce initrd size...\n"
 	@find $(BUILD_DIR)/initrd/bin $(BUILD_DIR)/initrd/usr/bin -name '*.elf' 2>/dev/null | while read f; do \
 		printf "  stripping $$f\n"; \
-		x86_64-elf-strip --strip-unneeded "$$f" || true; \
+		$(STRIP) --strip-unneeded "$$f" || true; \
 	done
 	@printf "$(GREEN)[STRIP]$(RESET) Done stripping binaries.\n"
 

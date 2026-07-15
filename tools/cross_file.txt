@@ -13,3 +13,5 @@ endian = 'little'
 [properties]
 c_args = ['-D_GNU_SOURCE', '-D_DEFAULT_SOURCE']
 cpp_args = ['-D_GNU_SOURCE', '-D_DEFAULT_SOURCE']
+c_link_args = ['-nostdlib']
+cpp_link_args = ['-nostdlib']

@@ -1210,18 +1210,23 @@ static uint64_t fs_cmd_poll(const syscall_args_t *args) {
   for (int i = 0; i < nfds; i++) {
     int fd = fds[i].fd;
     fds[i].revents = 0;
-    if (fd < 0 || fd >= MAX_PROCESS_FDS)
-      continue;
-    if (!proc->fds[fd]) {
-      fds[i].revents = POLLNVAL;
-      ready++;
-      continue;
-    }
 
     int mask = 0;
-    if (proc->fd_kind[fd] == PROC_FD_KIND_FILE) {
-      process_fd_file_ref_t *ref = (process_fd_file_ref_t *)proc->fds[fd];
-      mask = vfs_poll(ref->file, pt);
+    if (pty_is_pty_id(fd)) {
+      extern int pty_poll_master(int pty_id, struct poll_table *pt);
+      mask = pty_poll_master(fd, pt);
+    } else {
+      if (fd < 0 || fd >= MAX_PROCESS_FDS)
+        continue;
+      if (!proc->fds[fd]) {
+        fds[i].revents = POLLNVAL;
+        ready++;
+        continue;
+      }
+
+      if (proc->fd_kind[fd] == PROC_FD_KIND_FILE) {
+        process_fd_file_ref_t *ref = (process_fd_file_ref_t *)proc->fds[fd];
+        mask = vfs_poll(ref->file, pt);
     } else if (proc->fd_kind[fd] == PROC_FD_KIND_PIPE_READ ||
                proc->fd_kind[fd] == PROC_FD_KIND_PIPE_WRITE) {
       process_fd_pipe_t *pipe = (process_fd_pipe_t *)proc->fds[fd];
@@ -1291,7 +1296,8 @@ static uint64_t fs_cmd_poll(const syscall_args_t *args) {
       extern int tty_poll(int tty_id, struct poll_table *pt);
       mask = tty_poll(proc->tty_id, pt);
     }
-
+    }
+    
     fds[i].revents = mask & fds[i].events;
     if (fds[i].revents)
       ready++;

@@ -141,3 +141,22 @@ int pty_poll(int pty_id, struct poll_table *pt) {
 
     return mask;
 }
+
+int pty_poll_master(int pty_id, struct poll_table *pt) {
+    pty_pair_t *p = pty_get(pty_id);
+    if (!p || !p->used) return 0;
+
+    int mask = 0;
+    if (pt && pt->qproc) {
+        pt->qproc(&p->slave_to_master.wait_queue, pt);
+    }
+
+    if (p->slave_to_master.head != p->slave_to_master.tail) {
+        mask |= 0x0001;
+    }
+
+    mask |= 0x0004;
+
+    return mask;
+}
+

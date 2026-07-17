@@ -26,7 +26,14 @@ static cpu_state_t *bsp_cpu_state = NULL;
 #define MSR_KERNEL_GS_BASE  0xC0000102
 
 
+static bool is_x2apic(void) {
+    return (rdmsr(0x1B) & (1ULL << 10)) != 0;
+}
+
 static uint32_t read_lapic_id(void) {
+    if (is_x2apic()) {
+        return (uint32_t)rdmsr(0x802);
+    }
     extern uint64_t hhdm_offset;
     volatile uint32_t *lapic = (volatile uint32_t *)(hhdm_offset + 0xFEE00000ULL);
     return (lapic[0x020 / 4] >> 24) & 0xFF;

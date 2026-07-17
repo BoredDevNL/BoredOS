@@ -4,6 +4,8 @@
 #include "lapic.h"
 #include "platform.h"
 #include "spinlock.h"
+#include "io.h"
+#include <stdbool.h>
 
 extern void serial_write(const char *str);
 
@@ -18,7 +20,16 @@ static spinlock_t lapic_lock = SPINLOCK_INIT;
 #define LAPIC_ICR_LOW   (0x300 / 4)
 #define LAPIC_ICR_HIGH  (0x310 / 4)
 
+static bool is_x2apic(void) {
+    return (rdmsr(0x1B) & (1ULL << 10)) != 0;
+}
+
 void lapic_enable(void) {
+    if (is_x2apic()) {
+        uint64_t svr = rdmsr(0x80F);
+        wrmsr(0x80F, svr | 0x100 | 0xFF);
+        return;
+    }
     if (!lapic_base) return;
     // Enable the LAPIC by setting the Spurious Interrupt Vector Register
     // Bit 8 = APIC Software Enable, vector = 0xFF (spurious)
@@ -26,6 +37,11 @@ void lapic_enable(void) {
 }
 
 void lapic_init(void) {
+    if (is_x2apic()) {
+        lapic_enable();
+        serial_write("[LAPIC] Initialized in x2APIC mode\n");
+        return;
+    }
     extern uint64_t hhdm_offset;
     lapic_base = (volatile uint32_t *)(hhdm_offset + 0xFEE00000ULL);
     
@@ -34,12 +50,31 @@ void lapic_init(void) {
 }
 
 void lapic_eoi(void) {
+    if (is_x2apic()) {
+        wrmsr(0x80B, 0);
+        return;
+    }
     if (lapic_base) {
         lapic_base[LAPIC_EOI] = 0;
     }
 }
 
 void lapic_send_ipi_all(void) {
+    if (is_x2apic()) {
+        uint64_t icr = IPI_SCHED_VECTOR | (0b11ULL << 18);
+        uint64_t rflags = spinlock_acquire_irqsave(&lapic_lock);
+        wrmsr(0x830, icr);
+        spinlock_release_irqrestore(&lapic_lock, rflags);
+        return;
+        /* 
+        PS: The only reason i added 
+        x2APIC support is because Intel is 
+        an absolute shit company that 
+        decided to remove xAPIC support from
+        their CPUs for no reason except to break 
+        compatibility. - Christiaan (boreddevnl)
+        */
+    }
     if (!lapic_base) return;
     
     // Send IPI to all excluding self
@@ -58,6 +93,13 @@ void lapic_send_ipi_all(void) {
 }
 
 void lapic_send_ipi(uint32_t lapic_id, uint8_t vector) {
+    if (is_x2apic()) {
+        uint64_t icr = ((uint64_t)lapic_id << 32) | vector;
+        uint64_t rflags = spinlock_acquire_irqsave(&lapic_lock);
+        wrmsr(0x830, icr);
+        spinlock_release_irqrestore(&lapic_lock, rflags);
+        return;
+    }
     if (!lapic_base) return;
     uint32_t icr_low = (uint32_t)vector; 
 

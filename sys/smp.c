@@ -132,6 +132,15 @@ void smp_init_bsp(void) {
     bsp_state_static.lapic_id = bsp_lapic_id;
     bsp_state_static.self = &bsp_state_static;
     bsp_state_static.online = true;
+
+    void *stack = kmalloc_aligned(KERNEL_STACK_SIZE, KERNEL_STACK_ALIGNMENT);
+    if (!stack) {
+      serial_write("[SMP] Failed to allocate syscall stack\n");
+      return;
+    }
+
+    bsp_state_static.kernel_syscall_stack = (uint64_t)(stack + KERNEL_STACK_SIZE);
+    bsp_state_static.kernel_stack_alloc = stack;
     
     wrmsr(MSR_GS_BASE, (uint64_t)&bsp_state_static);
     wrmsr(MSR_KERNEL_GS_BASE, (uint64_t)&bsp_state_static);
@@ -146,9 +155,24 @@ uint32_t smp_init(struct limine_smp_response *smp_resp) {
         cpu_states = (cpu_state_t *)kmalloc_aligned(sizeof(cpu_state_t), 64);
         if (!cpu_states) return 1;
         memset(cpu_states, 0, sizeof(cpu_state_t));
+        cpu_states[0].self = &cpu_states[0];
         cpu_states[0].cpu_id = 0;
         cpu_states[0].lapic_id = read_lapic_id();
         cpu_states[0].online = true;
+
+        // Allocate syscall stack
+        void *syscall_stack = kmalloc_aligned(KERNEL_STACK_SIZE, KERNEL_STACK_ALIGNMENT);
+        if (!syscall_stack) {
+          serial_write("[SMP] Failed to allocate BSP syscall stack\n");
+          return 1;
+        }
+
+        cpu_states[0].kernel_stack_alloc = syscall_stack;
+
+        // Setup GS for syscall_entry
+        wrmsr(MSR_GS_BASE, (uint64_t)&cpu_states[0]);
+        wrmsr(MSR_KERNEL_GS_BASE, (uint64_t)&cpu_states[0]);
+
         serial_write("[SMP] Single CPU mode\n");
         return 1;
     }
@@ -172,7 +196,6 @@ uint32_t smp_init(struct limine_smp_response *smp_resp) {
 
     gdt_init_ap_tss(total_cpus);
 
-    uint32_t bsp_index = 0;
     for (uint32_t i = 0; i < total_cpus; i++) {
         struct limine_smp_info *cpu = smp_resp->cpus[i];
         cpu_states[i].cpu_id = i;
@@ -182,9 +205,6 @@ uint32_t smp_init(struct limine_smp_response *smp_resp) {
             cpu_states[i] = *bsp_cpu_state; // Copy early BSP state
             cpu_states[i].self = &cpu_states[i];
             
-            cpu_states[i].kernel_stack = 0; // Limine stack for now
-            cpu_states[i].kernel_syscall_stack = 0; 
-            bsp_index = i;
             wrmsr(MSR_GS_BASE, (uint64_t)&cpu_states[i]);
             wrmsr(MSR_KERNEL_GS_BASE, (uint64_t)&cpu_states[i]);
             

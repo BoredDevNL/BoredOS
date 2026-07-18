@@ -6,6 +6,9 @@
 
 #include <stdint.h>
 
+#define KERNEL_STACK_SIZE (64 * 1024) // 65536
+#define KERNEL_STACK_ALIGNMENT (64 * 1024) // 65536
+
 typedef struct {
     uint32_t family;
     uint32_t model;

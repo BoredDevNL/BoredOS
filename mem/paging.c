@@ -4,6 +4,9 @@
 #include "paging.h"
 #include "memory_manager.h"
 #include "platform.h"
+
+#include "../graphics/graphics.h"
+#include "../core/msrs.h"
 #include <stddef.h>
 
 #define MSR_WC  0x277
@@ -39,7 +42,71 @@ static uint64_t alloc_page_table_phys(void) {
     return v2p((uint64_t)table);
 }
 
+static bool paging_map_page_2m(uint64_t pml4_phys, uint64_t virtual_addr, uint64_t physical_addr, uint64_t flags) {
+    if (!pml4_phys) return false;
+
+    page_table_t* pml4 = (page_table_t*)p2v(pml4_phys);
+
+    uint64_t pml4_index = (virtual_addr >> 39) & 0x1FF;
+    uint64_t pdpt_index = (virtual_addr >> 30) & 0x1FF;
+    uint64_t pd_index   = (virtual_addr >> 21) & 0x1FF;
+
+    if (!(pml4->entries[pml4_index] & PT_PRESENT)) {
+        uint64_t new_table_phys = alloc_page_table_phys();
+        if (!new_table_phys) return false;
+        pml4->entries[pml4_index] = new_table_phys | PT_PRESENT | PT_RW | PT_USER;
+    }
+
+    page_table_t* pdpt = (page_table_t*)p2v(pml4->entries[pml4_index] & PT_ADDR_MASK);
+    if (!(pdpt->entries[pdpt_index] & PT_PRESENT)) {
+        uint64_t new_table_phys = alloc_page_table_phys();
+        if (!new_table_phys) return false;
+        pdpt->entries[pdpt_index] = new_table_phys | PT_PRESENT | PT_RW | PT_USER;
+    }
+
+    page_table_t* pd = (page_table_t*)p2v(pdpt->entries[pdpt_index] & PT_ADDR_MASK);
+    pd->entries[pd_index] = (physical_addr & PT_ADDR_MASK) | flags;
+
+    asm volatile("invlpg (%0)" : : "r"(virtual_addr) : "memory");
+    return true;
+}
+
+/// @brief Enables write combining in the model specific registers
+void pat_enable_wc(void) {
+    uint64_t pat = rdmsr(0x277);
+
+    pat &= ~(0xFFULL << 32);
+    pat |=  (0x01ULL << 32);
+
+    wrmsr(0x277, pat);
+
+    asm volatile("mov %%cr3, %%rax\n"
+                "mov %%rax, %%cr3\n"
+                ::: "rax", "memory");
+}
+
 void paging_init(void) {
+    pat_enable_wc();
+
+    uintptr_t fb_base = (uintptr_t)graphics_get_fb_addr();
+    size_t fb_size =
+        get_screen_height() * graphics_get_fb_pitch();
+    uintptr_t fb_end = fb_base + fb_size;
+
+    uintptr_t fb_map_base = fb_base & ~(PAGE_SIZE_2M - 1);
+    uintptr_t fb_map_end = (fb_end + PAGE_SIZE_2M - 1) & ~(PAGE_SIZE_2M - 1);
+    uintptr_t cr3 = read_cr3();
+
+    // Maps with specific flags for framebuffer optimisations, along with write combining this is ideal
+    for (uintptr_t p = fb_map_base; p < fb_map_end; p += PAGE_SIZE_2M) {
+        paging_map_page_2m(
+            cr3,
+            (uintptr_t)p2v(p),
+            p,
+            PT_PRESENT | PT_RW | PT_PAT | PT_NX | PT_GLOBAL | PT_HUGE
+        );
+    }
+
     kernel_pml4_phys = read_cr3() & PT_ADDR_MASK;
     current_pml4_phys = kernel_pml4_phys;
 }
@@ -184,6 +251,10 @@ uint64_t paging_virt2phys(uint64_t pml4_phys, uint64_t virtual_addr) {
     uint64_t pd_index = (virtual_addr >> 21) & 0x1FF;
     if (!(pd->entries[pd_index] & PT_PRESENT)) return 0;
     
+    if (pd->entries[pd_index] & PT_HUGE) {
+        return (pd->entries[pd_index] & PT_ADDR_MASK) | (virtual_addr & (PAGE_SIZE_2M - 1));
+    }
+    
     page_table_t* pt = (page_table_t*)p2v(pd->entries[pd_index] & PT_ADDR_MASK);
     uint64_t pt_index = (virtual_addr >> 12) & 0x1FF;
     if (!(pt->entries[pt_index] & PT_PRESENT)) return 0;
@@ -205,6 +276,12 @@ void paging_unmap_page(uint64_t pml4_phys, uint64_t virtual_addr) {
     page_table_t* pd = (page_table_t*)p2v(pdpt->entries[pdpt_index] & PT_ADDR_MASK);
     uint64_t pd_index = (virtual_addr >> 21) & 0x1FF;
     if (!(pd->entries[pd_index] & PT_PRESENT)) return;
+    
+    if (pd->entries[pd_index] & PT_HUGE) {
+        pd->entries[pd_index] = 0;
+        asm volatile("invlpg (%0)" : : "r"(virtual_addr) : "memory");
+        return;
+    }
     
     page_table_t* pt = (page_table_t*)p2v(pd->entries[pd_index] & PT_ADDR_MASK);
     uint64_t pt_index = (virtual_addr >> 12) & 0x1FF;
@@ -242,6 +319,11 @@ uint64_t paging_clone_user_pml4(uint64_t parent_pml4_phys) {
 
                     for (int pd_idx = 0; pd_idx < 512; pd_idx++) {
                         if (parent_pd->entries[pd_idx] & PT_PRESENT) {
+                            if (parent_pd->entries[pd_idx] & PT_HUGE) {
+                                child_pd->entries[pd_idx] = parent_pd->entries[pd_idx];
+                                continue;
+                            }
+
                             uint64_t child_pt_phys = alloc_page_table_phys();
                             if (!child_pt_phys) goto fail;
                             child_pd->entries[pd_idx] = child_pt_phys | (parent_pd->entries[pd_idx] & ~PT_ADDR_MASK);

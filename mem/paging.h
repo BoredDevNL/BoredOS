@@ -19,9 +19,13 @@
 #define PT_DIRTY        (1ull << 6)
 #define PT_HUGE         (1ull << 7)
 #define PT_GLOBAL       (1ull << 8)
+#define PT_PAT          (1ull << 12)
 #define PT_NX           (1ull << 63)
 
 #define PT_ADDR_MASK    0x000FFFFFFFFFF000ull
+
+#define PAGE_SIZE_2M    (512 * PAGE_SIZE)
+#define PAGE_SIZE       4096
 
 typedef struct {
     uint64_t entries[512];

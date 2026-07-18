@@ -317,7 +317,7 @@ static void vfs_mkdir_recursive(const char *path) {
     }
 }
 
-void kmain(void) {
+static void init_early(void) {
     init_serial();
     vfs_init();
     serial_write("\n");
@@ -338,7 +338,9 @@ void kmain(void) {
     serial_write("[INIT] Kernel Virt: 0x");
     serial_write_hex(kernel_virt_base);
     serial_write("\n");
+}
 
+static void init_graphics(void) {
     if (framebuffer_request.response == NULL || framebuffer_request.response->framebuffer_count < 1) {
         serial_write("[INIT] No framebuffer! Halting.\n");
         hcf();
@@ -347,7 +349,9 @@ void kmain(void) {
     struct limine_framebuffer *fb = framebuffer_request.response->framebuffers[0];
     graphics_init(fb);
     kconsole_init();
+}
 
+static void init_cpu_state(void) {
     gdt_init();
     log_ok("GDT initialized");
 
@@ -359,8 +363,9 @@ void kmain(void) {
 
     syscall_init();
     log_ok("Syscalls ready");
+}
 
-
+static void init_verbose_console(void) {
     // Check for verbose boot flag
     if (kernel_file_request.response != NULL && kernel_file_request.response->kernel_file != NULL) {
         const char *cmdline = kernel_file_request.response->kernel_file->cmdline;
@@ -370,7 +375,9 @@ void kmain(void) {
     }
 
     log_ok("Graphics and Console ready");
+}
 
+static void init_memory(void) {
     if (memmap_request.response != NULL) {
         memory_manager_init_from_memmap(memmap_request.response);
         log_ok("Memory manager ready");
@@ -380,7 +387,9 @@ void kmain(void) {
         log_fail("No usable memory for heap! Check Limine memmap.");
         hcf();
     }
+}
 
+static void init_banner_and_acpi(void) {
     idt_load();
     log_ok("IDT ready");
     print_verbose_boot_banner();
@@ -388,7 +397,9 @@ void kmain(void) {
     serial_write("Welcome to BoredOS!\n");
     kconsole_set_color(0xFFFFFFFF);
     acpi_init();
-    
+}
+
+static void init_subsystems(void) {
     process_init();
 
     fat32_init();
@@ -403,7 +414,9 @@ void kmain(void) {
     sysfs_init_subsystems();
     vfs_mount("/sys", "sysfs", "sysfs", sysfs_get_ops(), NULL);
     vfs_mount("/proc", "procfs", "procfs", procfs_get_ops(), NULL);
-    
+}
+
+static void init_bootfs(void) {
     bootfs_init();
     
     if (bootloader_info_request.response != NULL) {
@@ -456,8 +469,9 @@ void kmain(void) {
     
     extern uint32_t kernel_ticks;
     g_bootfs_state.boot_time_ms = kernel_ticks;
+}
 
-
+static void init_modules(void) {
     if (module_request.response != NULL) {
         g_bootfs_state.num_modules = module_request.response->module_count;
         
@@ -592,7 +606,9 @@ void kmain(void) {
             module_manager_register(clean_path, (uint64_t)mod->address, mod->size);
         }
     }
-    
+}
+
+static void init_input(void) {
     uint64_t current_rsp;
     asm volatile("mov %%rsp, %0" : "=r"(current_rsp));
     serial_write("[INIT] Stack Alignment: 0x");
@@ -610,8 +626,9 @@ void kmain(void) {
         serial_write("[INIT] No SMP response from bootloader\n");
         smp_init(NULL);
     }
+}
 
-
+static void init_tty(void) {
     extern void bootfs_refresh_from_disk(void);
     bootfs_refresh_from_disk();
 
@@ -625,6 +642,20 @@ void kmain(void) {
         itoa(i + 1, args);
         process_create_elf("/bin/bsh.elf", args, true, i);
     }
+}
+
+void kmain(void) {
+    init_early();
+    init_graphics();
+    init_cpu_state();
+    init_verbose_console();
+    init_memory();
+    init_banner_and_acpi();
+    init_subsystems();
+    init_bootfs();
+    init_modules();
+    init_input();
+    init_tty();
 
     asm volatile("sti");
 

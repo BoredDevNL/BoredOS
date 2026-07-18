@@ -71,6 +71,7 @@ static bool paging_map_page_2m(uint64_t pml4_phys, uint64_t virtual_addr, uint64
     return true;
 }
 
+/// @brief Enables write combining in the model specific registers
 void pat_enable_wc(void) {
     uint64_t pat = rdmsr(0x277);
 
@@ -96,6 +97,7 @@ void paging_init(void) {
     uintptr_t fb_map_end = (fb_end + PAGE_SIZE_2M - 1) & ~(PAGE_SIZE_2M - 1);
     uintptr_t cr3 = read_cr3();
 
+    // Maps with specific flags for framebuffer optimisations, along with write combining this is ideal
     for (uintptr_t p = fb_map_base; p < fb_map_end; p += PAGE_SIZE_2M) {
         paging_map_page_2m(
             cr3,

@@ -8,6 +8,9 @@
 #include <stdbool.h>
 #include "spinlock.h"
 
+#define KERNEL_STACK_SIZE (64 * 1024) // 65536
+#define KERNEL_STACK_ALIGNMENT (64 * 1024) // 65536
+
 typedef struct cpu_state {
     struct cpu_state *self;    
     uint32_t cpu_id;           

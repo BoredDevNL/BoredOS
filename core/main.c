@@ -657,6 +657,8 @@ void kmain(void) {
     init_input();
     init_tty();
 
+    asm volatile("sti");
+
     // Main blitter loop
     while(1) {
         tty_blit_active();

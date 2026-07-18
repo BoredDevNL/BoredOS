@@ -656,7 +656,6 @@ void kmain(void) {
     init_modules();
     init_input();
     init_tty();
-    __asm__ volatile("ud2");
 
     asm volatile("sti");
 

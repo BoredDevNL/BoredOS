@@ -1343,7 +1343,7 @@ static uint64_t fs_cmd_poll(const syscall_args_t *args) {
 
   if (timeout > 0) {
     extern uint32_t get_ticks(void);
-    uint32_t ticks = timeout / 16;
+    uint32_t ticks = (uint32_t)timeout;
     if (ticks == 0)
       ticks = 1;
     proc->sleep_until = get_ticks() + ticks;

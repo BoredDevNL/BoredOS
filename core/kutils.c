@@ -214,8 +214,7 @@ void k_delay(int iterations) {
 }
 
 void k_sleep(int ms) {
-    // Timer is ~60Hz, so 1 tick = 16.66ms
-    uint32_t ticks = ms / 16;
+    uint32_t ticks = (uint32_t)ms;
     if (ticks == 0 && ms > 0) ticks = 1;
     
     uint32_t target = get_ticks() + ticks;
@@ -247,7 +246,7 @@ void k_beep(int freq, int ms) {
     outb(0x42, (div >> 8) & 0xFF);
     outb(0x61, inb(0x61) | 0x03);
     
-    uint32_t ticks = ms / 16;
+    uint32_t ticks = (uint32_t)ms;
     if (ticks == 0 && ms > 0) ticks = 1;
     extern volatile uint64_t kernel_ticks;
     beep_end_tick = kernel_ticks + ticks;

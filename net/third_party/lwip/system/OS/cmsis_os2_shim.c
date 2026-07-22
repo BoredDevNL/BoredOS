@@ -123,7 +123,7 @@ osStatus_t osMessageQueueGet(osMessageQueueId_t id, void *msg_ptr, uint8_t *msg_
         uint32_t sleep_until = 0;
         if (timeout != osWaitForever) {
             extern uint32_t get_ticks(void);
-            uint32_t ticks = timeout / 16; if (ticks == 0) ticks = 1;
+            uint32_t ticks = (uint32_t)timeout; if (ticks == 0) ticks = 1;
             sleep_until = get_ticks() + ticks;
         }
 
@@ -198,7 +198,7 @@ osStatus_t osSemaphoreAcquire(osSemaphoreId_t id, uint32_t timeout) {
         uint32_t sleep_until = 0;
         if (timeout != osWaitForever) {
             extern uint32_t get_ticks(void);
-            uint32_t ticks = timeout / 16; if (ticks == 0) ticks = 1;
+            uint32_t ticks = (uint32_t)timeout; if (ticks == 0) ticks = 1;
             sleep_until = get_ticks() + ticks;
         }
 

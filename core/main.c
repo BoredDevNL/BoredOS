@@ -636,6 +636,12 @@ static void init_tty(void) {
     pty_init();
     kconsole_set_active(false);
 
+    /* Spawn the zombie reaper daemon first so it registers via SYS_SET_REAPER
+     * before any user processes can become orphans. 
+     * ps: what's with people coming up with terms like orphans and stuff?
+     * says something about the devs that came up with it, hm?*/
+    process_create_elf("/bin/job_applications.elf", "", false, -1);
+
     // Spawn shells for all 10 TTYs
     for (int i = 0; i < TTY_COUNT; i++) {
         char args[32];

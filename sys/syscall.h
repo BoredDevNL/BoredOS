@@ -53,8 +53,12 @@ typedef enum {
     SYS_CHDIR = 80,
     SYS_MKDIR = 83,
     SYS_UNLINK = 87,
+    SYS_GETTIMEOFDAY = 96,
+    SYS_TIMES = 100,
     SYS_ARCH_PRCTL = 158,
     SYS_FUTEX = 202,
+    SYS_CLOCK_GETTIME = 228,
+    SYS_CLOCK_GETRES = 229,
 
     // Custom BoredOS system calls
     SYS_LIST_OFFSET = 300,
@@ -77,6 +81,7 @@ typedef enum {
     SYS_SPAWN = 317,
     SYS_PTY_CREATE = 320,
     SYS_PTY_DESTROY = 321,
+    SYS_SET_REAPER = 318,
     SYS_DISK_GET_COUNT = 322,
     SYS_DISK_GET_INFO = 323,
     SYS_DISK_WRITE_GPT = 324,

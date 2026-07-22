@@ -93,7 +93,7 @@ static void ap_entry(struct limine_smp_info *info) {
     extern void syscall_init(void);
     syscall_init();
 
-    uint64_t kernel_cr3 = paging_get_pml4_phys();
+    uint64_t kernel_cr3 = paging_get_kernel_pml4_phys();
     asm volatile("mov %0, %%cr3" : : "r"(kernel_cr3));
 
     extern void lapic_enable(void);
@@ -112,7 +112,8 @@ static void ap_entry(struct limine_smp_info *info) {
     serial_write_num(cpu_states[my_id].lapic_id);
     serial_write(")\n");
 
-    process_t *ap_idle = process_create(NULL, false); 
+    extern void work_queue_drain_loop(void);
+    process_t *ap_idle = process_create(work_queue_drain_loop, false); 
     ap_idle->cpu_affinity = my_id;
     ap_idle->is_idle = true;
     strcpy(ap_idle->name, "idle:");
@@ -120,6 +121,8 @@ static void ap_entry(struct limine_smp_info *info) {
     strcpy(ap_idle->name + 5, id_s);
     
     process_set_current_for_cpu(my_id, ap_idle);
+    extern void process_set_idle_for_cpu(uint32_t cpu_id, process_t* p);
+    process_set_idle_for_cpu(my_id, ap_idle);
     asm volatile("sti");
 
     work_queue_drain_loop();

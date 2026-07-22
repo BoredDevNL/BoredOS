@@ -328,11 +328,12 @@ int procfs_read(void *fs_private, void *handle, void *buf, size_t size) {
             itoa(proc->ticks, tick_s);
 
             strcpy(out + strlen(out), tick_s);
-            strcpy(out + strlen(out), "\nIdle: ");
+strcpy(out + strlen(out), "\nIdle: ");
 
             strcpy(out + strlen(out), proc->is_idle ? "1" : "0");
             strcpy(out + strlen(out), "\n");
         }
+        process_put(proc);
     }
 
     size_t len = strlen(out);
@@ -373,8 +374,7 @@ int procfs_write(void *fs_private, void *handle, const void *buf, size_t size) {
         return -1;
 
     procfs_handle_t *h = (procfs_handle_t*)handle;
-
-    if (!h || h->pid == 0xFFFFFFFF)
+    if (!h)
         return -1;
 
     if (strcmp(h->type, "signal") == 0) {
@@ -390,12 +390,14 @@ int procfs_write(void *fs_private, void *handle, const void *buf, size_t size) {
 
             if (proc && proc->pid != 0) {
                 process_terminate(proc);
+                process_put(proc);
 
                 if (size > INT_MAX)
                     return -1;
 
                 return (int)size;
             }
+            if (proc) process_put(proc);
         }
     }
 
@@ -409,12 +411,12 @@ int procfs_readdir(void *fs_private, const char *path, vfs_dirent_t *entries, in
     int found_so_far = 0;
 
     if (path[0] == '\0') {
-        const char *static_files[] = {
+        const char *top_level[] = {
             "version", "uptime", "cpuinfo", "meminfo", "datetime", "devices"
         };
         for (int i = 0; i < 6; i++) {
             if (found_so_far >= offset) {
-                strcpy(entries[out].name, static_files[i]);
+                strcpy(entries[out].name, top_level[i]);
                 entries[out].is_directory = 0;
                 entries[out].size = 0;
                 out++;
@@ -423,18 +425,17 @@ int procfs_readdir(void *fs_private, const char *path, vfs_dirent_t *entries, in
             found_so_far++;
         }
 
-        extern process_t processes[];
-        for (int i = 0; i < 16; i++) {
-            if (processes[i].pid != 0xFFFFFFFF) {
-                if (found_so_far >= offset) {
-                    itoa(processes[i].pid, entries[out].name);
-                    entries[out].is_directory = 1;
-                    entries[out].size = 0;
-                    out++;
-                    if (out >= max) return out;
-                }
-                found_so_far++;
+        uint32_t pids[128];
+        int pcount = process_get_all_pids(pids, 128);
+        for (int i = 0; i < pcount; i++) {
+            if (found_so_far >= offset) {
+                itoa(pids[i], entries[out].name);
+                entries[out].is_directory = 1;
+                entries[out].size = 0;
+                out++;
+                if (out >= max) return out;
             }
+            found_so_far++;
         }
         return out;
     }
@@ -472,7 +473,11 @@ bool procfs_exists(void *fs_private, const char *path) {
         }
         pid_str[i] = 0;
         uint32_t pid = atoi(pid_str);
-        if (process_get_by_pid(pid)) return true;
+        process_t *proc = process_get_by_pid(pid);
+        if (proc) {
+            process_put(proc);
+            return true;
+        }
     }
 
     if (strcmp(path, "version") == 0 || strcmp(path, "uptime") == 0) return true;

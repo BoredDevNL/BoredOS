@@ -112,7 +112,7 @@ void paging_init(void) {
 }
 
 uint64_t paging_get_pml4_phys(void) {
-    return current_pml4_phys;
+    return read_cr3() & PT_ADDR_MASK;
 }
 
 uint64_t paging_get_kernel_pml4_phys(void) {
@@ -203,20 +203,25 @@ void paging_destroy_user_pml4_phys(uint64_t pml4_phys, bool free_mapped_pages) {
                     
                     for (int pd_idx = 0; pd_idx < 512; pd_idx++) {
                         if (pd->entries[pd_idx] & PT_PRESENT) {
-                            page_table_t* pt = (page_table_t*)p2v(pd->entries[pd_idx] & PT_ADDR_MASK);
-                            
-                            for (int pt_idx = 0; pt_idx < 512; pt_idx++) {
-                                if (pt->entries[pt_idx] & PT_PRESENT) {
-                                    uint64_t phys_addr = pt->entries[pt_idx] & PT_ADDR_MASK;
-                                    if (phys_addr != 0 && free_mapped_pages) {
-                                        extern void kfree(void* ptr);
-                                        extern uint64_t p2v(uint64_t phys);
-                                        kfree((void*)p2v(phys_addr));
+                            if (!(pd->entries[pd_idx] & PT_HUGE)) {
+                                page_table_t* pt = (page_table_t*)p2v(pd->entries[pd_idx] & PT_ADDR_MASK);
+                                
+                                if (free_mapped_pages) {
+                                    for (int pt_idx = 0; pt_idx < 512; pt_idx++) {
+                                        if (pt->entries[pt_idx] & PT_PRESENT) {
+                                            uint64_t phys = pt->entries[pt_idx] & PT_ADDR_MASK;
+                                            extern bool mm_is_heap_address(void *ptr);
+                                            if (mm_is_heap_address((void*)p2v(phys))) {
+                                                extern void kfree(void *ptr);
+                                                kfree((void*)p2v(phys));
+                                            }
+                                        }
                                     }
                                 }
+                                
+                                extern void kfree(void* ptr);
+                                kfree((void*)pt);
                             }
-                            extern void kfree(void* ptr);
-                            kfree((void*)pt);
                         }
                     }
                     extern void kfree(void* ptr);

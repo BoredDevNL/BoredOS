@@ -82,7 +82,7 @@ uint64_t elf_load(const char *path, uint64_t user_pml4, size_t *out_load_size, s
 
             if (p_memsz == 0) continue;
 
-            // Calculate boundaries for bulk allocation
+            // Calculate boundaries for page allocation
             uintptr_t align_offset = p_vaddr & 0xFFF;
             uintptr_t start_page = p_vaddr & ~0xFFFULL;
             size_t total_needed = (p_memsz + align_offset + 4095) & ~4095ULL;
@@ -113,9 +113,8 @@ uint64_t elf_load(const char *path, uint64_t user_pml4, size_t *out_load_size, s
             }
             
             if (proc) {
-                // Track physical segments so they can be freed on process exit.
-                extern void process_add_elf_segment(struct process *proc, void *ptr);
-                process_add_elf_segment(proc, bulk_phys);
+                extern void process_add_elf_segment(struct process *proc, void *ptr, uint64_t vaddr, size_t size);
+                process_add_elf_segment(proc, bulk_phys, start_page, total_needed);
             }
 
             if (out_load_size) *out_load_size += total_needed;

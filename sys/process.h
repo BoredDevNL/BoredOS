@@ -13,6 +13,9 @@
 
 #define PROC_STATE_RUNNING 0
 #define PROC_STATE_BLOCKED 1
+#define PROC_STATE_ZOMBIE  2
+
+#define CPU_AFFINITY_ANY   0xFFFFFFFF
 
 #define PROC_FD_KIND_NONE 0
 #define PROC_FD_KIND_FILE 1
@@ -78,8 +81,18 @@ typedef struct registers_t {
     uint64_t rip, cs, rflags, rsp, ss;
 } __attribute__((packed, aligned(16))) registers_t;
 
+typedef struct {
+    void *ptr;
+    uint64_t vaddr;
+    size_t size;
+} elf_segment_info_t;
+
 typedef struct process {
     uint32_t pid;
+    uint32_t refcount;
+    int running_cpu;
+    bool reaped;
+    wait_queue_head_t wait_exit_queue;
     uint64_t rsp; 
     uint64_t fs_base;
     uint64_t pml4_phys; 
@@ -124,9 +137,9 @@ typedef struct process {
     uint64_t signal_handlers[MAX_SIGNALS];
     uint64_t signal_action_mask[MAX_SIGNALS];
     int signal_action_flags[MAX_SIGNALS];
-    
+
     // Tracking for ELF executable segments to allow full memory reclamation on exit.
-    void *elf_segments[4];
+    elf_segment_info_t elf_segments[4];
     uint32_t elf_segment_count;
 
     // Tracking for mmap memory allocations to allow full reclamation on exit.
@@ -134,18 +147,21 @@ typedef struct process {
     void *mmap_allocations[16];
     uint32_t mmap_allocation_count;
 
-    // Tracking for sbrk heap allocations to allow full reclamation on exit.
-    void *sbrk_allocations[64];
-    uint32_t sbrk_allocation_count;
+    // Note: Heap memory in [heap_start, heap_end) is cleanly reclaimed on process exit via page table walking.
 
     // Tracking for shm mappings to allow full reclamation on exit.
     struct {
         uint64_t addr;
         uint64_t length;
         void *seg;
-    } shm_mappings[32];
+    } shm_mappings[64];
     uint32_t shm_mapping_count;
 
+    struct futex_waiter_entry {
+        uint32_t *uaddr;
+        struct process *proc;
+        struct futex_waiter_entry *next;
+    } futex_waiter;
     char ping_result[64];
     poll_wtable_t poll_table;
 } __attribute__((aligned(16))) process_t;
@@ -174,15 +190,22 @@ process_t* process_get_current(void);
 uint32_t   process_get_current_pid(void);
 void process_set_current_for_cpu(uint32_t cpu_id, process_t* p);
 process_t* process_get_current_for_cpu(uint32_t cpu_id);
+void process_set_idle_for_cpu(uint32_t cpu_id, process_t* p);
+process_t* process_get_idle_for_cpu(uint32_t cpu_id);
 uint64_t process_schedule(uint64_t current_rsp);
 uint64_t process_terminate_current(uint64_t current_rsp);
 uint64_t process_terminate_current_with_status(int status, uint64_t current_rsp);
 // Records an allocated ELF segment pointer so it can be freed when the process exits.
-void process_add_elf_segment(struct process *proc, void *ptr);
+void process_add_elf_segment(struct process *proc, void *ptr, uint64_t vaddr, size_t size);
 
 void process_terminate(process_t *proc);
 void process_terminate_with_status(process_t *proc, int status);
 process_t* process_get_by_pid(uint32_t pid);
+void process_hold(process_t *proc);
+void process_put(process_t *proc);
+void process_table_for_each(void (*cb)(process_t *proc, void *arg), void *arg);
+int process_get_all_pids(uint32_t *pids_out, int max_pids);
+extern uint32_t reaper_pid; /* PID of the userspace zombie reaper daemon */
 int process_waitpid(uint32_t caller_pid, int target_pid, int options, int *status_out);
 int process_reap(uint32_t caller_pid, uint32_t pid, int *status_out);
 void process_kill_by_tty(int tty_id);

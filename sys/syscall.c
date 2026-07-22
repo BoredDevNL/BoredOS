@@ -39,6 +39,24 @@
 
 #define MSR_FS_BASE 0xC0000100
 
+static bool is_valid_user_ptr(const void *ptr, size_t size) {
+  uint64_t addr = (uint64_t)ptr;
+  if (!ptr || addr < 0x1000 || addr >= 0xFFFF800000000000ULL) return false;
+  if (addr + size < addr || addr + size >= 0xFFFF800000000000ULL) return false;
+
+  process_t *proc = process_get_current();
+  if (!proc || !proc->pml4_phys) return false;
+
+  uint64_t page_start = addr & ~0xFFFULL;
+  uint64_t page_end = (addr + (size > 0 ? size - 1 : 0)) & ~0xFFFULL;
+  for (uint64_t p = page_start; p <= page_end; p += 4096) {
+    if (paging_virt2phys(proc->pml4_phys, p) == 0) {
+      return false;
+    }
+    if (p == page_end) break;
+  }
+  return true;
+}
 
 extern void isr128_wrapper(void);
 extern void *kmalloc(size_t size);
@@ -625,9 +643,16 @@ static uint64_t fs_cmd_unix_socket_accept(const syscall_args_t *args) {
 static uint64_t fs_cmd_open(const syscall_args_t *args) {
   process_t *proc = process_get_current();
   const char *path = (const char *)args->arg2;
-  const char *mode = (const char *)args->arg3;
-  if (!path || !mode)
+  const char *mode_arg = (const char *)args->arg3;
+  if (!path)
     return -1;
+
+  const char *mode = "r";
+  if (mode_arg != NULL) {
+    if ((uintptr_t)mode_arg == 1) mode = "w";
+    else if ((uintptr_t)mode_arg == 2) mode = "w+";
+    else if ((uintptr_t)mode_arg > 4096) mode = mode_arg;
+  }
 
   extern void serial_write(const char *str);
   extern void serial_write_hex(uint64_t value);
@@ -1172,7 +1197,10 @@ void poll_cleanup(process_t *proc) {
     return;
   poll_wtable_t *wt = &proc->poll_table;
   for (int i = 0; i < wt->count; i++) {
-    wait_queue_remove(wt->entries[i].h, &wt->entries[i].entry);
+    if (wt->entries[i].h) {
+      wait_queue_remove(wt->entries[i].h, &wt->entries[i].entry);
+      wt->entries[i].h = NULL;
+    }
   }
   wt->count = 0;
 }
@@ -1196,6 +1224,9 @@ static uint64_t fs_cmd_poll(const syscall_args_t *args) {
   int timeout = (int)args->arg4;
 
   process_t *proc = process_get_current();
+  if (proc) {
+    poll_cleanup(proc);
+  }
 
   if (!proc || !fds || nfds <= 0 || nfds > 128) {
     return -1;
@@ -1283,12 +1314,14 @@ static uint64_t fs_cmd_poll(const syscall_args_t *args) {
               pt->qproc(&sock->tx_pipe->write_queue, pt);
             if (sock->rx_pipe->count > 0)
               mask |= POLLIN;
-            if (sock->tx_pipe->count < sizeof(sock->tx_pipe->data))
-              mask |= POLLOUT;
             if (sock->rx_pipe->writers == 0)
-              mask |= POLLHUP;
+              mask |= (POLLIN | POLLHUP);
             if (sock->tx_pipe->readers == 0)
               mask |= POLLERR;
+            if (sock->tx_pipe->count < sizeof(sock->tx_pipe->data))
+              mask |= POLLOUT;
+          } else {
+            mask |= POLLHUP;
           }
         }
       }
@@ -1826,6 +1859,8 @@ static uint64_t handle_sys_write(const syscall_args_t *args) {
   const char *buf = (const char *)args->arg2;
   size_t len = (size_t)args->arg3;
 
+  if (!buf || len == 0) return 0;
+
   if (proc && fd >= 0 && fd < MAX_PROCESS_FDS && proc->fds[fd]) {
     syscall_args_t fs_args = *args;
     fs_args.arg2 = args->arg1; // fd
@@ -1868,26 +1903,19 @@ static uint64_t handle_sys_sbrk(const syscall_args_t *args) {
     uint64_t end_page = (new_end + 0xFFF) & ~0xFFF;
 
     if (end_page > start_page) {
-      uint64_t total_size = end_page - start_page;
-      void *phys_block = kmalloc_aligned(total_size, 4096);
-      if (!phys_block)
-        return (uint64_t)-1; // Out of memory
-
-      memset(phys_block, 0, total_size);
-
-      if (proc->sbrk_allocation_count < 64) {
-        proc->sbrk_allocations[proc->sbrk_allocation_count++] = phys_block;
-      }
-
-      uint64_t phys_addr = (uint64_t)phys_block;
       for (uint64_t page = start_page; page < end_page; page += 4096) {
-        if (!paging_map_page(proc->pml4_phys, page, v2p(phys_addr),
-                        0x07)) { // PT_PRESENT | PT_RW | PT_USER
-          return old_end; // fail: don't advance heap
+        void *phys_page = kmalloc_aligned(4096, 4096);
+        if (!phys_page)
+          return old_end;
+
+        memset(phys_page, 0, 4096);
+
+        if (!paging_map_page(proc->pml4_phys, page, v2p((uint64_t)phys_page), 0x07)) {
+          kfree(phys_page);
+          return old_end;
         }
-        phys_addr += 4096;
+        proc->used_memory += 4096;
       }
-      proc->used_memory += (end_page - start_page);
     }
   }
 
@@ -1932,22 +1960,17 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
     pt_flags |= PT_RW;
 
   if (flags & MAP_ANONYMOUS) {
-    // Allocate physical memory for anonymous mapping
-    void *phys_block = kmalloc_aligned(aligned_len, 4096);
-    if (!phys_block)
-      return (uint64_t)MAP_FAILED;
-    memset(phys_block, 0, aligned_len);
-
-    // Track the allocation in proc
-    if (proc->mmap_allocation_count < 16) {
-      proc->mmap_allocations[proc->mmap_allocation_count++] = phys_block;
-    }
-
-    uint64_t phys_addr = v2p((uint64_t)phys_block);
     for (uint64_t off = 0; off < aligned_len; off += 4096) {
-      if (!paging_map_page(proc->pml4_phys, virt_addr + off, phys_addr + off,
-                      pt_flags))
+      void *phys_page = kmalloc_aligned(4096, 4096);
+      if (!phys_page)
         return (uint64_t)MAP_FAILED;
+      memset(phys_page, 0, 4096);
+
+      if (!paging_map_page(proc->pml4_phys, virt_addr + off, v2p((uint64_t)phys_page),
+                      pt_flags)) {
+        kfree(phys_page);
+        return (uint64_t)MAP_FAILED;
+      }
     }
     return virt_addr;
   }
@@ -1998,12 +2021,14 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
     shm_ref(seg);
 
     // Track the SHM mapping in proc
-    if (proc->shm_mapping_count < 32) {
-      proc->shm_mappings[proc->shm_mapping_count].addr = virt_addr;
-      proc->shm_mappings[proc->shm_mapping_count].length = aligned_len;
-      proc->shm_mappings[proc->shm_mapping_count].seg = (void*)seg;
-      proc->shm_mapping_count++;
+    if (proc->shm_mapping_count >= 64) {
+      shm_unref(seg);
+      return (uint64_t)MAP_FAILED;
     }
+    proc->shm_mappings[proc->shm_mapping_count].addr = virt_addr;
+    proc->shm_mappings[proc->shm_mapping_count].length = aligned_len;
+    proc->shm_mappings[proc->shm_mapping_count].seg = (void*)seg;
+    proc->shm_mapping_count++;
 
     // Map pages covering the requested length
     uint32_t pages_to_map = aligned_len / 4096;
@@ -2031,7 +2056,26 @@ static uint64_t handle_sys_munmap(const syscall_args_t *args) {
   uint64_t aligned_len = (length + 4095) & ~4095ULL;
 
   for (uint64_t off = 0; off < aligned_len; off += 4096) {
-    paging_unmap_page(proc->pml4_phys, addr + off);
+    uint64_t vaddr = addr + off;
+    uint64_t phys = paging_virt2phys(proc->pml4_phys, vaddr);
+    if (phys) {
+      bool is_shm = false;
+      for (uint32_t i = 0; i < proc->shm_mapping_count; i++) {
+        if (vaddr >= proc->shm_mappings[i].addr &&
+            vaddr < proc->shm_mappings[i].addr + proc->shm_mappings[i].length) {
+          is_shm = true;
+          break;
+        }
+      }
+      if (!is_shm) {
+        void *virt_ptr = (void *)p2v(phys);
+        extern bool mm_is_heap_address(void *ptr);
+        if (mm_is_heap_address(virt_ptr)) {
+          kfree(virt_ptr);
+        }
+      }
+    }
+    paging_unmap_page(proc->pml4_phys, vaddr);
   }
 
   // Find and release the SHM mapping
@@ -2058,11 +2102,7 @@ static uint64_t handle_sys_munmap(const syscall_args_t *args) {
 
 #define FUTEX_BUCKETS 64
 
-typedef struct futex_waiter {
-  uint32_t *uaddr; // userspace address being waited on
-  process_t *proc; // waiting process
-  struct futex_waiter *next;
-} futex_waiter_t;
+typedef struct futex_waiter_entry futex_waiter_t;
 
 typedef struct {
   futex_waiter_t *head;
@@ -2102,11 +2142,10 @@ int kernel_futex_wait(uint32_t *uaddr, uint32_t expected) {
     return -11; /* EAGAIN */
   }
 
-  futex_waiter_t waiter;
-  waiter.uaddr = uaddr;
-  waiter.proc = proc;
-  waiter.next = b->head;
-  b->head = &waiter;
+  proc->futex_waiter.uaddr = uaddr;
+  proc->futex_waiter.proc = (struct process *)proc;
+  proc->futex_waiter.next = b->head;
+  b->head = (futex_waiter_t *)&proc->futex_waiter;
 
   proc->state = PROC_STATE_BLOCKED;
   spinlock_release_irqrestore(&b->lock, flags);
@@ -2126,8 +2165,10 @@ int kernel_futex_wake(uint32_t *uaddr, int count) {
     if (cur->uaddr == uaddr) {
       *pprev = cur->next; /* unlink */
       if (cur->proc) {
-        cur->proc->state = PROC_STATE_RUNNING;
+        ((process_t *)cur->proc)->state = PROC_STATE_RUNNING;
       }
+      cur->uaddr = NULL;
+      cur->next = NULL;
       woken++;
       cur = *pprev; /* continue from same position */
     } else {
@@ -2154,19 +2195,19 @@ static uint64_t handle_sys_futex(const syscall_args_t *args) {
   if (!uaddr)
     return (uint64_t)-1;
 
-  if (op == FUTEX_WAIT) {
-    /* kernel_futex_wait sets proc->state = BLOCKED;
-       the caller (syscall_handler_c) must then reschedule. */
+  int cmd = op & 0x7F;
+
+  if (cmd == 0 || cmd == 9) { // FUTEX_WAIT or FUTEX_WAIT_BITSET
     int rc = kernel_futex_wait(uaddr, val);
     return (uint64_t)rc;
   }
 
-  if (op == FUTEX_WAKE) {
+  if (cmd == 1 || cmd == 10) { // FUTEX_WAKE or FUTEX_WAKE_BITSET
     int woken = kernel_futex_wake(uaddr, (int)val);
     return (uint64_t)woken;
   }
 
-  return (uint64_t)-1; /* ENOSYS for unknown ops */
+  return 0;
 }
 
 // Adapters for flat system calls
@@ -2203,7 +2244,20 @@ static uint64_t handle_sys_poll(const syscall_args_t *args) {
   shifted.arg2 = args->arg1; // fds
   shifted.arg3 = args->arg2; // nfds
   shifted.arg4 = args->arg3; // timeout
-  return fs_cmd_poll(&shifted);
+  uint64_t res = fs_cmd_poll(&shifted);
+  while (res == (uint64_t)-2) {
+    process_t *proc = process_get_current();
+    if (proc && proc->state == PROC_STATE_BLOCKED) {
+      return (uint64_t)-2;
+    }
+    shifted.arg4 = 0;
+    res = fs_cmd_poll(&shifted);
+  }
+  process_t *proc = process_get_current();
+  if (proc) {
+    poll_cleanup(proc);
+  }
+  return res;
 }
 
 static uint64_t handle_sys_lseek(const syscall_args_t *args) {
@@ -2435,8 +2489,16 @@ static uint64_t handle_sys_unlink(const syscall_args_t *args) {
 }
 
 static uint64_t handle_sys_arch_prctl(const syscall_args_t *args) {
+  process_t *proc = process_get_current();
+  if (!proc) return (uint64_t)-1;
+
   if (args->arg1 == 0x1002) { // ARCH_SET_FS
-    return sys_cmd_set_fs_base(args);
+    proc->fs_base = args->arg2;
+    wrmsr(MSR_FS_BASE, args->arg2);
+    return 0;
+  } else if (args->arg1 == 0x1003) { // ARCH_GET_FS
+    if (args->arg2) *(uint64_t *)args->arg2 = proc->fs_base;
+    return 0;
   }
   return (uint64_t)-1;
 }
@@ -2635,10 +2697,131 @@ static uint64_t handle_sys_reboot(const syscall_args_t *args) {
   return sys_cmd_reboot(args);
 }
 
+static uint64_t handle_sys_set_reaper(const syscall_args_t *args) {
+  (void)args;
+  extern uint32_t reaper_pid;
+  if (reaper_pid != 0) return (uint64_t)-1;
+  process_t *proc = process_get_current();
+  if (!proc || !proc->is_user) return (uint64_t)-1;
+  reaper_pid = proc->pid;
+  return 0;
+}
+
+struct timespec {
+  int64_t tv_sec;
+  int64_t tv_nsec;
+};
+
+struct timeval {
+  int64_t tv_sec;
+  int64_t tv_usec;
+};
+
+struct tms {
+  int64_t tms_utime;
+  int64_t tms_stime;
+  int64_t tms_cutime;
+  int64_t tms_cstime;
+};
+
+static inline uint64_t rdtsc_time(void) {
+  uint32_t low, high;
+  asm volatile("rdtsc" : "=a"(low), "=d"(high));
+  return ((uint64_t)high << 32) | low;
+}
+
+static uint64_t get_time_ns_highres(void) {
+  extern volatile uint64_t kernel_ticks;
+  static uint64_t last_tick = 0;
+  static uint64_t last_tsc = 0;
+  static uint64_t cycles_per_ms = 3000000;
+
+  uint64_t cur_tick = kernel_ticks;
+  uint64_t cur_tsc = rdtsc_time();
+
+  if (cur_tick != last_tick) {
+    uint64_t dt = cur_tick - last_tick;
+    uint64_t dc = cur_tsc - last_tsc;
+    if (dt > 0 && dc > 0 && dt < 100) {
+      cycles_per_ms = dc / dt;
+      if (cycles_per_ms < 100000) cycles_per_ms = 100000;
+    }
+    last_tick = cur_tick;
+    last_tsc = cur_tsc;
+  }
+
+  uint64_t ms = cur_tick;
+  uint64_t sub_ms_cycles = (cur_tsc >= last_tsc) ? (cur_tsc - last_tsc) : 0;
+  uint64_t sub_ms_ns = (sub_ms_cycles * 1000000ULL) / (cycles_per_ms ? cycles_per_ms : 3000000ULL);
+  if (sub_ms_ns >= 1000000ULL) sub_ms_ns = 999999ULL;
+
+  return (ms * 1000000ULL) + sub_ms_ns;
+}
+
+static uint64_t handle_sys_clock_gettime(const syscall_args_t *args) {
+  struct timespec *tp = (struct timespec *)args->arg2;
+  if (!is_valid_user_ptr(tp, sizeof(struct timespec))) return (uint64_t)-14; /* EFAULT */
+  uint64_t ns = get_time_ns_highres();
+  tp->tv_sec = (int64_t)(ns / 1000000000ULL);
+  tp->tv_nsec = (int64_t)(ns % 1000000000ULL);
+  return 0;
+}
+
+static uint64_t handle_sys_clock_getres(const syscall_args_t *args) {
+  struct timespec *tp = (struct timespec *)args->arg2;
+  if (is_valid_user_ptr(tp, sizeof(struct timespec))) {
+    tp->tv_sec = 0;
+    tp->tv_nsec = 1;
+  }
+  return 0;
+}
+
+static uint64_t handle_sys_gettimeofday(const syscall_args_t *args) {
+  struct timeval *tv = (struct timeval *)args->arg1;
+  if (is_valid_user_ptr(tv, sizeof(struct timeval))) {
+    uint64_t ns = get_time_ns_highres();
+    tv->tv_sec = (int64_t)(ns / 1000000000ULL);
+    tv->tv_usec = (int64_t)((ns % 1000000000ULL) / 1000ULL);
+  }
+  return 0;
+}
+
+static uint64_t handle_sys_times(const syscall_args_t *args) {
+  struct tms *buf = (struct tms *)args->arg1;
+  extern volatile uint64_t kernel_ticks;
+  if (is_valid_user_ptr(buf, sizeof(struct tms))) {
+    buf->tms_utime = (int64_t)kernel_ticks;
+    buf->tms_stime = 0;
+    buf->tms_cutime = 0;
+    buf->tms_cstime = 0;
+  }
+  return (uint64_t)kernel_ticks;
+}
+
+static uint64_t handle_sys_nanosleep(const syscall_args_t *args) {
+  struct timespec *req = (struct timespec *)args->arg1;
+  if (!is_valid_user_ptr(req, sizeof(struct timespec))) return (uint64_t)-14;
+  uint64_t ms = (uint64_t)req->tv_sec * 1000ULL + (uint64_t)req->tv_nsec / 1000000ULL;
+  if (ms == 0 && req->tv_nsec > 0) ms = 1;
+  extern uint32_t get_ticks(void);
+  uint32_t ticks = (uint32_t)ms;
+  if (ticks == 0 && ms > 0) ticks = 1;
+  process_t *proc = process_get_current();
+  if (proc) {
+    proc->sleep_until = get_ticks() + ticks;
+    proc->state = PROC_STATE_BLOCKED;
+  }
+  return 0;
+}
+
+static uint64_t handle_sys_sched_yield(const syscall_args_t *args) {
+  (void)args;
+  return 0;
+}
+
 static uint64_t handle_sys_shutdown(const syscall_args_t *args) {
   return sys_cmd_shutdown(args);
 }
-
 
 #define SYSCALL_TABLE_SIZE 351
 static const syscall_handler_fn syscall_table[SYSCALL_TABLE_SIZE] = {
@@ -2656,8 +2839,10 @@ static const syscall_handler_fn syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_RT_SIGPROCMASK] = handle_sys_rt_sigprocmask,
     [SYS_IOCTL] = handle_sys_ioctl,
     [SYS_PIPE] = handle_sys_pipe,
+    [SYS_SCHED_YIELD] = handle_sys_sched_yield,
     [SYS_DUP] = handle_sys_dup,
     [SYS_DUP2] = handle_sys_dup2,
+    [SYS_NANOSLEEP] = handle_sys_nanosleep,
     [SYS_GETPID] = sys_cmd_get_pid,
     [SYS_SOCKET] = handle_sys_socket,
     [SYS_CONNECT] = handle_sys_connect,
@@ -2676,8 +2861,12 @@ static const syscall_handler_fn syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_CHDIR] = handle_sys_chdir,
     [SYS_MKDIR] = handle_sys_mkdir,
     [SYS_UNLINK] = handle_sys_unlink,
+    [SYS_GETTIMEOFDAY] = handle_sys_gettimeofday,
+    [SYS_TIMES] = handle_sys_times,
     [SYS_ARCH_PRCTL] = handle_sys_arch_prctl,
     [SYS_FUTEX] = handle_sys_futex,
+    [SYS_CLOCK_GETTIME] = handle_sys_clock_gettime,
+    [SYS_CLOCK_GETRES] = handle_sys_clock_getres,
 
     // Custom BoredOS system calls
     [SYS_LIST_OFFSET] = handle_sys_list_offset,
@@ -2710,6 +2899,7 @@ static const syscall_handler_fn syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_DISK_SYNC] = handle_sys_disk_sync,
     [SYS_DISK_RESCAN] = handle_sys_disk_rescan,
     [SYS_REBOOT] = handle_sys_reboot,
+    [SYS_SET_REAPER] = handle_sys_set_reaper,
     [SYS_SHUTDOWN] = handle_sys_shutdown,
 };
 
@@ -2735,7 +2925,7 @@ static uint64_t syscall_handler_inner(registers_t *regs) {
 
 static uint64_t syscall_maybe_deliver_signal(registers_t *regs) {
   process_t *proc = process_get_current();
-  if (!proc || !proc->is_user)
+  if (!proc || !proc->is_user || (regs->cs & 0x3) == 0)
     return (uint64_t)regs;
 
   uint64_t pending = proc->signal_pending & ~proc->signal_mask;
@@ -2780,14 +2970,12 @@ static uint64_t syscall_maybe_deliver_signal(registers_t *regs) {
   }
   /* Handler must be in user-space (not in kernel direct map). */
   if (handler >= KERNEL_BASE) {
-    process_terminate_with_status(proc, 128 + 11); /* SIGSEGV */
-    return (uint64_t)regs;
+    return process_terminate_current_with_status(128 + 11, (uint64_t)regs);
   }
 
   uint64_t new_rsp = regs->rsp - sizeof(uint64_t);
   if (new_rsp >= KERNEL_BASE) {
-    process_terminate_with_status(proc, 128 + 11); /* SIGSEGV */
-    return (uint64_t)regs;
+    return process_terminate_current_with_status(128 + 11, (uint64_t)regs);
   }
   /* Ensure the target user address is mapped in the process page tables
    * and write to the underlying physical frame via p2v(). This avoids
@@ -2795,8 +2983,7 @@ static uint64_t syscall_maybe_deliver_signal(registers_t *regs) {
    * or pointed at an unmapped address. */
   uint64_t phys = paging_virt2phys(proc->pml4_phys, new_rsp);
   if (!phys) {
-    process_terminate_with_status(proc, 128 + 11); /* SIGSEGV */
-    return (uint64_t)regs;
+    return process_terminate_current_with_status(128 + 11, (uint64_t)regs);
   }
   uint64_t *target = (uint64_t *)p2v(phys);
   *target = regs->rip;
@@ -2815,45 +3002,21 @@ uint64_t syscall_handler_c(registers_t *regs) {
     return process_terminate_current_with_status((status & 0xff) << 8, (uint64_t)regs);
   }
 
-  if (syscall_num == SYS_SCHED_YIELD) {
-    extern uint64_t process_schedule(uint64_t current_rsp);
-    regs->rax = 0;
-    return process_schedule((uint64_t)regs);
-  }
-
-  if (syscall_num == SYS_NANOSLEEP) {
-    uint32_t ms = (uint32_t)regs->rdi;
-    process_t *proc = process_get_current();
-    extern uint32_t get_ticks(void);
-    uint32_t ticks = ms / 16;
-    if (ticks == 0 && ms > 0)
-      ticks = 1;
-    proc->sleep_until = get_ticks() + ticks;
-    regs->rax = 0;
-    return process_schedule((uint64_t)regs);
-  }
-
   // Normal syscalls
   regs->rax = syscall_handler_inner(regs);
 
-  if (syscall_num == SYS_WAIT4 && regs->rax == (uint64_t)-2) {
-    regs->rax = 0;
+  process_t *cur_proc = process_get_current();
+  if (cur_proc && cur_proc->kill_pending) {
+    return process_terminate_current_with_status(cur_proc->exit_status ? cur_proc->exit_status : 1, (uint64_t)regs);
+  }
+
+  if (cur_proc && cur_proc->state == PROC_STATE_BLOCKED) {
     return process_schedule((uint64_t)regs);
   }
 
-  if ((syscall_num == SYS_READ || syscall_num == SYS_WRITE || syscall_num == SYS_POLL || syscall_num == SYS_ACCEPT) && regs->rax == (uint64_t)-2) {
-    regs->rax = -2;
-    uint64_t ret = process_schedule((uint64_t)regs);
-    poll_cleanup(process_get_current());
-    return ret;
-  }
-
-  /* FUTEX_WAIT: if the process was just blocked, reschedule */
-  if (syscall_num == SYS_FUTEX && regs->rsi == FUTEX_WAIT && regs->rax == 0) {
-    process_t *proc = process_get_current();
-    if (proc && proc->state == PROC_STATE_BLOCKED) {
-      return process_schedule((uint64_t)regs);
-    }
+  if (syscall_num == SYS_SCHED_YIELD) {
+    regs->rax = 0;
+    return process_schedule((uint64_t)regs);
   }
 
   return syscall_maybe_deliver_signal(regs);

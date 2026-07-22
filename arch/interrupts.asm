@@ -63,10 +63,11 @@ isr%2_wrapper:
     
     call %1
     
-    ; Update RSP with return value (task switch)
+    ; Restore RSP from return value (may be same stack or task-switched stack)
+    ; Both cases need to skip the 512-byte fxsave_region
     mov rsp, rax
-
     add rsp, 512
+%%restore_regs:
     
     pop r15
     pop r14
@@ -84,6 +85,7 @@ isr%2_wrapper:
     pop rbx
     pop rax
 
+    cli
     test qword [rsp + 24], 3
     jz %%skip_swap_back
     swapgs
@@ -201,10 +203,11 @@ exception_common:
     
     call exception_handler_c
     
-    ; Switch stack if needed (for process termination)
+    ; Restore RSP from return value (may be same stack or task-switched stack)
+    ; Both cases need to skip the 512-byte fxsave_region
     mov rsp, rax
-
     add rsp, 512
+.restore_regs_exc:
 
     ; Restore registers
     pop r15
@@ -223,6 +226,7 @@ exception_common:
     pop rbx
     pop rax
 
+    cli
     test qword [rsp + 24], 3
     jz .skip_swap_back_exc
     swapgs
@@ -230,4 +234,3 @@ exception_common:
 
     add rsp, 16 ; drop vector and error code
     iretq
-

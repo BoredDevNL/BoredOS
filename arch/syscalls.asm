@@ -113,8 +113,11 @@ syscall_entry:
     pop rbx
     pop rax
     add rsp, 16 ; drop int_no/err_code
-    
+    cli
+    test qword [rsp + 8], 3
+    jz .skip_swap
     swapgs 
+.skip_swap:
     iretq
 
 section .bss

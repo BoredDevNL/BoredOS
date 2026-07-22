@@ -673,6 +673,7 @@ int tty_destroy(int id) {
 }
 
 void tty_write_output(int id, const char *data, size_t len) {
+    if (!data || len == 0) return;
     if (pty_is_pty_id(id)) { pty_write_output(id, data, len); return; }
     tty_t *t = tty_get(id);
     if (!t) return;
@@ -682,6 +683,7 @@ void tty_write_output(int id, const char *data, size_t len) {
 }
 
 int tty_read_output(int id, char *buf, size_t len) {
+    if (!buf || len == 0) return 0;
     if (pty_is_pty_id(id)) return pty_read_output(id, buf, len);
     tty_t *t = tty_get(id);
     if (!t) return 0;
@@ -689,6 +691,7 @@ int tty_read_output(int id, char *buf, size_t len) {
 }
 
 int tty_write_input(int id, const char *buf, size_t len) {
+    if (!buf || len == 0) return 0;
     if (pty_is_pty_id(id)) return pty_write_input(id, buf, len);
     tty_t *t = tty_get(id);
     if (!t) return 0;

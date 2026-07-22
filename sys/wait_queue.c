@@ -8,14 +8,24 @@
 extern void serial_write(const char *str);
 extern void serial_write_num(uint64_t n);
 
+static bool is_valid_kernel_ptr(const void *ptr) {
+    if (!ptr) return false;
+    uint64_t addr = (uint64_t)ptr;
+    if ((addr & 0xFFFF800000000000ULL) != 0xFFFF800000000000ULL) return false;
+    if (addr < 0xFFFF800000000000ULL || addr > 0xFFFFFFFFFFFFF000ULL) return false;
+    extern bool mm_is_heap_address(void *p);
+    if (addr < 0xFFFFFFFF80000000ULL && !mm_is_heap_address((void *)ptr)) return false;
+    return true;
+}
+
 void wait_queue_init(wait_queue_head_t *h) {
-    if (!h) return;
+    if (!is_valid_kernel_ptr(h)) return;
     h->head = NULL;
     h->lock = SPINLOCK_INIT;
 }
 
 void wait_queue_add(wait_queue_head_t *h, wait_queue_entry_t *entry) {
-    if (!h || !entry) return;
+    if (!is_valid_kernel_ptr(h) || !is_valid_kernel_ptr(entry)) return;
     uint64_t flags = spinlock_acquire_irqsave(&h->lock);
     
     // Prevent duplicate addition to avoid circular list corruption
@@ -34,7 +44,7 @@ void wait_queue_add(wait_queue_head_t *h, wait_queue_entry_t *entry) {
 }
 
 void wait_queue_remove(wait_queue_head_t *h, wait_queue_entry_t *entry) {
-    if (!h || !entry) return;
+    if (!is_valid_kernel_ptr(h) || !is_valid_kernel_ptr(entry)) return;
     uint64_t flags = spinlock_acquire_irqsave(&h->lock);
     
     wait_queue_entry_t *prev = NULL;
@@ -55,7 +65,7 @@ void wait_queue_remove(wait_queue_head_t *h, wait_queue_entry_t *entry) {
 }
 
 void wait_queue_wake_all(wait_queue_head_t *h) {
-    if (!h) return;
+    if (!is_valid_kernel_ptr(h)) return;
     uint64_t flags = spinlock_acquire_irqsave(&h->lock);
     
     wait_queue_entry_t *curr = h->head;

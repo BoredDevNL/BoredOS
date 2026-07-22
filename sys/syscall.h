@@ -42,6 +42,7 @@ typedef enum {
     SYS_RECVFROM = 45,
     SYS_BIND = 49,
     SYS_LISTEN = 50,
+    SYS_CLONE = 56,
     SYS_FORK = 57,
     SYS_EXECVE = 59,
     SYS_EXIT = 60,
@@ -56,9 +57,12 @@ typedef enum {
     SYS_GETTIMEOFDAY = 96,
     SYS_TIMES = 100,
     SYS_ARCH_PRCTL = 158,
+    SYS_GETTID = 186,
     SYS_FUTEX = 202,
+    SYS_SET_TID_ADDRESS = 218,
     SYS_CLOCK_GETTIME = 228,
     SYS_CLOCK_GETRES = 229,
+    SYS_EXIT_GROUP = 231,
 
     // Custom BoredOS system calls
     SYS_LIST_OFFSET = 300,

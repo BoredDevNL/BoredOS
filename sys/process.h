@@ -126,6 +126,9 @@ typedef struct process {
     bool is_idle;            
     char cwd[1024];          
     bool is_cloned_child;
+    bool is_thread;
+    uint32_t tgid;
+    int *pml4_refcount;
 
     uint32_t parent_pid;
     uint32_t pgid;
@@ -184,6 +187,7 @@ typedef struct {
 void process_init(void);
 process_t* process_create(void (*entry_point)(void), bool is_user);
 process_t* process_create_elf(const char* filepath, const char* args_str, bool terminal_proc, int tty_id);
+process_t* process_create_thread(registers_t *parent_regs, uint64_t entry_point, uint64_t user_sp, uint64_t flags);
 int process_exec_replace_current(registers_t *regs, const char* filepath, const char* args_str);
 void process_close_fd_inner(process_t *proc, int fd);
 process_t* process_get_current(void);

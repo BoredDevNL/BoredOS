@@ -1536,6 +1536,35 @@ static uint64_t sys_cmd_fork_process(const syscall_args_t *args) {
   return child->pid;
 }
 
+static uint64_t sys_cmd_clone_process(const syscall_args_t *args) {
+  extern process_t *process_create_thread(registers_t *parent_regs, uint64_t entry_point, uint64_t user_sp, uint64_t flags);
+  uint64_t entry_point = args->arg1;
+  uint64_t user_sp = args->arg2;
+  uint64_t flags = args->arg3;
+  process_t *child = process_create_thread(args->regs, entry_point, user_sp, flags);
+  if (!child)
+    return (uint64_t)-1;
+  return child->pid;
+}
+
+static uint64_t sys_cmd_gettid(const syscall_args_t *args) {
+  (void)args;
+  return process_get_current_pid();
+}
+
+static uint64_t handle_sys_set_tid_address(const syscall_args_t *args) {
+  (void)args;
+  return process_get_current_pid();
+}
+
+static uint64_t handle_sys_exit_group(const syscall_args_t *args) {
+  process_t *proc = process_get_current();
+  if (proc) {
+    process_terminate_with_status(proc, (int)args->arg2);
+  }
+  return 0;
+}
+
 static uint64_t sys_cmd_waitpid(const syscall_args_t *args) {
   process_t *proc = process_get_current();
   int pid = (int)args->arg2;
@@ -2851,6 +2880,7 @@ static const syscall_handler_fn syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_RECVFROM] = handle_sys_recvfrom,
     [SYS_BIND] = handle_sys_bind,
     [SYS_LISTEN] = handle_sys_listen,
+    [SYS_CLONE] = sys_cmd_clone_process,
     [SYS_FORK] = handle_sys_fork,
     [SYS_EXECVE] = handle_sys_execve,
     [SYS_WAIT4] = handle_sys_wait4,
@@ -2864,9 +2894,12 @@ static const syscall_handler_fn syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_GETTIMEOFDAY] = handle_sys_gettimeofday,
     [SYS_TIMES] = handle_sys_times,
     [SYS_ARCH_PRCTL] = handle_sys_arch_prctl,
+    [SYS_GETTID] = sys_cmd_gettid,
     [SYS_FUTEX] = handle_sys_futex,
+    [SYS_SET_TID_ADDRESS] = handle_sys_set_tid_address,
     [SYS_CLOCK_GETTIME] = handle_sys_clock_gettime,
     [SYS_CLOCK_GETRES] = handle_sys_clock_getres,
+    [SYS_EXIT_GROUP] = handle_sys_exit_group,
 
     // Custom BoredOS system calls
     [SYS_LIST_OFFSET] = handle_sys_list_offset,

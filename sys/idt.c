@@ -56,7 +56,10 @@ uint64_t exception_handler_c(registers_t *regs) {
     serial_write("0x");
     serial_write(buf);
     
-    if ((regs->cs & 0x3) != 0) {
+    process_t *proc = process_get_current();
+    bool is_user_mode_fault = ((regs->cs & 0x3) != 0);
+
+    if (is_user_mode_fault) {
         serial_write("\n*** USER MODE EXCEPTION ***\nVector: 0x");
         itoa_hex(vector, buf);
         serial_write(buf);
@@ -200,9 +203,9 @@ static void pic_remap(void) {
     outb(0xA1, 0xEF); // Unmask Mouse (IRQ12)
 }
 
-// Set up PIT (Programmable Interval Timer) for ~60Hz (16.67ms intervals)
+// Set up PIT (Programmable Interval Timer) for 1000Hz (1ms intervals)
 static void pit_setup(void) {
-    uint16_t divisor = 1193182 / 60;  // ~60Hz
+    uint16_t divisor = 1193182 / 1000;  // 1000Hz (1ms ticks)
     
     // Mode 2: Rate Generator (more appropriate for periodic interrupts)
     outb(0x43, 0x34); io_wait(); // Channel 0, lobyte/hibyte, mode 2, binary

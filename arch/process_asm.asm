@@ -9,8 +9,8 @@ section .text
 process_jump_usermode:
     cli
 
-    ; Load user data segment (0x23)
-    mov ax, 0x23
+    ; Load user data segment (0x1B)
+    mov ax, 0x1B
     mov ds, ax
     mov es, ax
     mov fs, ax

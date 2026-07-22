@@ -9,8 +9,8 @@
 // Segment Selectors
 #define KERNEL_CS 0x08
 #define KERNEL_DS 0x10
-#define USER_CS   0x1B // 0x18 | 3 (RPL 3)
-#define USER_DS   0x23 // 0x20 | 3 (RPL 3)
+#define USER_DS   0x1B // 0x18 | 3 (RPL 3)
+#define USER_CS   0x23 // 0x20 | 3 (RPL 3)
 #define TSS_SEG   0x28
 
 struct gdt_entry {

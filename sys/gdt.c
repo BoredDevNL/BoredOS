@@ -93,12 +93,12 @@ void gdt_init(void) {
     gdt_set_gate(1, 0, 0, 0x9A, 0xAF);
 
     // Kernel Data segment (Ring 0)
-    gdt_set_gate(2, 0, 0, 0x92, 0xAF);
+    gdt_set_gate(2, 0, 0, 0x92, 0xCF);
 
-    // User Data segment (Ring 3)
-    gdt_set_gate(3, 0, 0, 0xF2, 0xAF);
+    // User Data segment (Ring 3, selector 0x1B)
+    gdt_set_gate(3, 0, 0, 0xF2, 0xCF);
 
-    // User Code segment (Ring 3, 64-bit)
+    // User Code segment (Ring 3, 64-bit, selector 0x23)
     gdt_set_gate(4, 0, 0, 0xFA, 0xAF);
 
     // BSP TSS segment (entries 5 and 6)

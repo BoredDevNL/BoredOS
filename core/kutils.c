@@ -131,6 +131,15 @@ char *strncpy(char *dest, const char *src, size_t n) {
     return dest;
 }
 
+char *strchr(const char *s, int c) {
+    while (*s != (char)c) {
+        if (!*s++) {
+            return NULL;
+        }
+    }
+    return (char *)s;
+}
+
 int atoi(const char *str) {
     int res = 0;
     int sign = 1;

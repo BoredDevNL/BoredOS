@@ -225,12 +225,6 @@ static int ata_write_sector(Disk *disk, uint32_t lba, const uint8_t *buffer) {
         outw(port_base + ATA_REG_DATA, ptr[i]);
     }
 
-    outb(port_base + ATA_REG_COMMAND, 0xE7); // Cache Flush
-    if (ata_wait_bsy(port_base) != 0) {
-        spinlock_release_irqrestore(&ide_lock, flags);
-        return -1;
-    }
-
     spinlock_release_irqrestore(&ide_lock, flags);
     return 0;
 }
@@ -307,12 +301,6 @@ static int ata_write_sectors(Disk *disk, uint32_t lba, uint32_t count, const uin
             }
         }
         
-        outb(port_base + ATA_REG_COMMAND, 0xE7); // Cache Flush
-        if (ata_wait_bsy(port_base) != 0) {
-            spinlock_release_irqrestore(&ide_lock, flags);
-            return -1;
-        }
-
         lba += batch;
         buffer += batch * 512;
         count -= batch;

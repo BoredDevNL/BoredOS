@@ -105,6 +105,7 @@ typedef struct {
     bool is_directory;              // Is this a directory?
     uint8_t attributes;             // File attributes
     void *volume;                   // Pointer to owning FAT32_Volume (or NULL for ramfs)
+    void *entry;                    // Pointer to FileEntry (for ramfs)
 } FAT32_FileHandle;
 
 // Directory Entry Info (for listing)
@@ -167,8 +168,5 @@ bool fs_starts_with(const char *str, const char *prefix);
 
 // Root volume sync helpers
 void fat32_set_root_volume(void *fs_private);
-
-// Desktop Limit
-void fat32_set_desktop_limit(int limit);
 
 #endif

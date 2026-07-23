@@ -32,6 +32,7 @@
 #include "vfs.h"
 #include "wait_queue.h"
 #include "work_queue.h"
+#include <string.h>
 
 #define SPAWN_FLAG_TERMINAL 0x1
 #define SPAWN_FLAG_INHERIT_TTY 0x2
@@ -645,7 +646,7 @@ static uint64_t fs_cmd_open(const syscall_args_t *args) {
   const char *path = (const char *)args->arg2;
   const char *mode_arg = (const char *)args->arg3;
   if (!path)
-    return -1;
+    return (uint64_t)-2; // -ENOENT
 
   const char *mode = "r";
   if (mode_arg != NULL) {
@@ -654,22 +655,20 @@ static uint64_t fs_cmd_open(const syscall_args_t *args) {
     else if ((uintptr_t)mode_arg > 4096) mode = mode_arg;
   }
 
-  extern void serial_write(const char *str);
-  extern void serial_write_hex(uint64_t value);
-  extern void serial_write_num(uint64_t num);
-
-  // vfs_open now handles normalization internally with process_get_current()
-  // but let's be explicit if we can.
   vfs_file_t *vf = vfs_open(path, mode);
 
-  if (!vf)
-    return -1;
+  if (!vf) {
+    if (mode && (mode[0] == 'r' && !strchr(mode, '+'))) {
+      return (uint64_t)-2; // -ENOENT
+    }
+    return (uint64_t)-5; // -EIO
+  }
 
   process_fd_file_ref_t *ref =
       (process_fd_file_ref_t *)kmalloc(sizeof(process_fd_file_ref_t));
   if (!ref) {
     vfs_close(vf);
-    return -1;
+    return (uint64_t)-12; // -ENOMEM
   }
   ref->file = vf;
   ref->refs = 1;
@@ -685,7 +684,7 @@ static uint64_t fs_cmd_open(const syscall_args_t *args) {
 
   kfree(ref);
   vfs_close(vf);
-  return -1;
+  return (uint64_t)-24; // -EMFILE
 }
 
 static uint64_t fs_cmd_read(const syscall_args_t *args) {

@@ -16,18 +16,12 @@
 static spinlock_t ramfs_lock = SPINLOCK_INIT; // Protects the RAM-based filesystem (/)
 
 
-#define MAX_CLUSTERS 32768
-#define MAX_OPEN_HANDLES 32
-
-// In-memory FAT table
-static uint32_t fat_table[MAX_CLUSTERS];
-static uint8_t cluster_data[MAX_CLUSTERS][FAT32_CLUSTER_SIZE];
-
 typedef struct FileEntry {
     char full_path[FAT32_MAX_PATH];
     char filename[FAT32_MAX_FILENAME];
-    uint32_t start_cluster;
+    uint8_t *data;
     uint32_t size;
+    uint32_t capacity;
     uint32_t attributes;
     bool used;            
     char parent_path[FAT32_MAX_PATH];
@@ -35,11 +29,8 @@ typedef struct FileEntry {
 } FileEntry;
 
 static FileEntry *file_list_head = NULL; 
-static uint32_t next_cluster = 3;  // Start after reserved clusters 0, 1, 2
-static FAT32_FileHandle open_handles[MAX_OPEN_HANDLES];
 static char current_dir[FAT32_MAX_PATH] = "/";
 static char current_drive = 'A';  // Backward compat only
-static int desktop_file_limit = -1;
 
 // === RealFS Definitions ===
 
@@ -294,28 +285,15 @@ static FileEntry* ramfs_find_file(const char *path) {
 static FileEntry* ramfs_alloc_entry(void) {
     FileEntry *e = (FileEntry*)kmalloc(sizeof(FileEntry));
     if (!e) return NULL;
-    for (int i = 0; i < (int)sizeof(FileEntry); i++) ((char*)e)[i] = 0;
+    memset(e, 0, sizeof(FileEntry));
     e->used = true;
     e->next = file_list_head;
     file_list_head = e;
     return e;
 }
 
-static void ramfs_free_cluster_chain(uint32_t start_cluster) {
-    uint32_t cluster = start_cluster;
-    uint32_t guard = 0;
-
-    while (cluster >= 3 && cluster < MAX_CLUSTERS && fat_table[cluster] != 0 && guard++ < MAX_CLUSTERS) {
-        uint32_t next = fat_table[cluster];
-        fat_table[cluster] = 0;
-        if (next >= 0xFFFFFFF8 || next == cluster) break;
-        cluster = next;
-    }
-}
-
 static void ramfs_free_entry(FileEntry *entry) {
     if (!entry) return;
-    ramfs_free_cluster_chain(entry->start_cluster);
     if (file_list_head == entry) {
         file_list_head = entry->next;
     } else {
@@ -326,66 +304,15 @@ static void ramfs_free_entry(FileEntry *entry) {
             }
         }
     }
+    if (entry->data) kfree(entry->data);
     kfree(entry);
 }
 
-static FAT32_FileHandle* ramfs_find_free_handle(void) {
-    for (int i = 0; i < MAX_OPEN_HANDLES; i++) {
-        if (!open_handles[i].valid) return &open_handles[i];
-    }
-    return NULL;
-}
-
-static uint32_t ramfs_allocate_cluster(void) {
-    for (uint32_t pass = 0; pass < 2; pass++) {
-        uint32_t start = pass == 0 ? next_cluster : 3;
-        uint32_t end = pass == 0 ? MAX_CLUSTERS : next_cluster;
-
-        for (uint32_t cluster = start; cluster < end; cluster++) {
-            if (fat_table[cluster] == 0) {
-                fat_table[cluster] = 0xFFFFFFFF;
-                next_cluster = cluster + 1;
-                if (next_cluster >= MAX_CLUSTERS) next_cluster = 3;
-                for (int i = 0; i < FAT32_CLUSTER_SIZE; i++) {
-                    cluster_data[cluster][i] = 0;
-                }
-                return cluster;
-            }
-        }
-    }
-
-    return 0;
-}
-
-static int ramfs_count_files_in_dir(const char *normalized_path) {
-    int count = 0;
-    for (FileEntry *n = file_list_head; n; n = n->next) {
-        if (strcmp(n->parent_path, normalized_path) == 0) count++;
-    }
-    return count;
-}
-
-static bool check_desktop_limit(const char *normalized_path) {
-    if (desktop_file_limit < 0) return true;
-    if (strlen(normalized_path) > 14 && 
-        normalized_path[0] == '/' && 
-        normalized_path[1] == 'r' && normalized_path[2] == 'o' && 
-        normalized_path[3] == 'o' && normalized_path[4] == 't' && 
-        normalized_path[5] == '/' &&
-        normalized_path[6] == 'D' && normalized_path[7] == 'e' && 
-        normalized_path[8] == 's' && normalized_path[9] == 'k' && 
-        normalized_path[10] == 't' && normalized_path[11] == 'o' && 
-        normalized_path[12] == 'p' && normalized_path[13] == '/') {
-        const char *p = normalized_path + 14;
-        while (*p) {
-            if (*p == '/') return true; 
-            p++;
-        }
-        
-        int count = ramfs_count_files_in_dir("/root/Desktop");
-        if (count >= desktop_file_limit) return false;
-    }
-    return true;
+static FAT32_FileHandle* ramfs_alloc_handle(void) {
+    FAT32_FileHandle *fh = (FAT32_FileHandle*)kmalloc(sizeof(FAT32_FileHandle));
+    if (!fh) return NULL;
+    memset(fh, 0, sizeof(FAT32_FileHandle));
+    return fh;
 }
 
 static FAT32_FileHandle* ramfs_open(const char *normalized_path, const char *mode) {
@@ -395,123 +322,86 @@ static FAT32_FileHandle* ramfs_open(const char *normalized_path, const char *mod
         if (!entry || (entry->attributes & ATTR_DIRECTORY)) return NULL;
     } else if (mode[0] == 'w' || (mode[0] == 'a')) {
         if (!entry) {
-            if (!check_desktop_limit(normalized_path)) return NULL;
+            char parent_dir[FAT32_MAX_PATH];
+            extract_parent_path(normalized_path, parent_dir);
+            if (parent_dir[0] != '\0' && strcmp(parent_dir, "/") != 0) {
+                if (!ramfs_find_file(parent_dir)) {
+                    FileEntry *p_entry = ramfs_alloc_entry();
+                    if (p_entry) {
+                        strcpy(p_entry->full_path, parent_dir);
+                        extract_filename(parent_dir, p_entry->filename);
+                        extract_parent_path(parent_dir, p_entry->parent_path);
+                        p_entry->size = 0;
+                        p_entry->attributes = ATTR_DIRECTORY;
+                    }
+                }
+            }
             entry = ramfs_alloc_entry();
             if (!entry) return NULL;
             strcpy(entry->full_path, normalized_path);
             extract_filename(normalized_path, entry->filename);
             extract_parent_path(normalized_path, entry->parent_path);
-            entry->start_cluster = ramfs_allocate_cluster();
-            if (!entry->start_cluster) { ramfs_free_entry(entry); return NULL; }
             entry->size = 0;
+            entry->capacity = 0;
+            entry->data = NULL;
             entry->attributes = 0;
-        }
-        if (mode[0] == 'w') {
-            ramfs_free_cluster_chain(entry->start_cluster);
-            entry->start_cluster = ramfs_allocate_cluster();
-            if (!entry->start_cluster) return NULL;
+        } else if (mode[0] == 'w') {
             entry->size = 0;
         }
     }
     
-    FAT32_FileHandle *handle = ramfs_find_free_handle();
+    FAT32_FileHandle *handle = ramfs_alloc_handle();
     if (!handle) return NULL;
     
     handle->valid = true;
     handle->volume = NULL;  // RAMFS handle
-    handle->cluster = entry->start_cluster;
-    handle->start_cluster = entry->start_cluster;
+    handle->entry = entry;
     handle->position = 0;
-    handle->size = entry->size;
-    handle->is_directory = (entry->attributes & ATTR_DIRECTORY) != 0;
-    handle->attributes = entry->attributes;
+    handle->size = entry ? entry->size : 0;
+    handle->is_directory = entry ? ((entry->attributes & ATTR_DIRECTORY) != 0) : false;
+    handle->attributes = entry ? entry->attributes : 0;
     
     if (mode[0] == 'r') handle->mode = 0;
     else if (mode[0] == 'w') handle->mode = 1;
     else {
         handle->mode = 2;
-        handle->position = entry->size;
-        uint32_t current_cluster = handle->start_cluster;
-        uint32_t pos = 0;
-        while (pos + FAT32_CLUSTER_SIZE <= handle->position) {
-             uint32_t next = fat_table[current_cluster];
-             if (next >= 0xFFFFFFF8) break; 
-             current_cluster = next;
-             pos += FAT32_CLUSTER_SIZE;
-        }
-        handle->cluster = current_cluster;
+        handle->position = entry ? entry->size : 0;
     }
     return handle;
 }
 
 static int ramfs_read(FAT32_FileHandle *handle, void *buffer, size_t size) {
-    int bytes_read = 0;
-    uint8_t *buf = (uint8_t *)buffer;
-    
-    while (bytes_read < size && handle->position < handle->size) {
-        uint32_t offset_in_cluster = handle->position % FAT32_CLUSTER_SIZE;
-        int to_read = size - bytes_read;
-        int available = handle->size - handle->position;
-        if (to_read > available) to_read = available;
-        if (to_read > (int)(FAT32_CLUSTER_SIZE - offset_in_cluster)) to_read = FAT32_CLUSTER_SIZE - offset_in_cluster;
-        
-        if (handle->cluster >= MAX_CLUSTERS) break;
-        
-        uint8_t *src = cluster_data[handle->cluster] + offset_in_cluster;
-        for (int i = 0; i < to_read; i++) buf[bytes_read + i] = src[i];
-        
-        bytes_read += to_read;
-        handle->position += to_read;
-        if (handle->position % FAT32_CLUSTER_SIZE == 0 && handle->position < handle->size) {
-            handle->cluster = fat_table[handle->cluster];
-        }
-    }
-    return bytes_read;
+    if (!handle || !handle->entry || !buffer || size == 0) return 0;
+    FileEntry *entry = (FileEntry*)handle->entry;
+    if (handle->position >= entry->size || !entry->data) return 0;
+
+    size_t avail = entry->size - handle->position;
+    size_t to_read = (size < avail) ? size : avail;
+    memcpy(buffer, entry->data + handle->position, to_read);
+    handle->position += (uint32_t)to_read;
+    return (int)to_read;
 }
 
 static int ramfs_write(FAT32_FileHandle *handle, const void *buffer, size_t size) {
-    int bytes_written = 0;
-    const uint8_t *buf = (const uint8_t *)buffer;
-    
-    if (handle->position > 0 && (handle->position % FAT32_CLUSTER_SIZE) == 0) {
-         uint32_t next = fat_table[handle->cluster];
-         if (next >= 0xFFFFFFF8) {
-             next = ramfs_allocate_cluster();
-             if (!next) return 0;
-             fat_table[handle->cluster] = next;
-         }
-         handle->cluster = next;
+    if (!handle || !handle->entry || !buffer || size == 0) return 0;
+    FileEntry *entry = (FileEntry*)handle->entry;
+
+    uint32_t needed = handle->position + (uint32_t)size;
+    if (needed > entry->capacity) {
+        uint32_t new_cap = (needed * 2 + 4095) & ~4095;
+        uint8_t *new_data = (uint8_t*)krealloc(entry->data, new_cap);
+        if (!new_data) return -1;
+        entry->data = new_data;
+        entry->capacity = new_cap;
     }
 
-    while (bytes_written < size) {
-        uint32_t offset_in_cluster = handle->position % FAT32_CLUSTER_SIZE;
-        int to_write = size - bytes_written;
-        if (to_write > (int)(FAT32_CLUSTER_SIZE - offset_in_cluster)) to_write = FAT32_CLUSTER_SIZE - offset_in_cluster;
-        
-        if (handle->cluster >= MAX_CLUSTERS) break;
-        
-        uint8_t *dest = cluster_data[handle->cluster] + offset_in_cluster;
-        for (int i = 0; i < to_write; i++) dest[i] = buf[bytes_written + i];
-        
-        bytes_written += to_write;
-        handle->position += to_write;
-        if (handle->position > handle->size) handle->size = handle->position;
-        
-        if (offset_in_cluster + to_write >= FAT32_CLUSTER_SIZE && bytes_written < size) {
-            uint32_t next = ramfs_allocate_cluster();
-            if (!next) break;
-            fat_table[handle->cluster] = next;
-            handle->cluster = next;
-        }
+    memcpy(entry->data + handle->position, buffer, size);
+    handle->position += (uint32_t)size;
+    if (handle->position > entry->size) {
+        entry->size = handle->position;
     }
-    
-    for (FileEntry *n = file_list_head; n; n = n->next) {
-        if (n->start_cluster == handle->start_cluster) {
-            n->size = handle->size;
-            break;
-        }
-    }
-    return bytes_written;
+    handle->size = entry->size;
+    return (int)size;
 }
 
 // === RealFS Implementation ===
@@ -621,11 +511,23 @@ static void realfs_set_fat_entry(FAT32_Volume *vol, uint32_t cluster, uint32_t v
 
     for (uint32_t i = 0; i < vol->num_fats; i++) {
         uint32_t sector = vol->fat_begin_lba + (i * vol->fat_size) + sector_offset;
-        if (vol->disk->read_sector(vol->disk, sector, buf) == 0) {
+        bool read_ok = false;
+
+        if (i == 0 && vol->cached_fat_sector == sector) {
+            memcpy(buf, vol->cached_fat_buf, 512);
+            read_ok = true;
+        } else {
+            read_ok = (vol->disk->read_sector(vol->disk, sector, buf) == 0);
+        }
+
+        if (read_ok) {
             uint32_t *entry = (uint32_t*)(buf + byte_offset);
             *entry = (*entry & 0xF0000000) | (value & 0x0FFFFFFF);
             vol->disk->write_sector(vol->disk, sector, buf);
-            if (vol->cached_fat_sector == sector) vol->cached_fat_sector = 0xFFFFFFFF;
+            if (i == 0) {
+                memcpy(vol->cached_fat_buf, buf, 512);
+                vol->cached_fat_sector = sector;
+            }
         }
     }
     kfree(buf);
@@ -796,7 +698,7 @@ static FAT32_FileHandle* realfs_open_from_vol(FAT32_Volume *vol, const char *pat
     if (*p == 0) {
         // Root dir
         if (mode[0] == 'w') return NULL; // Cannot write to root as file
-        FAT32_FileHandle *fh = ramfs_find_free_handle(); // Reuse handle pool
+        FAT32_FileHandle *fh = ramfs_alloc_handle(); // Reuse handle pool
         if (fh) {
             fh->valid = true;
             fh->volume = vol;
@@ -908,7 +810,7 @@ static FAT32_FileHandle* realfs_open_from_vol(FAT32_Volume *vol, const char *pat
         if (!found) {
             if ((mode[0] == 'w' || mode[0] == 'a') && *p == 0) {
                    if (realfs_create_entry(vol, current_cluster, component, ATTR_ARCHIVE, 0, 0, &entry_sector, &entry_offset)) {
-                       FAT32_FileHandle *fh = ramfs_find_free_handle();
+                       FAT32_FileHandle *fh = ramfs_alloc_handle();
                        if (fh) {
                            fh->valid = true;
                            fh->volume = vol;
@@ -936,7 +838,7 @@ static FAT32_FileHandle* realfs_open_from_vol(FAT32_Volume *vol, const char *pat
 
     
     // Found file/dir
-    FAT32_FileHandle *fh = ramfs_find_free_handle();
+    FAT32_FileHandle *fh = ramfs_alloc_handle();
     if (fh) {
         fh->valid = true;
         fh->volume = vol;
@@ -1210,10 +1112,45 @@ static int realfs_write_file(FAT32_FileHandle *handle, const void *buffer, size_
             handle->cluster = next;
         }
 
-        int to_copy = size - bytes_written;
+        int remaining = size - bytes_written;
+        if (offset == 0 && remaining >= (int)cluster_size && vol->disk->write_sectors) {
+            int clusters_to_write = remaining / cluster_size;
+            if (clusters_to_write > 64) clusters_to_write = 64;
+
+            int count = 1;
+            uint32_t current_c = handle->cluster;
+
+            for (int i = 1; i < clusters_to_write; i++) {
+                uint32_t next = realfs_next_cluster(vol, current_c);
+                if (next >= 0x0FFFFFF8) {
+                    uint32_t new_c = realfs_allocate_cluster(vol);
+                    if (new_c == 0) break;
+                    realfs_set_fat_entry(vol, current_c, new_c);
+                    next = new_c;
+                }
+                if (next != current_c + 1) {
+                    // Non-contiguous allocation, stop batch here
+                    break;
+                }
+                current_c = next;
+                count++;
+            }
+
+            uint32_t lba = vol->cluster_begin_lba + (handle->cluster - 2) * vol->sectors_per_cluster;
+            uint32_t total_sectors = count * vol->sectors_per_cluster;
+            if (vol->disk->write_sectors(vol->disk, lba, total_sectors, src_buf + bytes_written) != 0) break;
+
+            uint32_t written_len = count * cluster_size;
+            bytes_written += written_len;
+            handle->position += written_len;
+            if (handle->position > handle->size) handle->size = handle->position;
+            handle->cluster = current_c;
+            continue;
+        }
+
+        int to_copy = remaining;
         int available = cluster_size - offset; 
         if (to_copy > available) to_copy = available;
-
 
         if (offset > 0 || (handle->position < handle->size && (handle->position + to_copy) < handle->size)) {
             if (realfs_read_cluster(vol, handle->cluster, cluster_buf) != 0) break;
@@ -1613,7 +1550,7 @@ static int vfs_ramfs_readdir(void *fs_private, const char *rel_path, vfs_dirent_
                 strcpy(entries[count].name, n->filename);
                 entries[count].size = n->size;
                 entries[count].is_directory = (n->attributes & ATTR_DIRECTORY) ? 1 : 0;
-                entries[count].start_cluster = n->start_cluster;
+                entries[count].start_cluster = 0;
                 entries[count].write_date = 0;
                 entries[count].write_time = 0;
                 count++;
@@ -1717,7 +1654,7 @@ static int vfs_ramfs_get_info(void *fs_private, const char *rel_path, vfs_dirent
     strcpy(info->name, entry->filename);
     info->size = entry->size;
     info->is_directory = (entry->attributes & ATTR_DIRECTORY) ? 1 : 0;
-    info->start_cluster = entry->start_cluster;
+    info->start_cluster = 0;
     info->write_date = 0;
     info->write_time = 0;
     
@@ -1736,17 +1673,9 @@ static uint32_t vfs_fat_get_size(void *file_handle) {
 
 static int vfs_ramfs_statfs(void *fs_private, vfs_statfs_t *stat) {
     (void)fs_private;
-    uint64_t rflags = spinlock_acquire_irqsave(&ramfs_lock);
-    
-    stat->total_blocks = MAX_CLUSTERS;
-    uint64_t free_count = 0;
-    for (int i = 0; i < MAX_CLUSTERS; i++) {
-        if (fat_table[i] == 0) free_count++;
-    }
-    stat->free_blocks = free_count;
-    stat->block_size = FAT32_CLUSTER_SIZE;
-    
-    spinlock_release_irqrestore(&ramfs_lock, rflags);
+    stat->total_blocks = 1048576;
+    stat->free_blocks = 1048576;
+    stat->block_size = 512;
     return 0;
 }
 
@@ -2121,28 +2050,11 @@ void fat32_init(void) {
     FileEntry *node = file_list_head;
     while (node) {
         FileEntry *next = node->next;
+        if (node->data) kfree(node->data);
         kfree(node);
         node = next;
     }
     file_list_head = NULL;
-
-    // Initialize FAT table for RAMFS
-    for (int i = 0; i < MAX_CLUSTERS; i++) {
-        fat_table[i] = 0;
-    }
-    fat_table[0] = 0xFFFFFFF8;
-    fat_table[1] = 0xFFFFFFFF;
-
-    // Zero out cluster data
-    for (int i = 0; i < MAX_CLUSTERS; i++) {
-        for (int j = 0; j < FAT32_CLUSTER_SIZE; j++) {
-            cluster_data[i][j] = 0;
-        }
-    }
-    
-    // Reserve cluster 2 for root directory
-    fat_table[2] = 0xFFFFFFFF;
-    next_cluster = 3;
 
     // Register with VFS as root mount
     vfs_mount("/", "ramfs", "ramfs", fat32_get_ramfs_ops(), NULL);
@@ -2154,10 +2066,6 @@ void fat32_init(void) {
     // Reset Volumes
     for(int i=0; i<MAX_REAL_VOLUMES; i++) real_volumes[i] = NULL;
     real_volume_count = 0;
-}
-
-void fat32_set_desktop_limit(int limit) {
-    desktop_file_limit = limit;
 }
 
 bool fat32_change_drive(char drive) {
@@ -2299,18 +2207,8 @@ int fat32_seek(FAT32_FileHandle *handle, int offset, int whence) {
     
     handle->position = new_position;
     
-    // Both RealFS and RAMFS must accurately re-walk their cluster chains
-    if (handle->volume == NULL) {
-        handle->cluster = handle->start_cluster;
-        uint32_t pos = 0;
-        while (pos + FAT32_CLUSTER_SIZE <= handle->position) {
-             uint32_t next = fat_table[handle->cluster];
-             if (next >= 0xFFFFFFF8) break;
-             handle->cluster = next;
-             pos += FAT32_CLUSTER_SIZE;
-        }
-    } else {
-        // Re-walk to find current cluster
+    if (handle->volume != NULL) {
+        // Re-walk to find current cluster for RealFS
         FAT32_Volume *vol = (FAT32_Volume*)handle->volume;
         uint32_t cluster_size = vol->sectors_per_cluster * 512;
         
@@ -2441,12 +2339,6 @@ bool fat32_mkdir(const char *path) {
         return false; 
     }
     
-    if (!check_desktop_limit(normalized)) {
-        kfree(normalized);
-        spinlock_release_irqrestore(&ramfs_lock, rflags);
-        return false;
-    }
-    
     FileEntry *entry = ramfs_alloc_entry();
     if (!entry) {
         kfree(normalized);
@@ -2458,7 +2350,6 @@ bool fat32_mkdir(const char *path) {
     strcpy(entry->full_path, normalized);
     extract_filename(normalized, entry->filename);
     extract_parent_path(normalized, entry->parent_path);
-    entry->start_cluster = ramfs_allocate_cluster();
     entry->size = 0;
     entry->attributes = ATTR_DIRECTORY;
     
@@ -2595,7 +2486,7 @@ int fat32_get_info(const char *path, FAT32_FileInfo *info) {
                 strcpy(info->name, entry->filename);
                 info->size = entry->size;
                 info->is_directory = (entry->attributes & ATTR_DIRECTORY) != 0;
-                info->start_cluster = entry->start_cluster;
+                info->start_cluster = 0;
                 result = 0;
             }
             kfree(normalized);
@@ -2800,7 +2691,7 @@ int fat32_list_directory(const char *path, FAT32_FileInfo *entries, int max_entr
                 strcpy(entries[count].name, _n->filename);
                 entries[count].size = _n->size;
                 entries[count].is_directory = (_n->attributes & ATTR_DIRECTORY) != 0;
-                entries[count].start_cluster = _n->start_cluster;
+                entries[count].start_cluster = 0;
                 entries[count].write_date = 0;
                 entries[count].write_time = 0;
                 count++;

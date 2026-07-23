@@ -12,6 +12,7 @@
 #include "kconsole.h"
 #include "memory_manager.h"
 #include <limits.h>
+#include <string.h>
 
 extern void serial_write(const char *str);
 extern void serial_write_hex(uint64_t value);
@@ -69,6 +70,23 @@ static vfs_fs_ops_t bootfs_ops = {
 bootfs_state_t g_bootfs_state = {0};
 static char g_limine_conf_path[64] = "";
 
+typedef struct bootfs_custom_dir {
+    char name[128];
+    struct bootfs_custom_dir *next;
+} bootfs_custom_dir_t;
+
+static bootfs_custom_dir_t *g_custom_dirs = NULL;
+
+static bootfs_custom_dir_t *bootfs_find_custom_dir(const char *name) {
+    if (!name || name[0] == '\0') return NULL;
+    bootfs_custom_dir_t *d = g_custom_dirs;
+    while (d) {
+        if (strcmp(d->name, name) == 0) return d;
+        d = d->next;
+    }
+    return NULL;
+}
+
 static bootfs_custom_file_t *bootfs_find_custom(const char *name) {
     bootfs_custom_file_t *f = (bootfs_custom_file_t*)g_bootfs_state.custom_files;
     while (f) {
@@ -125,43 +143,66 @@ static void* bootfs_open(void *fs_private, const char *path, const char *mode) {
         h->is_root = true;
     } else if (is_metadata_path(path) && path[8] == '\0') {
         h->is_metadata_dir = true;
-    } else if (strcmp(path, "kernel") == 0 || strcmp(path, "initrd") == 0 || strcmp(path, "initrd.tar") == 0 || is_metadata_file(path) || bootfs_find_custom(path)) {
+    } else if (strcmp(path, "kernel") == 0 || strcmp(path, "initrd") == 0 || strcmp(path, "initrd.tar") == 0 || is_metadata_file(path)) {
+        // Builtin read-only files
     } else {
         if (strncmp(path, "efi/", 4) == 0 || strcmp(path, "efi") == 0) {
             kfree(h);
             return NULL;
         }
+        
         char disk_path[256];
         vfs_file_t *f = NULL;
         
         strcpy(disk_path, "/boot/efi/");
         strcat(disk_path, path);
-        f = vfs_open(disk_path, mode);
+        if (vfs_exists(disk_path)) {
+            f = vfs_open(disk_path, mode);
+        }
         if (!f) {
             strcpy(disk_path, "/");
             strcat(disk_path, path);
-            f = vfs_open(disk_path, mode);
+            if (vfs_exists(disk_path)) {
+                f = vfs_open(disk_path, mode);
+            }
         }
         
         if (f) {
             h->disk_file = f;
         } else {
-            if (mode[0] == 'w' || mode[0] == 'a') {
-                strcpy(disk_path, "/boot/efi/");
-                strcat(disk_path, path);
-                f = vfs_open(disk_path, mode);
-                if (!f) {
-                    strcpy(disk_path, "/");
-                    strcat(disk_path, path);
-                    f = vfs_open(disk_path, mode);
+            bool is_write = (mode && (mode[0] == 'w' || mode[0] == 'a' || strchr(mode, '+')));
+            bootfs_custom_file_t *cf = bootfs_find_custom(path);
+            
+            if (!cf) {
+                if (is_write) {
+                    cf = (bootfs_custom_file_t*)kmalloc(sizeof(bootfs_custom_file_t));
+                    if (cf) {
+                        memset(cf, 0, sizeof(bootfs_custom_file_t));
+                        strcpy(cf->name, path);
+                        cf->capacity = 4096;
+                        cf->data = (uint8_t*)kmalloc(cf->capacity);
+                        cf->size = 0;
+                        cf->next = (bootfs_custom_file_t*)g_bootfs_state.custom_files;
+                        g_bootfs_state.custom_files = cf;
+                    }
                 }
-                h->disk_file = f;
+            } else if (mode && mode[0] == 'w') {
+                if (cf->capacity > 0) {
+                    cf->size = 0;
+                } else {
+                    uint8_t *new_buf = (uint8_t*)kmalloc(4096);
+                    if (new_buf) {
+                        cf->data = new_buf;
+                        cf->capacity = 4096;
+                        cf->size = 0;
+                    }
+                }
             }
-        }
-        
-        if (!h->disk_file) {
-            kfree(h);
-            return NULL;
+            
+            if (!cf && !is_write) {
+                kfree(h);
+                return NULL;
+            }
         }
     }
     
@@ -356,12 +397,12 @@ static int bootfs_read(void *fs_private, void *handle, void *buf, size_t size) {
 static int bootfs_write(void *fs_private, void *handle, const void *buf, size_t size) {
     (void)fs_private;
 
-    if (!buf && size > 0)
-        return -1;
+    if (!buf || size == 0)
+        return 0;
 
     bootfs_handle_t *h = (bootfs_handle_t*)handle;
 
-    if (!h || size == 0)
+    if (!h)
         return -1;
 
     if (h->disk_file) {
@@ -373,7 +414,34 @@ static int bootfs_write(void *fs_private, void *handle, const void *buf, size_t 
         return ret;
     }
 
-    return -1;
+    bootfs_custom_file_t *cf = bootfs_find_custom(h->path);
+    if (!cf) return -1;
+
+    uint32_t needed = (uint32_t)h->offset + (uint32_t)size;
+    if (cf->capacity == 0) {
+        uint32_t new_cap = (needed + 4095) & ~4095;
+        uint8_t *new_data = (uint8_t*)kmalloc(new_cap);
+        if (!new_data) return -1;
+        if (cf->data && cf->size > 0) {
+            memcpy(new_data, cf->data, cf->size);
+        }
+        cf->data = new_data;
+        cf->capacity = new_cap;
+    } else if (needed > cf->capacity) {
+        uint32_t new_cap = (needed * 2 + 4095) & ~4095;
+        uint8_t *new_data = (uint8_t*)krealloc(cf->data, new_cap);
+        if (!new_data) return -1;
+        cf->data = new_data;
+        cf->capacity = new_cap;
+    }
+
+    memcpy(cf->data + h->offset, buf, size);
+    h->offset += (int)size;
+    if ((uint32_t)h->offset > cf->size) {
+        cf->size = (uint32_t)h->offset;
+    }
+
+    return (int)size;
 }
 
 static int bootfs_seek(void *fs_private, void *handle, int offset, int whence) {
@@ -500,14 +568,43 @@ static int bootfs_readdir(void *fs_private, const char *rel_path, vfs_dirent_t *
 }
 
 static bool bootfs_mkdir(void *fs_private, const char *rel_path) {
-    return false;
+    (void)fs_private;
+    if (!rel_path) return false;
+    if (rel_path[0] == '/') rel_path++;
+    if (rel_path[0] == '\0') return true;
+
+    if (bootfs_find_custom_dir(rel_path)) return true;
+
+    bootfs_custom_dir_t *d = (bootfs_custom_dir_t*)kmalloc(sizeof(bootfs_custom_dir_t));
+    if (!d) return false;
+    strcpy(d->name, rel_path);
+    d->next = g_custom_dirs;
+    g_custom_dirs = d;
+    return true;
 }
 
 static bool bootfs_rmdir(void *fs_private, const char *rel_path) {
+    (void)fs_private;
+    if (!rel_path) return false;
+    if (rel_path[0] == '/') rel_path++;
+
+    bootfs_custom_dir_t *curr = g_custom_dirs;
+    bootfs_custom_dir_t *prev = NULL;
+    while (curr) {
+        if (strcmp(curr->name, rel_path) == 0) {
+            if (prev) prev->next = curr->next;
+            else g_custom_dirs = curr->next;
+            kfree(curr);
+            return true;
+        }
+        prev = curr;
+        curr = curr->next;
+    }
     return false;
 }
 
 static bool bootfs_unlink(void *fs_private, const char *rel_path) {
+    (void)fs_private;
     if (!rel_path) return false;
     if (rel_path[0] == '/') rel_path++;
     
@@ -517,6 +614,22 @@ static bool bootfs_unlink(void *fs_private, const char *rel_path) {
     
     if (strcmp(rel_path, "kernel") == 0 || strcmp(rel_path, "initrd") == 0 || strcmp(rel_path, "initrd.tar") == 0 || strcmp(rel_path, "metadata") == 0 || is_metadata_file(rel_path)) {
         return false;
+    }
+
+    bootfs_custom_file_t *curr = (bootfs_custom_file_t*)g_bootfs_state.custom_files;
+    bootfs_custom_file_t *prev = NULL;
+    while (curr) {
+        if (strcmp(curr->name, rel_path) == 0) {
+            if (prev) prev->next = curr->next;
+            else g_bootfs_state.custom_files = curr->next;
+            if (curr->capacity > 0 && curr->data) {
+                kfree(curr->data);
+            }
+            kfree(curr);
+            return true;
+        }
+        prev = curr;
+        curr = curr->next;
     }
     
     char disk_path[256];
@@ -534,6 +647,7 @@ static bool bootfs_unlink(void *fs_private, const char *rel_path) {
 }
 
 static bool bootfs_rename(void *fs_private, const char *old_path, const char *new_path) {
+    (void)fs_private;
     if (!old_path || !new_path) return false;
     
     const char *old_rel = old_path;
@@ -548,6 +662,12 @@ static bool bootfs_rename(void *fs_private, const char *old_path, const char *ne
     
     if (strcmp(old_rel, "kernel") == 0 || strcmp(old_rel, "initrd") == 0 || strcmp(old_rel, "initrd.tar") == 0 || strcmp(old_rel, "metadata") == 0 || is_metadata_file(old_rel)) {
         return false;
+    }
+
+    bootfs_custom_file_t *cf = bootfs_find_custom(old_rel);
+    if (cf) {
+        strcpy(cf->name, new_rel);
+        return true;
     }
     
     char old_disk_path[256];
@@ -572,6 +692,7 @@ static bool bootfs_rename(void *fs_private, const char *old_path, const char *ne
 }
 
 static bool bootfs_exists(void *fs_private, const char *rel_path) {
+    (void)fs_private;
     if (!rel_path) rel_path = "";
     if (rel_path[0] == '/') rel_path++;
     
@@ -587,6 +708,7 @@ static bool bootfs_exists(void *fs_private, const char *rel_path) {
     if (strcmp(rel_path, "metadata") == 0) return true;
     if (is_metadata_file(rel_path)) return true;
     if (bootfs_find_custom(rel_path)) return true;
+    if (bootfs_find_custom_dir(rel_path)) return true;
     
     char disk_path[256];
     strcpy(disk_path, "/boot/efi/");
@@ -598,12 +720,23 @@ static bool bootfs_exists(void *fs_private, const char *rel_path) {
 }
 
 static bool bootfs_is_dir(void *fs_private, const char *rel_path) {
+    (void)fs_private;
     if (!rel_path) rel_path = "";
     if (rel_path[0] == '/') rel_path++;
     
     if (rel_path[0] == '\0') return true;
     if (strcmp(rel_path, "efi") == 0) return true;
     if (strcmp(rel_path, "metadata") == 0) return true; 
+    if (bootfs_find_custom_dir(rel_path)) return true;
+
+    size_t len = strlen(rel_path);
+    bootfs_custom_file_t *cf = (bootfs_custom_file_t*)g_bootfs_state.custom_files;
+    while (cf) {
+        if (strncmp(cf->name, rel_path, len) == 0 && cf->name[len] == '/') {
+            return true;
+        }
+        cf = cf->next;
+    }
     
     return false;
 }

@@ -8,6 +8,8 @@
 #include <stdbool.h>
 #include "spinlock.h"
 
+struct process;
+
 typedef struct cpu_state {
     struct cpu_state *self;    
     uint32_t cpu_id;           
@@ -18,10 +20,19 @@ typedef struct cpu_state {
     uint64_t user_rsp_scratch;  
     uint64_t kernel_syscall_stack; 
     uint8_t xsave_area[8192] __attribute__((aligned(64)));
-    void *current_process;
+    struct process *current_process;
+    struct process *idle_process;
+    struct process *process_free_later;
+    struct process *process_last_run;
 } cpu_state_t;
- 
- void smp_init_bsp(void);
+
+typedef struct cpu_state pCPU;
+
+#ifdef __GNUC__
+static cpu_state_t __seg_gs * const current_cpu __attribute__((unused)) = (cpu_state_t __seg_gs *)0;
+#endif
+
+void smp_init_bsp(void);
 
 
 struct limine_smp_response;

@@ -41,19 +41,7 @@ static uint32_t read_lapic_id(void) {
 
 uint32_t smp_this_cpu_id(void) {
     if (!cpu_states || total_cpus == 0) return 0;
-
-    cpu_state_t *state = NULL;
-    asm volatile("movq %%gs:0, %0" : "=r"(state) : : "memory");
-    if (state && state >= cpu_states && state < cpu_states + total_cpus) {
-        return state->cpu_id;
-    }
-    
-    uint32_t lapic = read_lapic_id();
-    for (uint32_t i = 0; i < total_cpus; i++) {
-        if (cpu_states[i].online && cpu_states[i].lapic_id == lapic) return i;
-    }
-    
-    return 0; 
+    return current_cpu->cpu_id;
 }
 
 uint32_t smp_cpu_count(void) {

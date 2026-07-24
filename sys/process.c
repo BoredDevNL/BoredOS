@@ -37,10 +37,6 @@ static process_node_t *pid_hash_table[PID_HASH_BUCKETS] = {0};
 static spinlock_t process_table_lock = SPINLOCK_INIT;
 static spinlock_t runqueue_lock = SPINLOCK_INIT;
 
-static process_t* current_process[MAX_CPUS_SCHED] = {0}; // Per-CPU
-static process_t* idle_process[MAX_CPUS_SCHED] = {0}; // Per-CPU
-static process_t* process_free_later[MAX_CPUS_SCHED] = {0}; // Per-CPU
-static process_t* process_last_run[MAX_CPUS_SCHED] = {0}; // Per-CPU
 static uint32_t next_pid = 0;
 
 uint32_t reaper_pid = 0; // PID of the userspace zombie reaper daemon
@@ -344,7 +340,7 @@ void process_init(void) {
     
     pid_table_insert(kernel_proc);
     process_set_current_for_cpu(0, kernel_proc);
-    idle_process[0] = kernel_proc;
+    process_set_idle_for_cpu(0, kernel_proc);
 
     /* job_applications zombie reaper is now a userspace daemon */
 }
@@ -488,7 +484,7 @@ process_t* process_create(void (*entry_point)(void), bool is_user) {
     }
     
     // Add to linked list
-    process_t *head = pid_hash_table[0] ? pid_hash_table[0]->proc : current_process[0];
+    process_t *head = pid_hash_table[0] ? pid_hash_table[0]->proc : process_get_current_for_cpu(0);
     if (head) {
         new_proc->next = head->next;
         head->next = new_proc;
@@ -830,7 +826,7 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
     new_proc->cpu_affinity = CPU_AFFINITY_ANY;
 
     uint64_t rflags = spinlock_acquire_irqsave(&runqueue_lock);
-    process_t *head = pid_hash_table[0] ? pid_hash_table[0]->proc : current_process[0];
+    process_t *head = pid_hash_table[0] ? pid_hash_table[0]->proc : process_get_current_for_cpu(0);
     if (head) {
         new_proc->next = head->next;
         head->next = new_proc;
@@ -849,39 +845,31 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
 }
 
 process_t* process_get_current_for_cpu(uint32_t cpu_id) {
-    if (cpu_id >= MAX_CPUS_SCHED) return NULL;
-    return current_process[cpu_id];
+    cpu_state_t *cpu_state = smp_get_cpu(cpu_id);
+    return cpu_state ? (process_t *)cpu_state->current_process : NULL;
 }
 
 void process_set_current_for_cpu(uint32_t cpu_id, process_t* p) {
-    if (cpu_id >= MAX_CPUS_SCHED) return;
-    current_process[cpu_id] = p;
-    
     cpu_state_t *cpu_state = smp_get_cpu(cpu_id);
     if (cpu_state) {
-        cpu_state->current_process = p;
+        cpu_state->current_process = (struct process *)p;
     }
 }
 
 void process_set_idle_for_cpu(uint32_t cpu_id, process_t* p) {
-    if (cpu_id < MAX_CPUS_SCHED) {
-        idle_process[cpu_id] = p;
+    cpu_state_t *cpu_state = smp_get_cpu(cpu_id);
+    if (cpu_state) {
+        cpu_state->idle_process = (struct process *)p;
     }
 }
 
 process_t* process_get_idle_for_cpu(uint32_t cpu_id) {
-    if (cpu_id < MAX_CPUS_SCHED) {
-        return idle_process[cpu_id];
-    }
-    return NULL;
+    cpu_state_t *cpu_state = smp_get_cpu(cpu_id);
+    return cpu_state ? (process_t *)cpu_state->idle_process : NULL;
 }
 
 process_t* process_get_current(void) {
-    uint32_t cpu_id = smp_this_cpu_id();
-    if (cpu_id < MAX_CPUS_SCHED) {
-        return current_process[cpu_id];
-    }
-    return NULL;
+    return (process_t *)current_cpu->current_process;
 }
 
 uint32_t process_get_current_pid(void) {
@@ -890,21 +878,22 @@ uint32_t process_get_current_pid(void) {
 }
 
 uint64_t process_schedule(uint64_t current_rsp) {
-    uint32_t my_cpu = smp_this_cpu_id();
+    uint32_t my_cpu = current_cpu->cpu_id;
 
-    if (process_free_later[my_cpu]) {
-        process_put(process_free_later[my_cpu]);
-        process_free_later[my_cpu] = NULL;
+    if (current_cpu->process_free_later) {
+        process_put((process_t *)current_cpu->process_free_later);
+        current_cpu->process_free_later = NULL;
+        // are you happy now sassy dallas
     }
 
     uint64_t rflags = spinlock_acquire_irqsave(&runqueue_lock);
 
-    if (process_last_run[my_cpu]) {
-        process_last_run[my_cpu]->running_cpu = -1;
-        process_last_run[my_cpu] = NULL;
+    if (current_cpu->process_last_run) {
+        ((process_t *)current_cpu->process_last_run)->running_cpu = -1;
+        current_cpu->process_last_run = NULL;
     }
 
-    process_t *cur = current_process[my_cpu];
+    process_t *cur = (process_t *)current_cpu->current_process;
     if (!cur) {
         spinlock_release_irqrestore(&runqueue_lock, rflags);
         return current_rsp;
@@ -951,7 +940,7 @@ uint64_t process_schedule(uint64_t current_rsp) {
     if (!chosen) {
         chosen = cur;
         if (chosen->state == PROC_STATE_ZOMBIE || chosen->state == PROC_STATE_BLOCKED || chosen->kill_pending) {
-            process_t *kp = idle_process[my_cpu];
+            process_t *kp = (process_t *)current_cpu->idle_process;
             if (kp) {
                 chosen = kp;
             }
@@ -960,18 +949,17 @@ uint64_t process_schedule(uint64_t current_rsp) {
 
     if (cur != chosen) {
         chosen->running_cpu = (int)my_cpu;
-        process_set_current_for_cpu(my_cpu, chosen);
+        current_cpu->current_process = (struct process *)chosen;
 
         if (chosen->kernel_stack) {
             tss_set_stack_cpu(my_cpu, chosen->kernel_stack);
-            cpu_state_t *cpu_state = smp_get_cpu(my_cpu);
-            if (cpu_state) cpu_state->kernel_syscall_stack = chosen->kernel_stack;
+            current_cpu->kernel_syscall_stack = chosen->kernel_stack;
         }
 
         paging_switch_directory(chosen->pml4_phys);
         wrmsr(MSR_FS_BASE, chosen->fs_base);
 
-        process_last_run[my_cpu] = cur;
+        current_cpu->process_last_run = (struct process *)cur;
     }
 
     chosen->ticks++;
@@ -1113,7 +1101,7 @@ void process_terminate_with_status(process_t *to_delete, int status) {
 
     uint32_t cpu_count = smp_cpu_count();
     for (uint32_t c = 0; c < cpu_count && c < MAX_CPUS_SCHED; c++) {
-        if (current_process[c] == to_delete) {
+        if (process_get_current_for_cpu(c) == to_delete) {
             to_delete->kill_pending = true;
             to_delete->exit_status = status;
             return;
@@ -1144,14 +1132,14 @@ void process_terminate_with_status(process_t *to_delete, int status) {
 uint64_t process_terminate_current_with_status(int status, uint64_t current_rsp) {
     uint64_t rflags = spinlock_acquire_irqsave(&runqueue_lock);
 
-    uint32_t my_cpu = smp_this_cpu_id();
+    uint32_t my_cpu = current_cpu->cpu_id;
 
-    if (process_last_run[my_cpu]) {
-        process_last_run[my_cpu]->running_cpu = -1;
-        process_last_run[my_cpu] = NULL;
+    if (current_cpu->process_last_run) {
+        ((process_t *)current_cpu->process_last_run)->running_cpu = -1;
+        current_cpu->process_last_run = NULL;
     }
 
-    process_t *cur = current_process[my_cpu];
+    process_t *cur = (process_t *)current_cpu->current_process;
 
     if (!cur || cur->pid == 0) {
         spinlock_release_irqrestore(&runqueue_lock, rflags);
@@ -1193,7 +1181,7 @@ uint64_t process_terminate_current_with_status(int status, uint64_t current_rsp)
     }
 
     if (!next_proc) {
-        next_proc = idle_process[my_cpu];
+        next_proc = (process_t *)current_cpu->idle_process;
     }
 
     if (!next_proc) {
@@ -1201,13 +1189,12 @@ uint64_t process_terminate_current_with_status(int status, uint64_t current_rsp)
         return current_rsp;
     }
 
-    process_set_current_for_cpu(my_cpu, next_proc);
+    current_cpu->current_process = (struct process *)next_proc;
     next_proc->running_cpu = (int)my_cpu;
 
     if (next_proc->kernel_stack) {
         tss_set_stack_cpu(my_cpu, next_proc->kernel_stack);
-        cpu_state_t *cpu_state = smp_get_cpu(my_cpu);
-        if (cpu_state) cpu_state->kernel_syscall_stack = next_proc->kernel_stack;
+        current_cpu->kernel_syscall_stack = next_proc->kernel_stack;
     }
 
     paging_switch_directory(next_proc->pml4_phys);
@@ -1224,7 +1211,7 @@ uint64_t process_terminate_current_with_status(int status, uint64_t current_rsp)
 
     uint64_t next_rsp = next_proc->rsp;
 
-    process_free_later[my_cpu] = cur;
+    current_cpu->process_free_later = (struct process *)cur;
 
     if (next_rsp != current_rsp) {
         fpu_switch(current_rsp, next_rsp);

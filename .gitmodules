@@ -83,3 +83,6 @@
 	path = toolchain
 	url = https://github.com/BoredOS/toolchain.git
 	branch = main
+[submodule "usr/tinygl"]
+	path = usr/tinygl
+	url = https://github.com/boredos/tinygl.git

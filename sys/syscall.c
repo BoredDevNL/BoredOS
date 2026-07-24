@@ -757,7 +757,7 @@ static uint64_t fs_cmd_read(const syscall_args_t *args) {
         }
         if (n > 0)
           break;
-        k_delay(10);
+        k_delay(1);
         continue;
       }
       out[n++] = pipe->data[pipe->read_pos];
@@ -844,7 +844,7 @@ static uint64_t fs_cmd_write(const syscall_args_t *args) {
         }
         if (n > 0)
           break;
-        k_delay(10);
+        k_delay(1);
         continue;
       }
       pipe->data[pipe->write_pos] = in[n++];
@@ -2019,7 +2019,7 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
       return (uint64_t)MAP_FAILED;
 
     uint64_t phys_addr = v2p((uint64_t)fb.address);
-    uint64_t fb_flags = pt_flags | PT_CACHE_DISABLE | PT_WRITE_THROUGH;
+    uint64_t fb_flags = pt_flags | PT_WRITE_THROUGH;
     for (uint64_t off = 0; off < aligned_len; off += 4096) {
       if (!paging_map_page(proc->pml4_phys, virt_addr + off, phys_addr + off,
                       fb_flags))

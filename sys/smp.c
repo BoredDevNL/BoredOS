@@ -69,6 +69,8 @@ static void ap_entry(struct limine_smp_info *info) {
     asm volatile("mov %0, %%cr4" : : "r"(cr4));
     asm volatile("fninit");
 
+    pat_enable_wc();
+
     extern struct gdt_ptr gdtr;
     extern void gdt_flush(uint64_t);
     gdt_flush((uint64_t)&gdtr);

@@ -31,6 +31,7 @@ typedef struct {
     uint64_t entries[512];
 } __attribute__((aligned(PAGE_SIZE))) page_table_t;
 
+void pat_enable_wc(void);
 uint64_t paging_get_pml4_phys(void);
 
 bool paging_map_page(uint64_t pml4_phys, uint64_t virtual_addr, uint64_t physical_addr, uint64_t flags);

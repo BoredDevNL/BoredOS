@@ -167,6 +167,7 @@ typedef struct process {
     } futex_waiter;
     char ping_result[64];
     poll_wtable_t poll_table;
+    wait_queue_entry_t pipe_wait_entry;
 } __attribute__((aligned(16))) process_t;
 
 // Loads the ELF executable at 'path' using fat32 into the pagemap given by user_pml4.

@@ -9,7 +9,6 @@
 #include "vfs.h"
 #include "shm.h"
 
-#include "app_metadata.h"
 #include "cmd.h"
 #include "disk.h"
 #include "ext4fs.h"

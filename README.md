@@ -5,7 +5,6 @@
 
   [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
   ![Platform: x86_64](https://img.shields.io/badge/Platform-x86_64-lightgrey)
-  ![GitHub all releases](https://img.shields.io/github/downloads/boredos/BoredOS/total?color=brightgreen)
   [![Donate](https://img.shields.io/badge/Donate-❤️-pink)](https://buymeacoffee.com/boreddevhq)
 
   <br />

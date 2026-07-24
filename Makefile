@@ -38,6 +38,7 @@ AR = x86_64-boredos-ar
 STRIP = x86_64-boredos-strip
 NASM = nasm
 XORRISO = xorriso
+FORMATTER = clang-format
 
 KERNEL_DIRS = arch core dev drivers fs graphics input mem net sys
 BUILD_DIR = build
@@ -65,6 +66,10 @@ C_SOURCES := $(shell find $(KERNEL_DIRS) -type f -name '*.c' \
                 ! -path '*/third_party/lwip/netif/slipif.c' \
                 ! -path 'fs/vendor/*' \
                 ! -path '*/fs/vendor/*')
+FORMAT_C_SOURCES := $(shell find $(KERNEL_DIRS) -type f -name '*.c' \
+                ! -path '*/third_party/*' \
+                ! -path '*/vendor/*' \
+                ! -path '*/external/*')
 ASM_SOURCES := $(shell find $(KERNEL_DIRS) -type f -name '*.asm' \
                 ! -path 'fs/vendor/*' \
                 ! -path '*/fs/vendor/*')
@@ -380,6 +385,9 @@ else
 run: run-windows
 run-hd: run-hd-windows
 endif
+
+format:
+	$(FORMATTER) -i $(FORMAT_C_SOURCES)
 
 run-windows: $(ISO_IMAGE) disk.qcow2
 	$(call PRINT_STEP,RUNNING BOREDOS IN QEMU ON WINDOWS)

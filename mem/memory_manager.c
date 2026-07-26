@@ -62,14 +62,6 @@ static size_t    slab_total_frees  = 0;
 extern void serial_write(const char *str);
 extern void serial_write_num(uint32_t n);
 
-
-static void mem_memmove(void *dest, const void *src, size_t len) {
-    uint8_t       *d = (uint8_t *)dest;
-    const uint8_t *s = (const uint8_t *)src;
-    if (d < s) { while (len--) *d++ = *s++; }
-    else        { d += len; s += len; while (len--) *(--d) = *(--s); }
-}
-
 static void  *_kmalloc_locked(size_t size, size_t alignment);
 static void   _kfree_locked(void *ptr);
 static bool   insert_block_at(int idx, void *addr, size_t size, bool allocated, uint32_t id);
@@ -560,7 +552,7 @@ void *krealloc(void *ptr, size_t new_size) {
 
     // Hold the lock across both the new alloc and the free of the old pointer
     // to keep the operation atomic (no other CPU can observe a partial realloc).
-    mem_memmove(np, ptr, old_size);
+    memmove(np, ptr, old_size);
     if (slab_owns(ptr, &page))
         slab_free(ptr);
     else

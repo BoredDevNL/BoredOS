@@ -479,7 +479,7 @@ void kfree(void *ptr) {
 
 
 void *krealloc(void *ptr, size_t new_size) {
-    if (new_size == 0) { kfree(ptr); return NULL; }
+    if (new_size == 0) { kfree_null(ptr); return NULL; }
     if (!ptr)           return kmalloc(new_size);
 
     new_size = (new_size + 7) & ~7ULL;

@@ -158,7 +158,7 @@ int mkfs_fat32_format(Disk *disk, uint32_t sector_count, const char *label) {
     /* Write sector 0 (BPB) */
     if (disk->write_sector(disk, 0, buf) != 0) {
         serial_write("[MKFS] Error: failed to write BPB (sector 0)\n");
-        kfree(buf);
+        kfree_null(buf);
         return -1;
     }
 
@@ -172,7 +172,7 @@ int mkfs_fat32_format(Disk *disk, uint32_t sector_count, const char *label) {
 
     if (disk->write_sector(disk, 1, buf) != 0) {
         serial_write("[MKFS] Error: failed to write FSInfo (sector 1)\n");
-        kfree(buf);
+        kfree_null(buf);
         return -1;
     }
     FAT32_BPB *bpb2 = (FAT32_BPB *)buf;
@@ -206,7 +206,7 @@ int mkfs_fat32_format(Disk *disk, uint32_t sector_count, const char *label) {
 
     if (disk->write_sector(disk, 6, buf) != 0) {
         serial_write("[MKFS] Error: failed to write backup BPB (sector 6)\n");
-        kfree(buf);
+        kfree_null(buf);
         return -1;
     }
 
@@ -220,7 +220,7 @@ int mkfs_fat32_format(Disk *disk, uint32_t sector_count, const char *label) {
 
     if (disk->write_sector(disk, 7, buf) != 0) {
         serial_write("[MKFS] Error: failed to write backup FSInfo (sector 7)\n");
-        kfree(buf);
+        kfree_null(buf);
         return -1;
     }
 
@@ -231,7 +231,7 @@ int mkfs_fat32_format(Disk *disk, uint32_t sector_count, const char *label) {
         for (uint32_t s = 0; s < sectors_per_fat; s++) {
             if (disk->write_sector(disk, fat_start + s, buf) != 0) {
                 serial_write("[MKFS] Error: failed to zero FAT\n");
-                kfree(buf);
+                kfree_null(buf);
                 return -1;
             }
         }
@@ -248,7 +248,7 @@ int mkfs_fat32_format(Disk *disk, uint32_t sector_count, const char *label) {
         uint32_t fat_start = reserved_sectors + (f * sectors_per_fat);
         if (disk->write_sector(disk, fat_start, buf) != 0) {
             serial_write("[MKFS] Error: failed to write FAT markers\n");
-            kfree(buf);
+            kfree_null(buf);
             return -1;
         }
     }
@@ -259,12 +259,12 @@ int mkfs_fat32_format(Disk *disk, uint32_t sector_count, const char *label) {
     for (uint32_t s = 0; s < (uint32_t)spc; s++) {
         if (disk->write_sector(disk, root_start + s, buf) != 0) {
             serial_write("[MKFS] Error: failed to zero root cluster\n");
-            kfree(buf);
+            kfree_null(buf);
             return -1;
         }
     }
 
-    kfree(buf);
+    kfree_null(buf);
 
     disk->is_fat32 = true;
     mf_set_disk_label(disk, upper_label);

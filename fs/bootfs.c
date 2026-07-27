@@ -147,7 +147,7 @@ static void* bootfs_open(void *fs_private, const char *path, const char *mode) {
         // Builtin read-only files
     } else {
         if (strncmp(path, "efi/", 4) == 0 || strcmp(path, "efi") == 0) {
-            kfree(h);
+            kfree_null(h);
             return NULL;
         }
         
@@ -200,7 +200,7 @@ static void* bootfs_open(void *fs_private, const char *path, const char *mode) {
             }
             
             if (!cf && !is_write) {
-                kfree(h);
+                kfree_null(h);
                 return NULL;
             }
         }
@@ -215,7 +215,7 @@ static void bootfs_close(void *fs_private, void *handle) {
         if (h->disk_file) {
             vfs_close(h->disk_file);
         }
-        kfree(h);
+        kfree_null(h);
     }
 }
 
@@ -314,7 +314,7 @@ static int bootfs_read(void *fs_private, void *handle, void *buf, size_t size) {
         content_len = strlen(content_buffer);
 
     } else if (strcmp(h->path, "initrd.tar") == 0) {
-        kfree(content_buffer);
+        kfree_null(content_buffer);
 
         if (h->offset >= g_bootfs_state.initrd_size)
             return 0;
@@ -340,7 +340,7 @@ static int bootfs_read(void *fs_private, void *handle, void *buf, size_t size) {
                                                 4096);
 
         if (content_len < 0) {
-            kfree(content_buffer);
+            kfree_null(content_buffer);
             return -1;
         }
 
@@ -348,7 +348,7 @@ static int bootfs_read(void *fs_private, void *handle, void *buf, size_t size) {
         bootfs_custom_file_t *cf = bootfs_find_custom(h->path);
 
         if (cf) {
-            kfree(content_buffer);
+            kfree_null(content_buffer);
 
             if (h->offset >= cf->size)
                 return 0;
@@ -367,12 +367,12 @@ static int bootfs_read(void *fs_private, void *handle, void *buf, size_t size) {
             return (int)to_read;
         }
 
-        kfree(content_buffer);
+        kfree_null(content_buffer);
         return -1;
     }
 
     if ((size_t)h->offset >= (size_t)content_len) {
-        kfree(content_buffer);
+        kfree_null(content_buffer);
         return 0;
     }
 
@@ -381,7 +381,7 @@ static int bootfs_read(void *fs_private, void *handle, void *buf, size_t size) {
     size_t read_size = (available < size) ? available : size;
 
     if (read_size > INT_MAX) {
-        kfree(content_buffer);
+        kfree_null(content_buffer);
         return -1;
     }
 
@@ -389,7 +389,7 @@ static int bootfs_read(void *fs_private, void *handle, void *buf, size_t size) {
 
     h->offset += read_size;
 
-    kfree(content_buffer);
+    kfree_null(content_buffer);
 
     return (int)read_size;
 }
@@ -594,7 +594,7 @@ static bool bootfs_rmdir(void *fs_private, const char *rel_path) {
         if (strcmp(curr->name, rel_path) == 0) {
             if (prev) prev->next = curr->next;
             else g_custom_dirs = curr->next;
-            kfree(curr);
+            kfree_null(curr);
             return true;
         }
         prev = curr;
@@ -623,9 +623,9 @@ static bool bootfs_unlink(void *fs_private, const char *rel_path) {
             if (prev) prev->next = curr->next;
             else g_bootfs_state.custom_files = curr->next;
             if (curr->capacity > 0 && curr->data) {
-                kfree(curr->data);
+                kfree_null(curr->data);
             }
-            kfree(curr);
+            kfree_null(curr);
             return true;
         }
         prev = curr;

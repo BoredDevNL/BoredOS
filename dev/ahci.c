@@ -169,13 +169,13 @@ static int ahci_identify(int port_num, uint32_t *sectors, char *model) {
     // Wait for port to be idle
     int timeout = 1000000;
     while ((port->tfd & (ATA_SR_BSY | ATA_SR_DRQ)) && --timeout > 0);
-    if (timeout <= 0) { kfree(buf); spinlock_release_irqrestore(&ps->lock, rflags); return -1; }
+    if (timeout <= 0) { kfree_null(buf); spinlock_release_irqrestore(&ps->lock, rflags); return -1; }
 
     port->ci = (1 << slot);
 
     while (1) {
         if ((port->ci & (1 << slot)) == 0) break;
-        if (port->is & HBA_PORT_IS_TFES) { kfree(buf); spinlock_release_irqrestore(&ps->lock, rflags); return -1; }
+        if (port->is & HBA_PORT_IS_TFES) { kfree_null(buf); spinlock_release_irqrestore(&ps->lock, rflags); return -1; }
     }
 
     // Extract sectors (28-bit LBA for now, or 48-bit if supported)
@@ -199,7 +199,7 @@ static int ahci_identify(int port_num, uint32_t *sectors, char *model) {
         model[i+1] = tmp;
     }
 
-    kfree(buf);
+    kfree_null(buf);
     spinlock_release_irqrestore(&ps->lock, rflags);
     return 0;
 }

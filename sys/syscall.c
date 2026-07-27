@@ -60,7 +60,6 @@ static bool is_valid_user_ptr(const void *ptr, size_t size) {
 
 extern void isr128_wrapper(void);
 extern void *kmalloc(size_t size);
-extern void kfree(void *ptr);
 
 typedef struct {
   void (*fn)(void *);
@@ -121,8 +120,8 @@ typedef uint64_t (*syscall_handler_fn)(const syscall_args_t *args);
 
 static process_fd_pipe_t *fs_create_pipe_state(void);
 static uint64_t sys_cmd_get_pid(const syscall_args_t *args);
-static void fs_pipe_drop_reader(process_fd_pipe_t *pipe);
-static void fs_pipe_drop_writer(process_fd_pipe_t *pipe);
+static void fs_pipe_drop_reader(process_fd_pipe_t **pipe);
+static void fs_pipe_drop_writer(process_fd_pipe_t **pipe);
 static int fs_copy_unix_path(const void *addr, uint64_t addrlen, char *path_out,
                              size_t path_out_size);
 static uint64_t fs_cmd_unix_socket_create(const syscall_args_t *args);
@@ -175,21 +174,25 @@ static process_fd_pipe_t *fs_create_pipe_state(void) {
   return pipe;
 }
 
-static void fs_pipe_drop_reader(process_fd_pipe_t *pipe) {
-  if (!pipe)
+static void fs_pipe_drop_reader(process_fd_pipe_t **pipe) {
+  process_fd_pipe_t *p = *pipe;
+
+  if (!p)
     return;
-  pipe->readers--;
-  if (pipe->readers <= 0 && pipe->writers <= 0) {
-    kfree(pipe);
+  p->readers--;
+  if (p->readers <= 0 && p->writers <= 0) {
+    kfree_null(p);
   }
 }
 
-static void fs_pipe_drop_writer(process_fd_pipe_t *pipe) {
-  if (!pipe)
+static void fs_pipe_drop_writer(process_fd_pipe_t **pipe) {
+  process_fd_pipe_t *p = *pipe;
+
+  if (!p)
     return;
-  pipe->writers--;
-  if (pipe->readers <= 0 && pipe->writers <= 0) {
-    kfree(pipe);
+  p->writers--;
+  if (p->readers <= 0 && p->writers <= 0) {
+    kfree_null(p);
   }
 }
 
@@ -234,11 +237,11 @@ static void fs_socket_put_pipes(process_fd_socket_t *sock) {
   if (!sock)
     return;
   if (sock->rx_pipe) {
-    fs_pipe_drop_reader(sock->rx_pipe);
+    fs_pipe_drop_reader(&sock->rx_pipe);
     sock->rx_pipe = NULL;
   }
   if (sock->tx_pipe) {
-    fs_pipe_drop_writer(sock->tx_pipe);
+    fs_pipe_drop_writer(&sock->tx_pipe);
     sock->tx_pipe = NULL;
   }
   sock->is_connected = 0;
@@ -502,10 +505,8 @@ static uint64_t fs_cmd_unix_socket_connect(const syscall_args_t *args) {
     s2c = fs_create_pipe_state();
     if (!c2s || !s2c) {
       serial_write("[syscall] connect: failed to create pipe states\n");
-      if (c2s)
-        kfree(c2s);
-      if (s2c)
-        kfree(s2c);
+      kfree_null(c2s);
+      kfree_null(s2c);
       return -1;
     }
 
@@ -522,7 +523,7 @@ static uint64_t fs_cmd_unix_socket_connect(const syscall_args_t *args) {
 
     if (unix_enqueue_pending(lst, pc) < 0) {
       serial_write("[syscall] connect: failed to enqueue pending connection\n");
-      unix_free_pending(pc);
+      kfree_null(pc);
       fs_socket_put_pipes(sock);
       return -1;
     }
@@ -634,7 +635,7 @@ static uint64_t fs_cmd_unix_socket_accept(const syscall_args_t *args) {
     proc->fd_kind[newfd] = PROC_FD_KIND_SOCKET;
     proc->fd_flags[newfd] = O_RDWR;
 
-    unix_free_pending(pc);
+    kfree_null(pc);
     return newfd;
   }
 }
@@ -681,7 +682,7 @@ static uint64_t fs_cmd_open(const syscall_args_t *args) {
     }
   }
 
-  kfree(ref);
+  kfree_null(ref);
   vfs_close(vf);
   return (uint64_t)-24; // -EMFILE
 }
@@ -1062,7 +1063,7 @@ static uint64_t fs_list_common(process_t *proc, const char *path,
       u_entries[i].write_time = v_entries[i].write_time;
     }
   }
-  kfree(v_entries);
+  kfree_null(v_entries);
   return (uint64_t)count;
 }
 
@@ -1938,7 +1939,7 @@ static uint64_t handle_sys_sbrk(const syscall_args_t *args) {
         memset(phys_page, 0, 4096);
 
         if (!paging_map_page(proc->pml4_phys, page, v2p((uint64_t)phys_page), 0x07)) {
-          kfree(phys_page);
+          kfree_null(phys_page);
           return old_end;
         }
         proc->used_memory += 4096;
@@ -1995,7 +1996,7 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
 
       if (!paging_map_page(proc->pml4_phys, virt_addr + off, v2p((uint64_t)phys_page),
                       pt_flags)) {
-        kfree(phys_page);
+        kfree_null(phys_page);
         return (uint64_t)MAP_FAILED;
       }
     }
@@ -2098,7 +2099,7 @@ static uint64_t handle_sys_munmap(const syscall_args_t *args) {
         void *virt_ptr = (void *)p2v(phys);
         extern bool mm_is_heap_address(void *ptr);
         if (mm_is_heap_address(virt_ptr)) {
-          kfree(virt_ptr);
+          kfree_null(virt_ptr);
         }
       }
     }

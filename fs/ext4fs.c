@@ -41,7 +41,7 @@ void *ext4_user_calloc(size_t n, size_t size) {
 }
 
 void ext4_user_free(void *ptr) {
-    kfree(ptr);
+    kfree_null(ptr);
 }
 
 typedef struct {
@@ -151,7 +151,7 @@ void* ext4fs_mount_volume(void *disk_ptr) {
     int r = ext4_device_register(&vol->bdev, vol->dev_name);
     if (r != EOK) {
         serial_write("[EXT4] device_register failed\n");
-        kfree(vol);
+        kfree_null(vol);
         return NULL;
     }
 
@@ -161,7 +161,7 @@ void* ext4fs_mount_volume(void *disk_ptr) {
         serial_write(d->devname);
         serial_write("\n");
         ext4_device_unregister(vol->dev_name);
-        kfree(vol);
+        kfree_null(vol);
         return NULL;
     }
 
@@ -190,7 +190,7 @@ void ext4fs_umount_volume(void *fs_private) {
     ext4_journal_stop(vol->mount_point);
     ext4_umount(vol->mount_point);
     ext4_device_unregister(vol->dev_name);
-    kfree(vol);
+    kfree_null(vol);
 }
 
 static void ext4fs_build_path(ext4fs_vol_t *vol, const char *rel,
@@ -229,7 +229,7 @@ static void* vfs_ext4_open(void *fs_private, const char *rel_path,
 
     int r = ext4_fopen(&h->file, path, mode);
     if (r != EOK) {
-        kfree(h);
+        kfree_null(h);
         return NULL;
     }
     h->valid = true;
@@ -241,7 +241,7 @@ static void vfs_ext4_close(void *fs_private, void *file_handle) {
     ext4fs_handle_t *h = (ext4fs_handle_t *)file_handle;
     if (!h) return;
     if (h->valid) ext4_fclose(&h->file);
-    kfree(h);
+    kfree_null(h);
 }
 
 static int vfs_ext4_read(void *fs_private, void *file_handle,

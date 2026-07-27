@@ -36,7 +36,4 @@ int unix_listener_has_pending(unix_listener_t *lst);
 // Create a pending connection object (holds pipe pointers)
 unix_pending_conn_t *unix_create_pending_conn(void *pipe1, void *pipe2, int client_pid, int client_fd);
 
-// Release pending conn
-void unix_free_pending(unix_pending_conn_t *pc);
-
 #endif

@@ -73,7 +73,7 @@ static process_t *pid_table_remove(uint32_t pid) {
             found = curr->proc;
             if (prev) prev->next = curr->next;
             else pid_hash_table[idx] = curr->next;
-            kfree(curr);
+            kfree_null(curr);
             break;
         }
         prev = curr;
@@ -93,7 +93,7 @@ void process_put(process_t *proc) {
     if (__atomic_fetch_sub(&proc->refcount, 1, __ATOMIC_RELEASE) == 1) {
         __atomic_thread_fence(__ATOMIC_ACQUIRE);
         if (proc->kernel_stack_alloc) {
-            kfree(proc->kernel_stack_alloc);
+            kfree_null(proc->kernel_stack_alloc);
             proc->kernel_stack_alloc = NULL;
         }
         bool should_destroy_pml4 = true;
@@ -103,7 +103,7 @@ void process_put(process_t *proc) {
                 should_destroy_pml4 = false;
             } else {
                 __atomic_thread_fence(__ATOMIC_ACQUIRE);
-                kfree(proc->pml4_refcount);
+                kfree_null(proc->pml4_refcount);
                 proc->pml4_refcount = NULL;
             }
         }
@@ -115,17 +115,17 @@ void process_put(process_t *proc) {
                 for (uint64_t off = 0; off < stack_size; off += 4096) {
                     paging_unmap_page(proc->pml4_phys, stack_top - stack_size + off);
                 }
-                kfree(proc->user_stack_alloc);
+                kfree_null(proc->user_stack_alloc);
                 proc->user_stack_alloc = NULL;
             }
             extern void paging_destroy_user_pml4_phys(uint64_t pml4_phys, bool free_mapped);
             paging_destroy_user_pml4_phys(proc->pml4_phys, true);
             proc->pml4_phys = 0;
         } else if (proc->user_stack_alloc && !should_destroy_pml4) {
-            kfree(proc->user_stack_alloc);
+            kfree_null(proc->user_stack_alloc);
             proc->user_stack_alloc = NULL;
         }
-        kfree(proc);
+        kfree_null(proc);
     }
 }
 
@@ -195,7 +195,7 @@ void process_close_fd_inner(process_t *proc, int fd) {
             ref->refs--;
             if (ref->refs <= 0) {
                 if (ref->file) vfs_close((vfs_file_t *)ref->file);
-                kfree(ref);
+                kfree_null(ref);
             }
         }
     } else if (proc->fd_kind[fd] == PROC_FD_KIND_PIPE_READ || proc->fd_kind[fd] == PROC_FD_KIND_PIPE_WRITE) {
@@ -204,7 +204,7 @@ void process_close_fd_inner(process_t *proc, int fd) {
             if (proc->fd_kind[fd] == PROC_FD_KIND_PIPE_READ) pipe->readers--;
             else pipe->writers--;
             if (pipe->readers <= 0 && pipe->writers <= 0) {
-                kfree(pipe);
+                kfree_null(pipe);
             }
         }
     } else if (proc->fd_kind[fd] == PROC_FD_KIND_SOCKET) {
@@ -222,7 +222,7 @@ static void process_socket_drop_pipes(process_fd_socket_t *sock) {
         process_fd_pipe_t *pipe = sock->rx_pipe;
         pipe->readers--;
         if (pipe->readers <= 0 && pipe->writers <= 0) {
-            kfree(pipe);
+            kfree_null(pipe);
         }
         sock->rx_pipe = NULL;
     }
@@ -230,7 +230,7 @@ static void process_socket_drop_pipes(process_fd_socket_t *sock) {
         process_fd_pipe_t *pipe = sock->tx_pipe;
         pipe->writers--;
         if (pipe->readers <= 0 && pipe->writers <= 0) {
-            kfree(pipe);
+            kfree_null(pipe);
         }
         sock->tx_pipe = NULL;
     }
@@ -263,7 +263,7 @@ void process_socket_release(process_fd_socket_t *sock) {
         }
         process_socket_drop_pipes(sock);
     }
-    kfree(sock);
+    kfree_null(sock);
 }
 
 static void process_init_signal_state(process_t *proc) {
@@ -402,8 +402,8 @@ process_t* process_create(void (*entry_point)(void), bool is_user) {
     void* user_stack = kmalloc_aligned(131072, 4096);
     void* kernel_stack = kmalloc_aligned(32768, 32768); // Needed for when user interrupts to Ring 0
     if (!user_stack || !kernel_stack) {
-        if (user_stack) kfree(user_stack);
-        if (kernel_stack) kfree(kernel_stack);
+        kfree_null(user_stack);
+        kfree_null(kernel_stack);
         spinlock_release_irqrestore(&runqueue_lock, rflags);
         return NULL;
     }
@@ -474,7 +474,7 @@ process_t* process_create(void (*entry_point)(void), bool is_user) {
 
         new_proc->kernel_stack = (uint64_t)kernel_stack + 32768;
         new_proc->rsp = (uint64_t)stack_ptr;
-        kfree(user_stack); // Unused for kernel threads
+        kfree_null(user_stack); // Unused for kernel threads
     }
 
     new_proc->fpu_initialized = true;
@@ -524,7 +524,7 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
     // 1. Setup Page Table
     new_proc->pml4_phys = paging_create_user_pml4_phys();
     if (!new_proc->pml4_phys) {
-        kfree(new_proc);
+        kfree_null(new_proc);
         return NULL;
     }
     new_proc->pml4_refcount = (int *)kmalloc(sizeof(int));
@@ -662,8 +662,8 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
     void* stack = kmalloc_aligned(user_stack_size, 4096);
     void* kernel_stack = kmalloc_aligned(65536, 65536); 
     if (!stack || !kernel_stack) {
-        if (stack) kfree(stack);
-        if (kernel_stack) kfree(kernel_stack);
+        kfree_null(stack);
+        kfree_null(kernel_stack);
         return NULL;
     }
     memset(stack, 0, user_stack_size);
@@ -672,8 +672,8 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
     // Map User stack to 0x800000
     for (uint64_t i = 0; i < (user_stack_size / 4096); i++) {
         if (!paging_map_page(new_proc->pml4_phys, 0x800000 - user_stack_size + (i * 4096), v2p((uint64_t)stack + (i * 4096)), PT_PRESENT | PT_RW | PT_USER)) {
-            kfree(stack);
-            kfree(kernel_stack);
+            kfree_null(stack);
+            kfree_null(kernel_stack);
             return NULL;
         }
     }
@@ -1029,7 +1029,7 @@ static void process_cleanup_inner(process_t *proc) {
                     extern void paging_unmap_page(uint64_t pml4_phys, uint64_t virtual_addr);
                     paging_unmap_page(proc->pml4_phys, proc->elf_segments[i].vaddr + off);
                 }
-                kfree(proc->elf_segments[i].ptr);
+                kfree_null(proc->elf_segments[i].ptr);
                 proc->elf_segments[i].ptr = NULL;
             }
         }
@@ -1325,7 +1325,7 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
     if (!new_pml4) return -1;
 
     for (uint32_t i = 0; i < proc->elf_segment_count; i++) {
-        if (proc->elf_segments[i].ptr) kfree(proc->elf_segments[i].ptr);
+        kfree_null(proc->elf_segments[i].ptr);
         proc->elf_segments[i].ptr = NULL;
     }
     proc->elf_segment_count = 0;
@@ -1351,7 +1351,7 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
 
     for (uint64_t i = 0; i < (user_stack_size / 4096); i++) {
         if (!paging_map_page(new_pml4, 0x800000 - user_stack_size + (i * 4096), v2p((uint64_t)stack + (i * 4096)), PT_PRESENT | PT_RW | PT_USER)) {
-            kfree(stack);
+            kfree_null(stack);
             paging_destroy_user_pml4_phys(new_pml4, true);
             return -1;
         }
@@ -1457,7 +1457,7 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
             destroy_old = false;
         } else {
             __atomic_thread_fence(__ATOMIC_ACQUIRE);
-            kfree(old_refcount);
+            kfree_null(old_refcount);
         }
     }
 
@@ -1468,13 +1468,12 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
             for (uint64_t off = 0; off < user_stack_size; off += 4096) {
                 paging_unmap_page(old_pml4, stack_top - user_stack_size + off);
             }
-            kfree(old_stack);
-            old_stack = NULL;
+            kfree_null(old_stack);
         }
         extern void paging_destroy_user_pml4_phys(uint64_t pml4_phys, bool free_mapped);
         paging_destroy_user_pml4_phys(old_pml4, true);
     } else if (old_stack && !destroy_old) {
-        kfree(old_stack);
+        kfree_null(old_stack);
     }
     proc->fs_base = 0;
     wrmsr(MSR_FS_BASE, 0);
@@ -1590,7 +1589,7 @@ process_t* process_duplicate(registers_t *parent_regs) {
     extern uint64_t paging_clone_user_pml4(uint64_t parent_pml4_phys);
     child->pml4_phys = paging_clone_user_pml4(parent->pml4_phys);
     if (!child->pml4_phys) {
-        kfree(child);
+        kfree_null(child);
         spinlock_release_irqrestore(&runqueue_lock, rflags);
         return NULL;
     }
@@ -1604,8 +1603,8 @@ process_t* process_duplicate(registers_t *parent_regs) {
     if (!child->kernel_stack_alloc) {
         extern void paging_destroy_user_pml4_phys(uint64_t pml4_phys, bool free_mapped);
         paging_destroy_user_pml4_phys(child->pml4_phys, true);
-        if (child->pml4_refcount) kfree(child->pml4_refcount);
-        kfree(child);
+        kfree_null(child->pml4_refcount);
+        kfree_null(child);
         spinlock_release_irqrestore(&runqueue_lock, rflags);
         return NULL;
     }
@@ -1730,7 +1729,7 @@ process_t* process_create_thread(registers_t *parent_regs, uint64_t entry_point,
         if (child->pml4_refcount) {
             __atomic_fetch_sub(child->pml4_refcount, 1, __ATOMIC_RELAXED);
         }
-        kfree(child);
+        kfree_null(child);
         spinlock_release_irqrestore(&runqueue_lock, rflags);
         return NULL;
     }

@@ -51,7 +51,7 @@ static void disk_load_fat32_label(Disk *disk) {
         if (label[0]) strcpy(disk->label, label);
     }
 
-    kfree(buffer);
+    kfree_null(buffer);
 }
 
 // === ATA Definitions (Legacy IDE PIO — kept as fallback) ===
@@ -436,7 +436,7 @@ void disk_register_partition(Disk *parent, uint32_t lba_offset, uint32_t sector_
                     }
                 }
             }
-            kfree(sb_buf);
+            kfree_null(sb_buf);
         }
     }
 }
@@ -529,7 +529,7 @@ static bool disk_probe_fat32(Disk *disk, uint32_t lba) {
     bool fat32 = false;
     if (disk->read_sector(disk, lba, pbuf) == 0)
         fat32 = is_fat32_bpb(pbuf);
-    kfree(pbuf);
+    kfree_null(pbuf);
     return fat32;
 }
 
@@ -542,7 +542,7 @@ static void parse_mbr_partitions(Disk *disk) {
         serial_write("[DISK] MBR read failed on /dev/");
         serial_write(disk->devname);
         serial_write("\n");
-        kfree(buffer);
+        kfree_null(buffer);
         return;
     }
 
@@ -551,7 +551,7 @@ static void parse_mbr_partitions(Disk *disk) {
         serial_write("[DISK] Invalid MBR signature on /dev/");
         serial_write(disk->devname);
         serial_write("\n");
-        kfree(buffer);
+        kfree_null(buffer);
         return;
     }
 
@@ -593,7 +593,7 @@ static void parse_mbr_partitions(Disk *disk) {
         serial_write("\n");
     }
 
-    kfree(buffer);
+    kfree_null(buffer);
 }
 
 // === ATA Drive Discovery ===
@@ -780,7 +780,7 @@ int disk_write_gpt(Disk *disk, disk_partition_spec_t *parts, int count) {
     uint32_t entry_crc = crc32_compute(entry_buf, GPT_PART_ENTRY_COUNT * GPT_PART_ENTRY_SIZE);
 
     uint8_t *hdr_buf = (uint8_t *)kmalloc(512);
-    if (!hdr_buf) { kfree(entry_buf); return -1; }
+    if (!hdr_buf) { kfree_null(entry_buf); return -1; }
     for (int i = 0; i < 512; i++) hdr_buf[i] = 0;
 
     GPT_Header *hdr = (GPT_Header *)hdr_buf;
@@ -803,7 +803,7 @@ int disk_write_gpt(Disk *disk, disk_partition_spec_t *parts, int count) {
     hdr->crc32 = crc32_compute(hdr_buf, hdr->header_size);
 
     uint8_t *mbr_buf = (uint8_t *)kmalloc(512);
-    if (!mbr_buf) { kfree(entry_buf); kfree(hdr_buf); return -1; }
+    if (!mbr_buf) { kfree_null(entry_buf); kfree_null(hdr_buf); return -1; }
     for (int i = 0; i < 512; i++) mbr_buf[i] = 0;
     mbr_buf[446] = 0x00;           /* Status: Non-bootable */
     mbr_buf[447] = 0x00; mbr_buf[448] = 0x02; mbr_buf[449] = 0x00; /* CHS Start: 0x000200 */
@@ -818,17 +818,17 @@ int disk_write_gpt(Disk *disk, disk_partition_spec_t *parts, int count) {
     mbr_buf[510] = 0x55;
     mbr_buf[511] = 0xAA;
     disk->write_sector(disk, 0, mbr_buf);
-    kfree(mbr_buf);
+    kfree_null(mbr_buf);
 
     if (disk->write_sector(disk, 1, hdr_buf) != 0) {
         serial_write("[GPT] Error: failed to write header\n");
-        kfree(entry_buf); kfree(hdr_buf); return -1;
+        kfree_null(entry_buf); kfree_null(hdr_buf); return -1;
     }
 
     for (int s = 0; s < 32; s++) {
         if (disk->write_sector(disk, 2 + s, entry_buf + s * 512) != 0) {
             serial_write("[GPT] Error: failed to write partition entries\n");
-            kfree(entry_buf); kfree(hdr_buf); return -1;
+            kfree_null(entry_buf); kfree_null(hdr_buf); return -1;
         }
     }
 
@@ -854,8 +854,8 @@ int disk_write_gpt(Disk *disk, disk_partition_spec_t *parts, int count) {
     }
     disk->write_sector(disk, disk->total_sectors - 1, hdr_buf);
 
-    kfree(entry_buf);
-    kfree(hdr_buf);
+    kfree_null(entry_buf);
+    kfree_null(hdr_buf);
 
     serial_write("[DISK] GPT written to /dev/");
     serial_write(disk->devname);
@@ -872,7 +872,7 @@ int disk_write_mbr(Disk *disk, disk_partition_spec_t *parts, int count) {
     for (int i = 0; i < 512; i++) buf[i] = 0;
 
     for (int i = 0; i < count; i++) {
-        if (parts[i].sector_count == 0) { kfree(buf); return -1; }
+        if (parts[i].sector_count == 0) { kfree_null(buf); return -1; }
         uint8_t *entry = buf + 446 + i * 16;
         entry[0] = 0x80; 
         entry[4] = 0x0C;
@@ -891,7 +891,7 @@ int disk_write_mbr(Disk *disk, disk_partition_spec_t *parts, int count) {
     buf[511] = 0xAA;
 
     int ret = disk->write_sector(disk, 0, buf);
-    kfree(buf);
+    kfree_null(buf);
     if (ret == 0) {
         serial_write("[DISK] MBR written to /dev/");
         serial_write(disk->devname);
@@ -944,7 +944,7 @@ static void disk_remove_partitions(Disk *parent) {
             disks[disk_count - 1] = NULL;
             disk_count--;
             i--;
-            kfree(p);
+            kfree_null(p);
         }
     }
 }
@@ -957,7 +957,7 @@ static void parse_gpt_partitions(Disk *disk) {
         serial_write("[DISK] GPT header read failed on /dev/");
         serial_write(disk->devname);
         serial_write("\n");
-        kfree(buffer);
+        kfree_null(buffer);
         return;
     }
 
@@ -966,7 +966,7 @@ static void parse_gpt_partitions(Disk *disk) {
         serial_write("[DISK] GPT signature missing on /dev/");
         serial_write(disk->devname);
         serial_write("\n");
-        kfree(buffer);
+        kfree_null(buffer);
         return;
     }
 
@@ -975,7 +975,7 @@ static void parse_gpt_partitions(Disk *disk) {
     uint64_t entry_lba = hdr->partition_entry_lba;
 
     uint8_t *entry_buf = (uint8_t*)kmalloc(512);
-    if (!entry_buf) { kfree(buffer); return; }
+    if (!entry_buf) { kfree_null(buffer); return; }
 
     int part_num = 1;
     int part_count = 0;
@@ -1016,8 +1016,8 @@ static void parse_gpt_partitions(Disk *disk) {
         serial_write("\n");
     }
 
-    kfree(entry_buf);
-    kfree(buffer);
+    kfree_null(entry_buf);
+    kfree_null(buffer);
 }
 
 int disk_rescan(Disk *disk) {
@@ -1037,7 +1037,7 @@ int disk_rescan(Disk *disk) {
                 serial_write("[DISK] GPT detected on /dev/");
                 serial_write(disk->devname);
                 serial_write("\n");
-                kfree(buffer);
+                kfree_null(buffer);
                 parse_gpt_partitions(disk);
                 return 0;
             }
@@ -1046,7 +1046,7 @@ int disk_rescan(Disk *disk) {
             serial_write(disk->devname);
             serial_write("\n");
         }
-        kfree(buffer);
+        kfree_null(buffer);
     }
 
     parse_mbr_partitions(disk);

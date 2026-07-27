@@ -41,7 +41,7 @@ static void* sysfs_open(void *fs_private, const char *path, const char *mode) {
 }
 
 static void sysfs_close(void *fs_private, void *handle) {
-    if (handle) kfree(handle);
+    kfree_null(handle);
 }
 
 static int sysfs_read(void *fs_private, void *handle, void *buf, size_t size) {

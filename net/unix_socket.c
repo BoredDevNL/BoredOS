@@ -49,10 +49,10 @@ int unix_unregister_listener(const char *path) {
             spinlock_release_irqrestore(&listeners_lock, flags);
             while (cur->pending_head) {
                 struct unix_pending_conn *next = cur->pending_head->next;
-                unix_free_pending(cur->pending_head);
+                kfree_null(cur->pending_head);
                 cur->pending_head = next;
             }
-            kfree(cur);
+            kfree_null(cur);
             return 0;
         }
         prev = cur; cur = cur->next;
@@ -143,7 +143,3 @@ unix_pending_conn_t *unix_create_pending_conn(void *pipe1, void *pipe2, int clie
     return pc;
 }
 
-void unix_free_pending(unix_pending_conn_t *pc) {
-    if (!pc) return;
-    kfree(pc);
-}

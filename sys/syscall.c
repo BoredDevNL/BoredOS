@@ -181,7 +181,7 @@ static void fs_pipe_drop_reader(process_fd_pipe_t **pipe) {
     return;
   p->readers--;
   if (p->readers <= 0 && p->writers <= 0) {
-    kfree_null(p);
+    kfree_null(*pipe);
   }
 }
 
@@ -192,7 +192,7 @@ static void fs_pipe_drop_writer(process_fd_pipe_t **pipe) {
     return;
   p->writers--;
   if (p->readers <= 0 && p->writers <= 0) {
-    kfree_null(p);
+    kfree_null(*pipe);
   }
 }
 

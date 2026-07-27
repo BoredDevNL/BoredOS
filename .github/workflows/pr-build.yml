@@ -1,0 +1,36 @@
+name: Pull Request CI Build
+
+on:
+  pull_request:
+    branches:
+      - 'main'
+
+jobs:
+  build-test:
+    name: Build & Test ISO
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            make \
+            nasm \
+            xorriso \
+            meson \
+            ninja-build \
+            lz4
+
+      - name: Install BoredOS toolchain
+        run: |
+          bash toolchain/install.sh $HOME/boredos-toolchain
+          echo "$HOME/boredos-toolchain/bin" >> $GITHUB_PATH
+
+      - name: Build ISO
+        run: make -j4

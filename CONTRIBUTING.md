@@ -72,7 +72,7 @@ To help prevent identity spoofing, we encourage signing commits with an **SSH or
 
 `git commit -S -s -m "your commit message"`
 
-*If you choose not to sign with an SSH/GPG key, simply remove the `-s` flag*
+*If you choose not to sign with an SSH/GPG key, simply remove the `-S` flag*
 
 <details>
 <summary>How to set up SSH Commit Signing with GitHub (Click to expand)</summary>

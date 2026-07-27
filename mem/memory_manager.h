@@ -50,8 +50,9 @@ void* kmalloc_aligned(size_t size, size_t alignment);
 void kfree(void *ptr);
 #define kfree_null(ptr) \
   do { \
-    kfree(ptr); \
-    (ptr) = NULL; \
+    __typeof__(ptr) *_p = &(ptr); \
+    kfree(*_p); \
+    *_p = NULL; \
   } while (0)
 void* krealloc(void *ptr, size_t new_size);
 

@@ -211,30 +211,30 @@ void paging_destroy_user_pml4_phys(uint64_t pml4_phys, bool free_mapped_pages) {
                                         if (pt->entries[pt_idx] & PT_PRESENT) {
                                             uint64_t phys = pt->entries[pt_idx] & PT_ADDR_MASK;
                                             extern bool mm_is_heap_address(void *ptr);
-                                            if (mm_is_heap_address((void*)p2v(phys))) {
-                                                extern void kfree(void *ptr);
-                                                kfree((void*)p2v(phys));
+                                            void *phys_ptr = (void *)p2v(phys);
+                                            if (mm_is_heap_address(phys_ptr)) {
+                                                kfree_null(phys_ptr);
                                             }
                                         }
                                     }
                                 }
                                 
-                                extern void kfree(void* ptr);
-                                kfree((void*)pt);
+                                void *pt_ptr = (void *)pt;
+                                kfree_null(pt_ptr);
                             }
                         }
                     }
-                    extern void kfree(void* ptr);
-                    kfree((void*)pd);
+                    void *pd_ptr = (void *)pd;
+                    kfree_null(pd_ptr);
                 }
             }
-            extern void kfree(void* ptr);
-            kfree((void*)pdpt);
+            void *pdpt_ptr = (void *)pdpt;
+            kfree_null(pdpt_ptr);
         }
     }
     // Finally free the pml4 itself
-    extern void kfree(void* ptr);
-    kfree((void*)pml4);
+    void *plm4_ptr = (void *)pml4;
+    kfree_null(plm4_ptr);
 }
 
 uint64_t paging_virt2phys(uint64_t pml4_phys, uint64_t virtual_addr) {

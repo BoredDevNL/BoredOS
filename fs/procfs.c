@@ -51,7 +51,7 @@ void* procfs_open(void *fs_private, const char *path, const char *mode) {
 }
 
 void procfs_close(void *fs_private, void *handle) {
-    if (handle) kfree(handle);
+    kfree_null(handle);
 }
 
 int procfs_read(void *fs_private, void *handle, void *buf, size_t size) {
@@ -282,7 +282,7 @@ int procfs_read(void *fs_private, void *handle, void *buf, size_t size) {
         process_t *proc = process_get_by_pid(h->pid);
 
         if (!proc) {
-            kfree(out);
+            kfree_null(out);
             return -1;
         }
 
@@ -339,7 +339,7 @@ strcpy(out + strlen(out), "\nIdle: ");
     size_t len = strlen(out);
 
     if (h->offset >= len) {
-        kfree(out);
+        kfree_null(out);
         return 0;
     }
 
@@ -349,20 +349,20 @@ strcpy(out + strlen(out), "\nIdle: ");
         to_copy = size;
 
     if (to_copy > INT_MAX) {
-        kfree(out);
+        kfree_null(out);
         return -1;
     }
 
     memcpy(buf, out + h->offset, to_copy);
 
     if (h->offset > SIZE_MAX - to_copy) {
-        kfree(out);
+        kfree_null(out);
         return -1;
     }
 
     h->offset += to_copy;
 
-    kfree(out);
+    kfree_null(out);
 
     return (int)to_copy;
 }

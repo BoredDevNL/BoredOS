@@ -77,9 +77,10 @@ void shm_unref(shm_segment_t *seg) {
         
         // Free backing physical pages
         for (uint32_t i = 0; i < seg->page_count; i++) {
-            kfree((void *)p2v(seg->phys_pages[i]));
+            void *physical_page = (void *)p2v(seg->phys_pages[i]);
+            kfree_null(physical_page);
         }
-        kfree(seg);
+        kfree_null(seg);
     }
     spinlock_release_irqrestore(&shm_lock, flags);
 }
@@ -101,7 +102,8 @@ int shm_allocate(shm_segment_t *seg, size_t size) {
             if (!page) {
                 // Rollback newly allocated pages
                 for (uint32_t j = seg->page_count; j < i; j++) {
-                    kfree((void *)p2v(seg->phys_pages[j]));
+                    void *physical_page = (void *)p2v(seg->phys_pages[j]);
+                    kfree_null(physical_page);
                 }
                 spinlock_release_irqrestore(&shm_lock, flags);
                 return -1;
@@ -150,9 +152,10 @@ void shm_unlink(const char *name) {
             cur->ref_count--;
             if (cur->ref_count <= 0) {
                 for (uint32_t i = 0; i < cur->page_count; i++) {
-                    kfree((void *)p2v(cur->phys_pages[i]));
+                    void *physical_page = (void *)p2v(cur->phys_pages[i]);
+                    kfree_null(physical_page);
                 }
-                kfree(cur);
+                kfree_null(cur);
             }
             break;
         }

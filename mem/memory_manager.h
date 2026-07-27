@@ -48,6 +48,12 @@ void* kcalloc(size_t n, size_t size);
 // alignment must be a power of 2. Requests <= 512 B with alignment <= 8 are served by the slab allocator.
 void* kmalloc_aligned(size_t size, size_t alignment);
 void kfree(void *ptr);
+#define kfree_null(ptr) \
+  do { \
+    __auto_type _p = &(ptr); \
+    kfree(*_p); \
+    *_p = NULL; \
+  } while (0)
 void* krealloc(void *ptr, size_t new_size);
 
 MemStats memory_get_stats(void);

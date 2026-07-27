@@ -888,7 +888,7 @@ int network_socket_recvfrom(void *s, void *buf, size_t max_len, int nonblock, ui
 
     int copied = (int)to_copy;
     pbuf_free(pack->p);
-    kfree(pack);
+    kfree_null(pack);
 
     return copied;
 }
@@ -1019,7 +1019,7 @@ void network_socket_close(void *s) {
             while (curr) {
                 udp_packet_t *next = curr->next;
                 pbuf_free(curr->p);
-                kfree(curr);
+                kfree_null(curr);
                 curr = next;
             }
         } else {

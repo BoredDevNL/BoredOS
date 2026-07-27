@@ -465,7 +465,7 @@ static int read_cpu_info(char *buf, size_t size, size_t offset) {
     size_t len = strlen(out);
 
     if (offset >= len) {
-        kfree(out);
+        kfree_null(out);
         return 0;
     }
 
@@ -475,13 +475,13 @@ static int read_cpu_info(char *buf, size_t size, size_t offset) {
         to_copy = size;
 
     if (to_copy > INT_MAX) {
-        kfree(out);
+        kfree_null(out);
         return -1;
     }
 
     memcpy(buf, out + offset, to_copy);
 
-    kfree(out);
+    kfree_null(out);
 
     return (int)to_copy;
 }

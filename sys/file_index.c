@@ -12,11 +12,6 @@ static file_index_t g_file_index = {0};
 static spinlock_t g_index_lock = SPINLOCK_INIT;
 static bool g_index_valid = false;
 
-static void str_cat(char *d, const char *s) {
-    while (*d) d++;
-    strcpy(d, s);
-}
-
 static bool str_starts_with(const char *str, const char *prefix) {
     while (*prefix) {
         if (*str++ != *prefix++) return false;
@@ -78,7 +73,7 @@ static void index_walk_directory(const char *path, int depth) {
     int count = vfs_list_directory(path, entries, 1024, 0);
     
     if (count <= 0 || count > 1024) {
-        kfree(entries);
+        kfree_null(entries);
         return;
     }
     
@@ -145,7 +140,7 @@ static void index_walk_directory(const char *path, int depth) {
     }
     
     
-    kfree(entries);
+    kfree_null(entries);
 }
 
 

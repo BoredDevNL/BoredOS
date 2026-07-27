@@ -14,6 +14,21 @@ AI-generated code may not always meet our standards for quality and may introduc
 - System crashes
 - Data loss
 
+## Licensing & Provenance
+ 
+BoredOS is licensed under GPLv3, and every contribution must be something the contributor has the right to submit under that license. This requirement does not change when AI tools are involved, but it does become harder to verify, so this section spells out how it applies.
+ 
+**AI use extends your DCO certification.** When you sign off on a commit (`git commit -s`), you are certifying that you have the right to contribute the work under GPLv3. If any part of that commit was generated or substantially assisted by an AI tool, your sign-off also certifies that:
+ 
+- To the best of your knowledge, the output does not reproduce copyrighted, proprietary, or incompatibly-licensed code from the tool's training data.
+- You have reviewed the relevant AI tool's terms of service and believe the output is one you are entitled to license under GPLv3.
+- You take the same authorship responsibility for the contribution as you would if you had written it yourself, line by line.
+**Disclosures must name the tool.** "I used AI" is not sufficient. Disclose which tool (and version, if known) was used, since different tools carry different licensing risk depending on their training data and terms of service. This also gives maintainers something concrete to act on if a provenance concern comes up later.
+ 
+**Provenance issues can surface after merge.** Licensing problems in AI-generated code are not always visible at review time. If a contribution is later found to reproduce copyrighted or incompatibly-licensed material, it will be reverted regardless of prior disclosure or merge status, and the contributor will be notified. Disclosure at submission time is still required and still matters for how a violation is handled, but it does not retroactively clear code that turns out to carry a real licensing problem.
+ 
+**Maintainers may request additional verification.** For substantial AI-assisted contributions, especially in drivers or kernel code, maintainers may ask a contributor to run license/duplication-detection tooling (e.g., ScanCode Toolkit) against the submission, or may run it themselves, before merging.
+
 ## Pull Requests and Code Reviews
 
 You are discouraged from using AI tools to generate code for pull requests. If AI tools are used, the contributor must disclose this in the PR description and ensure that the code meets our quality standards, explaining exactly **why** and **how** the AI tool was used.

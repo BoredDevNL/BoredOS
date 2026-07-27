@@ -50,7 +50,7 @@ void* kmalloc_aligned(size_t size, size_t alignment);
 void kfree(void *ptr);
 #define kfree_null(ptr) \
   do { \
-    __typeof__(ptr) *_p = &(ptr); \
+    __auto_type _p = &(ptr); \
     kfree(*_p); \
     *_p = NULL; \
   } while (0)

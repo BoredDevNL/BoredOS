@@ -278,7 +278,7 @@ void sys_sem_free(sys_sem_t *sem)
   --lwip_stats.sys.sem.used;
 #endif /* SYS_STATS */
 
-  kfree_null(sem);
+  osSemaphoreDelete(*sem);
 }
 /*-----------------------------------------------------------------------------------*/
 int sys_sem_valid(sys_sem_t *sem)

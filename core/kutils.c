@@ -71,16 +71,16 @@ int memcmp(const void *str1, const void *str2, size_t count) {
     return 0;
 }
 
-void *memmove(void *dest, const void *src, uint64_t n) {
+void *memmove(void *dest, const void *src, size_t n) {
     uint8_t *pdest = (uint8_t *)dest;
     const uint8_t *psrc = (const uint8_t *)src;
 
     if (src > dest) {
-        for (uint64_t i = 0; i < n; i++) {
+        for (size_t i = 0; i < n; i++) {
             pdest[i] = psrc[i];
         }
     } else if (src < dest) {
-        for (uint64_t i = n; i > 0; i--) {
+        for (size_t i = n; i > 0; i--) {
             pdest[i-1] = psrc[i-1];
         }
     }
@@ -118,7 +118,7 @@ void strcpy(char *dest, const char *src) {
 }
 
 char *strncpy(char *dest, const char *src, size_t n) {
-    size_t i;
+    size_t i = 0;
 
     for (i = 0; i < n && src[i] != '\0'; i++) {
         dest[i] = src[i];

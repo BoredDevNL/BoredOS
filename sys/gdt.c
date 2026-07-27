@@ -5,14 +5,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "memory_manager.h"
-
-static void *gdt_memset(void *s, int c, size_t n) {
-    uint8_t *p = (uint8_t *)s;
-    while (n--) {
-        *p++ = (uint8_t)c;
-    }
-    return s;
-}
+#include "kutils.h"
 
 // Base GDT: 5 segments + 1 TSS (2 entries) = 7 entries for BSP.
 // For SMP: we add 2 entries per additional CPU for their TSS.
@@ -102,7 +95,7 @@ void gdt_init(void) {
     gdt_set_gate(4, 0, 0, 0xFA, 0xAF);
 
     // BSP TSS segment (entries 5 and 6)
-    gdt_memset(&tss, 0, sizeof(struct tss_entry));
+    memset(&tss, 0, sizeof(struct tss_entry));
     tss.iopb_offset = sizeof(struct tss_entry);
     
     void* initial_tss_stack = kmalloc_aligned(4096, 4096);
@@ -126,7 +119,7 @@ void gdt_init_ap_tss(uint32_t cpu_count) {
     // Allocate per-CPU TSS structures
     ap_tss_array = (struct tss_entry *)kmalloc(ap_count * sizeof(struct tss_entry));
     if (!ap_tss_array) return;
-    gdt_memset(ap_tss_array, 0, ap_count * sizeof(struct tss_entry));
+    memset(ap_tss_array, 0, ap_count * sizeof(struct tss_entry));
 
     // Each AP TSS goes at GDT slot 7 + (i*2) (since slot 5-6 is BSP TSS)
     for (uint32_t i = 0; i < ap_count; i++) {

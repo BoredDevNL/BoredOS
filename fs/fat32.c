@@ -100,12 +100,6 @@ static void fs_serial_num(uint32_t n) {
     fs_serial_char('0' + (n % 10));
 }
 
-static void fs_strcat(char *dest, const char *src) {
-    while (*dest) dest++;
-    strcpy(dest, src);
-}
-
-
 static void fat32_resolve_entry_name(const FAT32_DirEntry *entry,
                                      const char *lfn_buffer, bool has_lfn,
                                      char *name) {
@@ -255,7 +249,7 @@ void fat32_normalize_path(const char *path, char *normalized) {
                     temp[temp_len++] = '/';
                     temp[temp_len] = 0;
                 }
-                fs_strcat(temp, component);
+                strcat(temp, component);
                 temp_len = strlen(temp);
             }
         }
@@ -2594,7 +2588,7 @@ bool fat32_rename(const char *old_path, const char *new_path) {
                    n->full_path[old_len] == '/') {
             strcpy(suffix, n->full_path + old_len);
             strcpy(n->full_path, new_path);
-            fs_strcat(n->full_path, suffix);
+            strcat(n->full_path, suffix);
         }
         if (strcmp(n->parent_path, old_path) == 0) {
             strcpy(n->parent_path, new_path);
@@ -2603,7 +2597,7 @@ bool fat32_rename(const char *old_path, const char *new_path) {
                    n->parent_path[old_len] == '/') {
             strcpy(suffix, n->parent_path + old_len);
             strcpy(n->parent_path, new_path);
-            fs_strcat(n->parent_path, suffix);
+            strcat(n->parent_path, suffix);
         }
     }
     kfree(suffix);

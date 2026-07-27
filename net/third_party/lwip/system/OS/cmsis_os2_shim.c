@@ -291,4 +291,3 @@ uint32_t osKernelGetTickCount(void) {
     extern uint32_t get_ticks(void);
     return get_ticks();
 }
-

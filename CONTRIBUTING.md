@@ -22,7 +22,7 @@ Before jumping into code:
 
 1. **Fork the Repository** and create your branch from `main`:
 
-   `git checkout -b feature/my-cool-driver`
+   `git switch -c feature/my-cool-driver`
 2. **Build & Test Locally:** Ensure your changes build cleanly without warnings.
 3. **Keep Commits Clean:** 
 

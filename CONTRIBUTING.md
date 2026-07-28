@@ -13,7 +13,7 @@ We aim to foster an open, welcoming, and respectful community. Please treat all 
 ## 2. Getting Started & Where to Help
 
 Before jumping into code:
-* **Check the Issue Tracker:** Look for open issues labeled `good first issue` or `help wanted`.
+* **Check the Issue Tracker:** Look for open issues labeled "[good first issue](https://github.com/BoredOS/BoredOS/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22good%20first%20issue%22)" or "[Help wanted!](https://github.com/BoredOS/BoredOS/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22Help%20Wanted!%22)".
 * **Join the Discussion:** Join our [Discord Server](https://discord.gg/J2BxWaFAgY) to discuss architecture or proposed features before spending hours writing code.
 * **Propose Big Changes First:** For major kernel features, driver architecture overhauls, or breaking API changes, please open an **RFC (Request for Comments) Issue** first so we can align on design or ask in the [Discord Server](https://discord.gg/J2BxWaFAgY).
 

@@ -13,7 +13,7 @@ We aim to foster an open, welcoming, and respectful community. Please treat all 
 ## 2. Getting Started & Where to Help
 
 Before jumping into code:
-* **Check the Issue Tracker:** Look for open issues labeled `good first issue` or `help wanted`.
+* **Check the Issue Tracker:** Look for open issues labeled "[good first issue](https://github.com/BoredOS/BoredOS/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22good%20first%20issue%22)" or "[Help wanted!](https://github.com/BoredOS/BoredOS/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22Help%20Wanted!%22)".
 * **Join the Discussion:** Join our [Discord Server](https://discord.gg/J2BxWaFAgY) to discuss architecture or proposed features before spending hours writing code.
 * **Propose Big Changes First:** For major kernel features, driver architecture overhauls, or breaking API changes, please open an **RFC (Request for Comments) Issue** first so we can align on design or ask in the [Discord Server](https://discord.gg/J2BxWaFAgY).
 
@@ -22,7 +22,7 @@ Before jumping into code:
 
 1. **Fork the Repository** and create your branch from `main`:
 
-   `git checkout -b feature/my-cool-driver`
+   `git switch -c feature/my-cool-driver`
 2. **Build & Test Locally:** Ensure your changes build cleanly without warnings.
 3. **Keep Commits Clean:** 
 
@@ -64,7 +64,7 @@ To keep our codebase healthy, secure, and legally safe under the **GPLv3 license
 We use the DCO (the same system used by the Linux Kernel). By signing off on your commits, you certify that you wrote the code or have the right to contribute it under GPLv3.
 
 Simply add the `-s` flag when committing:
-git commit -s -m "kernel/mem: fix double free in page allocator"
+`git commit -s -m "kernel/mem: fix double free in page allocator"`
 
 ### B. Cryptographic Commit Signing
 To help prevent identity spoofing, we encourage signing commits with an **SSH or GPG key** attached to your GitHub account. While not strictly required to merge a PR, it is highly recommended!
@@ -123,7 +123,7 @@ fi
 EOF
 chmod +x ~/.git-templates/hooks/prepare-commit-msg
 ```
-This will automatically apply to all newly cloned repositories. For any existing repos on your machine, simply run git init inside the project folder once to activate it!
+This will automatically apply to all newly cloned repositories. For any existing repos on your machine, simply run `git init` inside the project folder once to activate it!
 
 </details>
 

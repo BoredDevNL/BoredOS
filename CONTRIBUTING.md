@@ -64,7 +64,7 @@ To keep our codebase healthy, secure, and legally safe under the **GPLv3 license
 We use the DCO (the same system used by the Linux Kernel). By signing off on your commits, you certify that you wrote the code or have the right to contribute it under GPLv3.
 
 Simply add the `-s` flag when committing:
-git commit -s -m "kernel/mem: fix double free in page allocator"
+`git commit -s -m "kernel/mem: fix double free in page allocator"`
 
 ### B. Cryptographic Commit Signing
 To help prevent identity spoofing, we encourage signing commits with an **SSH or GPG key** attached to your GitHub account. While not strictly required to merge a PR, it is highly recommended!
@@ -123,7 +123,7 @@ fi
 EOF
 chmod +x ~/.git-templates/hooks/prepare-commit-msg
 ```
-This will automatically apply to all newly cloned repositories. For any existing repos on your machine, simply run git init inside the project folder once to activate it!
+This will automatically apply to all newly cloned repositories. For any existing repos on your machine, simply run `git init` inside the project folder once to activate it!
 
 </details>
 

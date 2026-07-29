@@ -62,6 +62,10 @@ int pty_create(void) {
         if (!g_ptys[i].used) {
             g_ptys[i].used = true;
             g_ptys[i].fg_pid = -1;
+            g_ptys[i].ws.ws_row = 25;
+            g_ptys[i].ws.ws_col = 80;
+            g_ptys[i].ws.ws_xpixel = 640;
+            g_ptys[i].ws.ws_ypixel = 200;
             pty_queue_init(&g_ptys[i].master_to_slave);
             pty_queue_init(&g_ptys[i].slave_to_master);
             spinlock_release_irqrestore(&g_pty_global_lock, flags);
@@ -158,5 +162,43 @@ int pty_poll_master(int pty_id, struct poll_table *pt) {
     mask |= 0x0004;
 
     return mask;
+}
+
+#define TIOCGPGRP 0x540F
+#define TIOCSPGRP 0x5410
+#define TIOCGWINSZ 0x5413
+#define TIOCSWINSZ 0x5414
+
+int pty_ioctl(int pty_id, uint64_t request, void *arg) {
+    pty_pair_t *p = pty_get(pty_id);
+    if (!p || !p->used) return -1;
+
+    if (request == TIOCGWINSZ) {
+        if (!arg) return -1;
+        struct winsize *ws = (struct winsize *)arg;
+        *ws = p->ws;
+        return 0;
+    } else if (request == TIOCSWINSZ) {
+        if (!arg) return -1;
+        struct winsize *ws = (struct winsize *)arg;
+        p->ws = *ws;
+        return 0;
+    } else if (request == TIOCGPGRP) {
+        if (!arg) return -1;
+        *(int *)arg = p->fg_pid;
+        return 0;
+    } else if (request == TIOCSPGRP) {
+        if (!arg) return -1;
+        p->fg_pid = *(int *)arg;
+        return 0;
+    } else if (request == 0x80045430 || request == 0x5430) { // TIOCGPTN
+        if (!arg) return -1;
+        *(int *)arg = pty_id - PTY_ID_BASE;
+        return 0;
+    } else if (request == 0x40045431 || request == 0x5431) { // TIOCSPTLCK
+        return 0;
+    }
+
+    return -1;
 }
 

@@ -2580,68 +2580,6 @@ static uint64_t handle_sys_fs_mount_info(const syscall_args_t *args) {
   return fs_cmd_mount_info(&shifted);
 }
 
-static uint64_t handle_sys_tty_create(const syscall_args_t *args) {
-  return sys_cmd_tty_create(args);
-}
-
-static uint64_t handle_sys_tty_read_out(const syscall_args_t *args) {
-  syscall_args_t shifted = *args;
-  shifted.arg2 = args->arg1;
-  shifted.arg3 = args->arg2;
-  shifted.arg4 = args->arg3;
-  return sys_cmd_tty_read_out(&shifted);
-}
-
-static uint64_t handle_sys_tty_write_in(const syscall_args_t *args) {
-  syscall_args_t shifted = *args;
-  shifted.arg2 = args->arg1;
-  shifted.arg3 = args->arg2;
-  shifted.arg4 = args->arg3;
-  return sys_cmd_tty_write_in(&shifted);
-}
-
-static uint64_t handle_sys_tty_read_in(const syscall_args_t *args) {
-  syscall_args_t shifted = *args;
-  shifted.arg2 = args->arg1;
-  shifted.arg3 = args->arg2;
-  return sys_cmd_tty_read_in(&shifted);
-}
-
-static uint64_t handle_sys_tty_destroy(const syscall_args_t *args) {
-  syscall_args_t shifted = *args;
-  shifted.arg2 = args->arg1;
-  return sys_cmd_tty_destroy(&shifted);
-}
-
-static uint64_t handle_sys_tty_set_fg(const syscall_args_t *args) {
-  syscall_args_t shifted = *args;
-  shifted.arg2 = args->arg1;
-  shifted.arg3 = args->arg2;
-  return sys_cmd_tty_set_fg(&shifted);
-}
-
-static uint64_t handle_sys_tty_get_fg(const syscall_args_t *args) {
-  syscall_args_t shifted = *args;
-  shifted.arg2 = args->arg1;
-  return sys_cmd_tty_get_fg(&shifted);
-}
-
-static uint64_t handle_sys_tty_kill_fg(const syscall_args_t *args) {
-  syscall_args_t shifted = *args;
-  shifted.arg2 = args->arg1;
-  return sys_cmd_tty_kill_fg(&shifted);
-}
-
-static uint64_t handle_sys_tty_kill_all(const syscall_args_t *args) {
-  syscall_args_t shifted = *args;
-  shifted.arg2 = args->arg1;
-  return sys_cmd_tty_kill_all(&shifted);
-}
-
-static uint64_t handle_sys_tty_get_id(const syscall_args_t *args) {
-  return sys_cmd_tty_get_id(args);
-}
-
 static uint64_t handle_sys_spawn(const syscall_args_t *args) {
   syscall_args_t shifted = *args;
   shifted.arg2 = args->arg1;
@@ -2649,17 +2587,6 @@ static uint64_t handle_sys_spawn(const syscall_args_t *args) {
   shifted.arg4 = args->arg3;
   shifted.arg5 = args->arg4;
   return sys_cmd_spawn_process(&shifted);
-}
-
-
-static uint64_t handle_sys_pty_create(const syscall_args_t *args) {
-  return sys_cmd_pty_create(args);
-}
-
-static uint64_t handle_sys_pty_destroy(const syscall_args_t *args) {
-  syscall_args_t shifted = *args;
-  shifted.arg2 = args->arg1;
-  return sys_cmd_pty_destroy(&shifted);
 }
 
 static uint64_t handle_sys_disk_get_count(const syscall_args_t *args) {
@@ -2910,19 +2837,7 @@ static const syscall_handler_fn syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_FS_STATFS] = handle_sys_fs_statfs,
     [SYS_FS_MOUNT_COUNT] = handle_sys_fs_mount_count,
     [SYS_FS_MOUNT_INFO] = handle_sys_fs_mount_info,
-    [SYS_TTY_CREATE] = handle_sys_tty_create,
-    [SYS_TTY_READ_OUT] = handle_sys_tty_read_out,
-    [SYS_TTY_WRITE_IN] = handle_sys_tty_write_in,
-    [SYS_TTY_READ_IN] = handle_sys_tty_read_in,
-    [SYS_TTY_DESTROY] = handle_sys_tty_destroy,
-    [SYS_TTY_SET_FG] = handle_sys_tty_set_fg,
-    [SYS_TTY_GET_FG] = handle_sys_tty_get_fg,
-    [SYS_TTY_KILL_FG] = handle_sys_tty_kill_fg,
-    [SYS_TTY_KILL_ALL] = handle_sys_tty_kill_all,
-    [SYS_TTY_GET_ID] = handle_sys_tty_get_id,
     [SYS_SPAWN] = handle_sys_spawn,
-    [SYS_PTY_CREATE] = handle_sys_pty_create,
-    [SYS_PTY_DESTROY] = handle_sys_pty_destroy,
     [SYS_DISK_GET_COUNT] = handle_sys_disk_get_count,
     [SYS_DISK_GET_INFO] = handle_sys_disk_get_info,
     [SYS_DISK_WRITE_GPT] = handle_sys_disk_write_gpt,

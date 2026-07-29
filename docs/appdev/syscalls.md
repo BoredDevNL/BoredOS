@@ -68,19 +68,7 @@ Specialized direct calls for disk partition control, virtual terminals, and quic
 | **304** | `SYS_FS_STATFS` | `const char *path, vfs_statfs_t *stat` | Reads filesystem capacity data. |
 | **305** | `SYS_FS_MOUNT_COUNT` | *none* | Returns the count of mounted filesystems. |
 | **306** | `SYS_FS_MOUNT_INFO` | `int index, mount_info_t *info` | Gets details for mount at `index`. |
-| **307** | `SYS_TTY_CREATE` | `uint32_t flags` | Allocates a virtual terminal console (TTY). |
-| **308** | `SYS_TTY_READ_OUT` | `int tty_id, char *buf, size_t count` | Debug helper: reads characters printed to TTY screen. |
-| **309** | `SYS_TTY_WRITE_IN` | `int tty_id, const char *buf, size_t count` | Debug helper: injects input keys into TTY buffer. |
-| **310** | `SYS_TTY_READ_IN` | `int tty_id, char *buf, size_t count` | Reads raw keystrokes from target TTY. |
-| **311** | `SYS_TTY_DESTROY` | `int tty_id` | Deallocates a virtual TTY. |
-| **312** | `SYS_TTY_SET_FG` | `int tty_id, pid_t pid` | Sets the foreground process of a virtual TTY. |
-| **313** | `SYS_TTY_GET_FG` | `int tty_id` | Gets active foreground process PID on a TTY. |
-| **314** | `SYS_TTY_KILL_FG` | `int tty_id` | Forcefully terminates foreground process on TTY. |
-| **315** | `SYS_TTY_KILL_ALL` | `int tty_id` | Terminates all processes attached to a TTY. |
-| **316** | `SYS_TTY_GET_ID` | *none* | Gets current TTY ID for calling process. |
 | **317** | `SYS_SPAWN` | `const char *path, char *const argv[], char *const envp[], uint32_t flags` | Spawns a process. |
-| **320** | `SYS_PTY_CREATE` | `int *fds` | Spawns master/slave pseudo-terminal pair. |
-| **321** | `SYS_PTY_DESTROY` | `int pty_id` | Destroys PTY pair. |
 | **322** | `SYS_DISK_GET_COUNT` | *none* | Returns the count of recognized physical disks. |
 | **323** | `SYS_DISK_GET_INFO` | `int index, disk_info_t *out` | Gets drive model, size, and partition tables. |
 | **324** | `SYS_DISK_WRITE_GPT` | `const char *devname, partition_spec_t *parts, int count` | Writes GPT table to target block device. |

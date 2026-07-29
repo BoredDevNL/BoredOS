@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include "spinlock.h"
 #include "wait_queue.h"
+#include "tty.h"
 #define PTY_MAX_COUNT 4096
 #define PTY_QUEUE_SIZE 4096
 #define PTY_ID_BASE 1024
@@ -23,6 +24,7 @@ typedef struct {
     pty_queue_t master_to_slave;
     pty_queue_t slave_to_master;
     int fg_pid;
+    struct winsize ws;
     spinlock_t lock;
 } pty_pair_t;
 void pty_init(void);
@@ -38,5 +40,7 @@ int pty_set_foreground(int pty_id, int pid);
 int pty_get_foreground(int pty_id);
 struct poll_table;
 int pty_poll(int pty_id, struct poll_table *pt);
+int pty_poll_master(int pty_id, struct poll_table *pt);
+int pty_ioctl(int pty_id, uint64_t request, void *arg);
 
 #endif

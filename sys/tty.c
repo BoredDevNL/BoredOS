@@ -635,17 +635,28 @@ int tty_create(void) {
 #define KDSETMODE   0x4B3A
 #define KD_TEXT     0x00
 #define KD_GRAPHICS 0x01
+#define TIOCGPGRP   0x540F
+#define TIOCSPGRP   0x5410
 
 int tty_ioctl(int id, uint64_t request, void *arg) {
     tty_t *t = tty_get(id);
     if (!t) return -1;
     
     if (request == TIOCGWINSZ) {
+        if (!arg) return -1;
         struct winsize *ws = (struct winsize *)arg;
         ws->ws_row = t->height / 8;
         ws->ws_col = t->width / 8;
         ws->ws_xpixel = t->width;
         ws->ws_ypixel = t->height;
+        return 0;
+    } else if (request == TIOCGPGRP) {
+        if (!arg) return -1;
+        *(int *)arg = t->fg_pid;
+        return 0;
+    } else if (request == TIOCSPGRP) {
+        if (!arg) return -1;
+        t->fg_pid = *(int *)arg;
         return 0;
     } else if (request == KDSETMODE) {
         uint64_t mode = (uint64_t)arg;

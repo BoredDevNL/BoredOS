@@ -304,10 +304,25 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
                 }
             }
         }
+
+        if (strcmp(devname, "ptmx") == 0) {
+            extern int pty_create(void);
+            int pty_id = pty_create();
+            if (pty_id >= 0) {
+                vfs_file_t *vf = vfs_alloc_file();
+                if (vf) {
+                    vf->mount = &mounts[0];
+                    vf->fs_handle = (void*)(uintptr_t)pty_id;
+                    vf->is_device = true;
+                    vf->device_type = DEVICE_TYPE_PTY_MASTER;
+                    spinlock_release_irqrestore(&vfs_lock, flags);
+                    return vf;
+                }
+            }
+        }
         
         if (vfs_starts_with(devname, "pts/")) {
             int idx = atoi(devname + 4);
-            extern bool pty_is_pty_id(int id);
             extern void* pty_get(int pty_id);
             int pty_id = 1024 + idx;
             void *p = pty_get(pty_id);
@@ -317,7 +332,7 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
                     vf->mount = &mounts[0];
                     vf->fs_handle = (void*)(uintptr_t)pty_id;
                     vf->is_device = true;
-                    vf->device_type = DEVICE_TYPE_TTY;
+                    vf->device_type = DEVICE_TYPE_PTY_SLAVE;
                     spinlock_release_irqrestore(&vfs_lock, flags);
                     return vf;
                 }
@@ -532,6 +547,11 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
 void vfs_close(vfs_file_t *file) {
     if (!file || !file->valid) return;
 
+    if (file->is_device && file->device_type == DEVICE_TYPE_PTY_MASTER) {
+        extern int pty_destroy(int pty_id);
+        pty_destroy((int)(uintptr_t)file->fs_handle);
+    }
+
     if (file->is_device && file->device_type == DEVICE_TYPE_SHM) {
         typedef struct shm_segment shm_segment_t;
         extern void shm_unref(shm_segment_t *seg);
@@ -582,6 +602,12 @@ int vfs_read(vfs_file_t *file, void *buf, size_t size) {
             return (int)total_read;
         } else if (file->device_type == DEVICE_TYPE_TTY) {
             return tty_read_input((int)(uintptr_t)file->fs_handle, (char*)buf, (size_t)size);
+        } else if (file->device_type == DEVICE_TYPE_PTY_MASTER) {
+            extern int pty_read_output(int pty_id, char *buf, size_t len);
+            return pty_read_output((int)(uintptr_t)file->fs_handle, (char*)buf, (size_t)size);
+        } else if (file->device_type == DEVICE_TYPE_PTY_SLAVE) {
+            extern int pty_read_input(int pty_id, char *buf, size_t len);
+            return pty_read_input((int)(uintptr_t)file->fs_handle, (char*)buf, (size_t)size);
         } else if (file->device_type == DEVICE_TYPE_KEYBOARD) {
             return tty_read_key((int)(uintptr_t)file->fs_handle, (uint8_t*)buf, size);
         } else if (file->device_type == DEVICE_TYPE_MOUSE) {
@@ -651,6 +677,13 @@ int vfs_write(vfs_file_t *file, const void *buf, size_t size) {
     if (file->is_device) {
         if (file->device_type == DEVICE_TYPE_TTY) {
             tty_write((int)(uintptr_t)file->fs_handle, (const char*)buf, size);
+            return size;
+        } else if (file->device_type == DEVICE_TYPE_PTY_MASTER) {
+            extern int pty_write_input(int pty_id, const char *buf, size_t len);
+            return pty_write_input((int)(uintptr_t)file->fs_handle, (const char*)buf, size);
+        } else if (file->device_type == DEVICE_TYPE_PTY_SLAVE) {
+            extern void pty_write_output(int pty_id, const char *data, size_t len);
+            pty_write_output((int)(uintptr_t)file->fs_handle, (const char*)buf, size);
             return size;
         } else if (file->device_type == DEVICE_TYPE_FRAMEBUFFER) {
             vfs_framebuffer_info_t fb = graphics_get_fb_backing_params();
@@ -734,6 +767,9 @@ int vfs_ioctl(vfs_file_t *file, uint64_t request, void *arg) {
         if (file->device_type == DEVICE_TYPE_TTY) {
             extern int tty_ioctl(int id, uint64_t request, void *arg);
             return tty_ioctl((int)(uintptr_t)file->fs_handle, request, arg);
+        } else if (file->device_type == DEVICE_TYPE_PTY_MASTER || file->device_type == DEVICE_TYPE_PTY_SLAVE) {
+            extern int pty_ioctl(int pty_id, uint64_t request, void *arg);
+            return pty_ioctl((int)(uintptr_t)file->fs_handle, request, arg);
         } else if (file->device_type == DEVICE_TYPE_FRAMEBUFFER) {
             // Handle framebuffer ioctls
             
@@ -984,13 +1020,16 @@ int vfs_seek(vfs_file_t *file, int offset, int whence) {
 int vfs_poll(vfs_file_t *file, struct poll_table *pt) {
     if (!file || !file->valid || !file->mount || !file->mount->active) return POLLNVAL;
     if (file->is_device) {
+        if (file->device_type == DEVICE_TYPE_PTY_MASTER) {
+            extern int pty_poll_master(int pty_id, struct poll_table *pt);
+            return pty_poll_master((int)(uintptr_t)file->fs_handle, pt);
+        }
+        if (file->device_type == DEVICE_TYPE_PTY_SLAVE) {
+            extern int pty_poll(int pty_id, struct poll_table *pt);
+            return pty_poll((int)(uintptr_t)file->fs_handle, pt);
+        }
         if (file->device_type == DEVICE_TYPE_TTY || file->device_type == DEVICE_TYPE_KEYBOARD || file->device_type == DEVICE_TYPE_MOUSE) {
             int handle_id = (int)(uintptr_t)file->fs_handle;
-            extern bool pty_is_pty_id(int id);
-            extern int pty_poll(int pty_id, struct poll_table *pt);
-            if (file->device_type == DEVICE_TYPE_TTY && pty_is_pty_id(handle_id)) {
-                return pty_poll(handle_id, pt);
-            }
             tty_t *t = tty_get(handle_id);
             if (!t) return POLLNVAL;
             
@@ -1138,6 +1177,19 @@ int vfs_list_directory(const char *path, vfs_dirent_t *entries, int max, int off
                 strcpy(entries[count].name, name);
                 entries[count].size = 0;
                 entries[count].is_directory = 0;
+                count++;
+            }
+
+            if (count < max) {
+                strcpy(entries[count].name, "ptmx");
+                entries[count].size = 0;
+                entries[count].is_directory = 0;
+                count++;
+            }
+            if (count < max) {
+                strcpy(entries[count].name, "pts");
+                entries[count].size = 0;
+                entries[count].is_directory = 1;
                 count++;
             }
 
@@ -1350,6 +1402,9 @@ bool vfs_exists(const char *path) {
             vfs_framebuffer_info_t fb = graphics_get_fb_params();
             return fb.address != NULL && fb.width > 0 && fb.height > 0;
         }
+        if (strcmp(dev, "ptmx") == 0) return true;
+        if (strcmp(dev, "pts") == 0) return true;
+        if (vfs_starts_with(dev, "pts/")) return true;
         if (strcmp(dev, "keyboard") == 0 || vfs_starts_with(dev, "keyboard")) return true;
         if (strcmp(dev, "mouse") == 0 || vfs_starts_with(dev, "mouse")) return true;
         if (vfs_starts_with(dev, "tty")) return true;
@@ -1401,11 +1456,14 @@ bool vfs_is_directory(const char *path) {
 
     if (strcmp(normalized, "/dev") == 0 || 
         strcmp(normalized, "/dev/shm") == 0 || 
+        strcmp(normalized, "/dev/pts") == 0 || 
         strcmp(normalized, "/sys") == 0 || 
         strcmp(normalized, "/proc") == 0) return true;
 
     if (vfs_starts_with(normalized, "/dev/")) {
         const char *dev = normalized + 5;
+        if (strcmp(dev, "ptmx") == 0) return false;
+        if (vfs_starts_with(dev, "pts/")) return false;
         // Check if it's a framebuffer device (not a directory)
         if (strcmp(dev, "fb0") == 0 || strcmp(dev, "fb") == 0) return false;
         Disk *d = disk_get_by_name(dev);
@@ -1493,6 +1551,34 @@ int vfs_get_info(const char *path, vfs_dirent_t *info) {
     // Device check
     if (vfs_starts_with(normalized, "/dev/")) {
         const char *dev = normalized + 5;
+        if (strcmp(dev, "ptmx") == 0) {
+            strcpy(info->name, "ptmx");
+            info->size = 0;
+            info->is_directory = 0;
+            info->start_cluster = 0;
+            info->write_date = 0;
+            info->write_time = 0;
+            return 0;
+        }
+        if (strcmp(dev, "pts") == 0) {
+            strcpy(info->name, "pts");
+            info->size = 0;
+            info->is_directory = 1;
+            info->start_cluster = 0;
+            info->write_date = 0;
+            info->write_time = 0;
+            return 0;
+        }
+        if (vfs_starts_with(dev, "pts/")) {
+            const char *pts_name = dev + 4;
+            strcpy(info->name, pts_name);
+            info->size = 0;
+            info->is_directory = 0;
+            info->start_cluster = 0;
+            info->write_date = 0;
+            info->write_time = 0;
+            return 0;
+        }
         Disk *d = disk_get_by_name(dev);
         if (d) {
             strcpy(info->name, d->devname);

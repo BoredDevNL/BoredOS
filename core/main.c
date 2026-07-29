@@ -480,8 +480,8 @@ static void init_modules(void) {
             struct limine_file *mod = module_request.response->modules[i];
             const char *path = mod->path;
             
-            if (fs_starts_with(path, "boot():")) path += 7;
-            else if (fs_starts_with(path, "boot:///")) path += 8;
+            if (str_starts_with(path, "boot():")) path += 7;
+            else if (str_starts_with(path, "boot:///")) path += 8;
             
             int path_len = 0;
             while (path[path_len]) path_len++;
@@ -519,8 +519,8 @@ static void init_modules(void) {
             struct limine_file *mod = module_request.response->modules[i];
 
             const char *clean_path = mod->path;
-            if (fs_starts_with(clean_path, "boot():")) clean_path += 7;
-            else if (fs_starts_with(clean_path, "boot:///")) clean_path += 8;
+            if (str_starts_with(clean_path, "boot():")) clean_path += 7;
+            else if (str_starts_with(clean_path, "boot:///")) clean_path += 8;
             
             int len = 0;
             while(clean_path[len]) len++;

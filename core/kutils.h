@@ -20,6 +20,7 @@ void strcpy(char *dest, const char *src);
 char *strncpy(char *dest, const char *src, size_t n);
 char *strcat(char *dest, const char *src);
 char *strchr(const char *s, int c);
+bool str_starts_with(const char *str, const char *prefix);
 int atoi(const char *str);
 void itoa(int n, char *buf);
 void utoa(size_t n, char *buf);

@@ -28,13 +28,6 @@ extern void serial_write(const char *str);
 extern void serial_write_num(uint64_t num);
 extern void serial_write_hex(uint64_t value);
 
-static bool vfs_starts_with(const char *str, const char *prefix) {
-    while (*prefix) {
-        if (*str++ != *prefix++) return false;
-    }
-    return true;
-}
-
 static bool vfs_path_is_parent(const char *parent, const char *child) {
     size_t plen = strlen(parent);
     if (strncmp(parent, child, plen) != 0) return false;
@@ -286,11 +279,11 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
     vfs_mount_t *mount = vfs_resolve_mount(normalized, &rel_path);
     
     // Fallback for block devices (/dev/sda etc)
-    if (vfs_starts_with(normalized, "/dev/")) {
+    if (str_starts_with(normalized, "/dev/")) {
         const char *devname = normalized + 5;
         
         // Handle TTY devices: /dev/ttyX
-        if (vfs_starts_with(devname, "tty")) {
+        if (str_starts_with(devname, "tty")) {
             int id = atoi(devname + 3);
             if (id >= 1 && id <= TTY_COUNT) {
                 vfs_file_t *vf = vfs_alloc_file();
@@ -321,7 +314,7 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
             }
         }
         
-        if (vfs_starts_with(devname, "pts/")) {
+        if (str_starts_with(devname, "pts/")) {
             int idx = atoi(devname + 4);
             extern void* pty_get(int pty_id);
             int pty_id = 1024 + idx;
@@ -340,7 +333,7 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
         }
         
         // Handle Keyboard devices: /dev/keyboard (active) or /dev/keyboardX
-        if (vfs_starts_with(devname, "keyboard")) {
+        if (str_starts_with(devname, "keyboard")) {
             int id = 0;
             if (strcmp(devname, "keyboard") == 0) {
                 id = tty_get_active_id() + 1;
@@ -362,7 +355,7 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
         }
 
         // Handle Mouse devices: /dev/mouse (active) or /dev/mouseX
-        if (vfs_starts_with(devname, "mouse")) {
+        if (str_starts_with(devname, "mouse")) {
             int id = 0;
             if (strcmp(devname, "mouse") == 0) {
                 id = tty_get_active_id() + 1;
@@ -384,7 +377,7 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
         }
 
         // Handle Framebuffer devices: /dev/fb0 or /dev/fbX
-        if (vfs_starts_with(devname, "fb")) {
+        if (str_starts_with(devname, "fb")) {
             int id = 0;
             if (strcmp(devname, "fb0") == 0 || strcmp(devname, "fb") == 0) {
                 id = 0;
@@ -473,7 +466,7 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
         }
 
         // Handle Shared Memory: /dev/shm/some_name
-        if (vfs_starts_with(devname, "shm/")) {
+        if (str_starts_with(devname, "shm/")) {
             const char *shm_name = devname + 4;
             if (shm_name[0] != '\0') {
                 typedef struct shm_segment shm_segment_t;
@@ -1291,7 +1284,7 @@ bool vfs_mkdir(const char *path) {
     const char *rel_path = NULL;
     vfs_mount_t *mount = vfs_resolve_mount(normalized, &rel_path);
 
-    if (vfs_starts_with(normalized, "/dev/")) {
+    if (str_starts_with(normalized, "/dev/")) {
         if (!mount || !rel_path || rel_path[0] == '\0') {
             return false; 
         }
@@ -1313,7 +1306,7 @@ bool vfs_rmdir(const char *path) {
     const char *rel_path = NULL;
     vfs_mount_t *mount = vfs_resolve_mount(normalized, &rel_path);
 
-    if (vfs_starts_with(normalized, "/dev/")) {
+    if (str_starts_with(normalized, "/dev/")) {
         if (!mount || !rel_path || rel_path[0] == '\0') {
             return false; 
         }
@@ -1332,7 +1325,7 @@ bool vfs_delete(const char *path) {
     if (normalized[0] == '/' && normalized[1] == '\0') return false;
     if (strcmp(normalized, "/dev") == 0) return false;
 
-    if (vfs_starts_with(normalized, "/dev/shm/")) {
+    if (str_starts_with(normalized, "/dev/shm/")) {
         const char *shm_name = normalized + 9;
         if (shm_name[0] != '\0') {
             extern void shm_unlink(const char *name);
@@ -1344,7 +1337,7 @@ bool vfs_delete(const char *path) {
     const char *rel_path = NULL;
     vfs_mount_t *mount = vfs_resolve_mount(normalized, &rel_path);
 
-    if (vfs_starts_with(normalized, "/dev/")) {
+    if (str_starts_with(normalized, "/dev/")) {
         if (!mount || !rel_path || rel_path[0] == '\0') {
             return false; 
         }
@@ -1384,7 +1377,7 @@ bool vfs_exists(const char *path) {
 
     uint64_t flags_vfs = spinlock_acquire_irqsave(&vfs_lock);
     for (int i = 0; i < mount_count; i++) {
-        if (mounts[i].active && vfs_starts_with(mounts[i].path, normalized)) {
+        if (mounts[i].active && str_starts_with(mounts[i].path, normalized)) {
             spinlock_release_irqrestore(&vfs_lock, flags_vfs);
             return true;
         }
@@ -1395,7 +1388,7 @@ bool vfs_exists(const char *path) {
         strcmp(normalized, "/sys") == 0 || 
         strcmp(normalized, "/proc") == 0) return true;
 
-    if (vfs_starts_with(normalized, "/dev/")) {
+    if (str_starts_with(normalized, "/dev/")) {
         const char *dev = normalized + 5;
         // Check for framebuffer device
         if (strcmp(dev, "fb0") == 0 || strcmp(dev, "fb") == 0) {
@@ -1404,10 +1397,10 @@ bool vfs_exists(const char *path) {
         }
         if (strcmp(dev, "ptmx") == 0) return true;
         if (strcmp(dev, "pts") == 0) return true;
-        if (vfs_starts_with(dev, "pts/")) return true;
-        if (strcmp(dev, "keyboard") == 0 || vfs_starts_with(dev, "keyboard")) return true;
-        if (strcmp(dev, "mouse") == 0 || vfs_starts_with(dev, "mouse")) return true;
-        if (vfs_starts_with(dev, "tty")) return true;
+        if (str_starts_with(dev, "pts/")) return true;
+        if (strcmp(dev, "keyboard") == 0 || str_starts_with(dev, "keyboard")) return true;
+        if (strcmp(dev, "mouse") == 0 || str_starts_with(dev, "mouse")) return true;
+        if (str_starts_with(dev, "tty")) return true;
         if (strcmp(dev, "pcsk") == 0) return true;
         if (strcmp(dev, "dsp") == 0) {
             return ac97_present();
@@ -1416,7 +1409,7 @@ bool vfs_exists(const char *path) {
             return ac97_present();
         }
         if (strcmp(dev, "shm") == 0) return true;
-        if (vfs_starts_with(dev, "shm/")) {
+        if (str_starts_with(dev, "shm/")) {
             extern bool shm_exists(const char *name);
             return shm_exists(dev + 4);
         }
@@ -1460,10 +1453,10 @@ bool vfs_is_directory(const char *path) {
         strcmp(normalized, "/sys") == 0 || 
         strcmp(normalized, "/proc") == 0) return true;
 
-    if (vfs_starts_with(normalized, "/dev/")) {
+    if (str_starts_with(normalized, "/dev/")) {
         const char *dev = normalized + 5;
         if (strcmp(dev, "ptmx") == 0) return false;
-        if (vfs_starts_with(dev, "pts/")) return false;
+        if (str_starts_with(dev, "pts/")) return false;
         // Check if it's a framebuffer device (not a directory)
         if (strcmp(dev, "fb0") == 0 || strcmp(dev, "fb") == 0) return false;
         Disk *d = disk_get_by_name(dev);
@@ -1549,7 +1542,7 @@ int vfs_get_info(const char *path, vfs_dirent_t *info) {
     spinlock_release_irqrestore(&vfs_lock, flags_vfs);
 
     // Device check
-    if (vfs_starts_with(normalized, "/dev/")) {
+    if (str_starts_with(normalized, "/dev/")) {
         const char *dev = normalized + 5;
         if (strcmp(dev, "ptmx") == 0) {
             strcpy(info->name, "ptmx");
@@ -1569,7 +1562,7 @@ int vfs_get_info(const char *path, vfs_dirent_t *info) {
             info->write_time = 0;
             return 0;
         }
-        if (vfs_starts_with(dev, "pts/")) {
+        if (str_starts_with(dev, "pts/")) {
             const char *pts_name = dev + 4;
             strcpy(info->name, pts_name);
             info->size = 0;

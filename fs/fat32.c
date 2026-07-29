@@ -129,13 +129,6 @@ static bool fat32_name_match(const char *a, const char *b) {
     return a[i] == b[i];
 }
 
-bool fs_starts_with(const char *str, const char *prefix) {
-    while (*prefix) {
-        if (*prefix++ != *str++) return false;
-    }
-    return true;
-}
-
 // Extract filename from path
 static void extract_filename(const char *path, char *filename) {
     size_t len = strlen(path);
@@ -2580,7 +2573,7 @@ bool fat32_rename(const char *old_path, const char *new_path) {
             extract_filename(new_path, n->filename);
             extract_parent_path(new_path, n->parent_path);
         } else if (strlen(n->full_path) > old_len &&
-                   fs_starts_with(n->full_path, old_path) &&
+                   str_starts_with(n->full_path, old_path) &&
                    n->full_path[old_len] == '/') {
             strcpy(suffix, n->full_path + old_len);
             strcpy(n->full_path, new_path);
@@ -2589,7 +2582,7 @@ bool fat32_rename(const char *old_path, const char *new_path) {
         if (strcmp(n->parent_path, old_path) == 0) {
             strcpy(n->parent_path, new_path);
         } else if (strlen(n->parent_path) > old_len &&
-                   fs_starts_with(n->parent_path, old_path) &&
+                   str_starts_with(n->parent_path, old_path) &&
                    n->parent_path[old_len] == '/') {
             strcpy(suffix, n->parent_path + old_len);
             strcpy(n->parent_path, new_path);

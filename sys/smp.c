@@ -49,8 +49,11 @@ uint32_t smp_cpu_count(void) {
 }
 
 cpu_state_t *smp_get_cpu(uint32_t cpu_id) {
-    if (cpu_id >= total_cpus) return NULL;
-    return &cpu_states[cpu_id];
+    if (cpu_states && cpu_id < total_cpus) return &cpu_states[cpu_id];
+    // Before smp_init runs, early boot (like process_init) needs to set up CPU 0.
+    // Fall back to bsp_cpu_state so those early registrations aren't lost.
+    if (cpu_id == 0 && bsp_cpu_state) return bsp_cpu_state;
+    return NULL;
 }
 
 static void ap_entry(struct limine_smp_info *info) {
@@ -148,19 +151,25 @@ uint32_t smp_init(struct limine_smp_response *smp_resp) {
         cpu_states = (cpu_state_t *)kmalloc_aligned(sizeof(cpu_state_t), 64);
         if (!cpu_states) return 1;
         memset(cpu_states, 0, sizeof(cpu_state_t));
+        // Copy the early BSP state so single-core mode doesn't lose current_process,
+        // idle_process, or the kernel_syscall_stack initialized during early boot.
+        if (bsp_cpu_state) {
+            cpu_states[0] = *bsp_cpu_state;
+        }
         cpu_states[0].self = &cpu_states[0];
         cpu_states[0].cpu_id = 0;
         cpu_states[0].lapic_id = read_lapic_id();
         cpu_states[0].online = true;
 
-        // Allocate syscall stack
-        void *syscall_stack = kmalloc_aligned(KERNEL_STACK_SIZE, KERNEL_STACK_ALIGNMENT);
-        if (!syscall_stack) {
-          serial_write("[SMP] Failed to allocate BSP syscall stack\n");
-          return 1;
+        if (!cpu_states[0].kernel_syscall_stack) {
+            void *syscall_stack = kmalloc_aligned(KERNEL_STACK_SIZE, KERNEL_STACK_ALIGNMENT);
+            if (!syscall_stack) {
+                serial_write("[SMP] Failed to allocate BSP syscall stack\n");
+                return 1;
+            }
+            cpu_states[0].kernel_stack_alloc = syscall_stack;
+            cpu_states[0].kernel_syscall_stack = (uint64_t)(syscall_stack + KERNEL_STACK_SIZE);
         }
-
-        cpu_states[0].kernel_stack_alloc = syscall_stack;
 
         // Setup GS for syscall_entry
         wrmsr(MSR_GS_BASE, (uint64_t)&cpu_states[0]);

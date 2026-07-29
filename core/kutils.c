@@ -328,3 +328,10 @@ char *strcat(char *dest, const char *src) {
     *dest = 0;
     return rdest;
 }
+
+bool str_starts_with(const char *str, const char *prefix) {
+    while (*prefix) {
+        if (*str++ != *prefix++) return false;
+    }
+    return true;
+}

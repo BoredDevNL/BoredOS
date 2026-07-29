@@ -12,13 +12,6 @@ static file_index_t g_file_index = {0};
 static spinlock_t g_index_lock = SPINLOCK_INIT;
 static bool g_index_valid = false;
 
-static bool str_starts_with(const char *str, const char *prefix) {
-    while (*prefix) {
-        if (*str++ != *prefix++) return false;
-    }
-    return true;
-}
-
 static int fuzzy_match_score(const char *query, const char *filename) {
     if (!query || !filename) return 0;
     

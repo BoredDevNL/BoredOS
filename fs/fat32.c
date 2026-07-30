@@ -54,6 +54,7 @@ typedef struct {
 // Dynamically allocated volumes (no longer A-Z indexed)
 static bool realfs_mkdir_vol(FAT32_Volume *vol, const char *path);
 extern void serial_write(const char *str);
+extern void serial_write_num(uint32_t n);
 extern void serial_write_hex(uint32_t val);
 #define MAX_REAL_VOLUMES 8
 static FAT32_Volume *real_volumes[MAX_REAL_VOLUMES];
@@ -88,17 +89,6 @@ static void fat32_sync_if_root(FAT32_Volume *vol) {
 }
 
 // === Helper Functions (Shared) ===
-
-// Serial debug output
-static void fs_serial_char(char c) {
-    while (!(inb(0x3F8 + 5) & 0x20));
-    outb(0x3F8, c);
-}
-static void fs_serial_str(const char *s) { while (*s) fs_serial_char(*s++); }
-static void fs_serial_num(uint32_t n) {
-    if (n >= 10) fs_serial_num(n / 10);
-    fs_serial_char('0' + (n % 10));
-}
 
 static void fat32_resolve_entry_name(const FAT32_DirEntry *entry,
                                      const char *lfn_buffer, bool has_lfn,
@@ -429,19 +419,19 @@ static bool realfs_mount_volume(FAT32_Volume *vol, Disk *disk) {
     vol->cached_fat_sector = 0xFFFFFFFF;
     vol->last_allocated_cluster = 2;
     
-    fs_serial_str("[FAT32] Mounted volume: /dev/");
-    fs_serial_str(disk->devname);
-    fs_serial_str(" part_offset=");
-    fs_serial_num(part_offset);
-    fs_serial_str(" fat_lba=");
-    fs_serial_num(vol->fat_begin_lba);
-    fs_serial_str(" cluster_lba=");
-    fs_serial_num(vol->cluster_begin_lba);
-    fs_serial_str(" spc=");
-    fs_serial_num(vol->sectors_per_cluster);
-    fs_serial_str(" root_cl=");
-    fs_serial_num(vol->root_cluster);
-    fs_serial_str("\n");
+    serial_write("[FAT32] Mounted volume: /dev/");
+    serial_write(disk->devname);
+    serial_write(" part_offset=");
+    serial_write_num(part_offset);
+    serial_write(" fat_lba=");
+    serial_write_num(vol->fat_begin_lba);
+    serial_write(" cluster_lba=");
+    serial_write_num(vol->cluster_begin_lba);
+    serial_write(" spc=");
+    serial_write_num(vol->sectors_per_cluster);
+    serial_write(" root_cl=");
+    serial_write_num(vol->root_cluster);
+    serial_write("\n");
     
     kfree_null(sect0);
     return true;

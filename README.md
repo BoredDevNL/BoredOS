@@ -22,7 +22,7 @@
 
 BoredOS is a hobby operating system written in C and x86-64 assembly. It boots through [Limine](https://github.com/limine-bootloader/limine) and runs on both QEMU and real hardware.
 
-It isn't fully POSIX compliant, so software generally needs some porting work before it runs, though for most programs the required changes are minor. The project includes a windowed desktop environment called [Nova](usr/nova), a package manager, and an expanding set of ported software.
+It isn't fully POSIX compliant, so software generally needs some porting work before it runs, though for most programs the required changes are minor. The project includes a windowed desktop environment called [Nova]([usr/nova](https://github.com/BoredOS/nova/), a package manager, and an expanding set of ported software.
 
 ## Features
 

@@ -17,13 +17,6 @@ static e1000_rx_desc_t rx_descriptors[E1000_RX_RING_SIZE] __attribute__((aligned
 static uint8_t tx_buffers[E1000_TX_RING_SIZE][2048] __attribute__((aligned(16)));
 static uint8_t rx_buffers[E1000_RX_RING_SIZE][2048] __attribute__((aligned(16)));
 
-static void* kmemcpy(void* dest, const void* src, size_t n) {
-    uint8_t* d = (uint8_t*)dest;
-    const uint8_t* s = (const uint8_t*)src;
-    for (size_t i = 0; i < n; i++) d[i] = s[i];
-    return dest;
-}
-
 int e1000_init(pci_device_t* pci_dev) {
     if (e1000_initialized) return 0;
     uint32_t bar0 = pci_read_config(pci_dev->bus, pci_dev->device, pci_dev->function, 0x10);
@@ -147,7 +140,7 @@ int e1000_send_packet(const void* data, size_t length) {
         }
     }
 
-    kmemcpy(e1000_dev.tx_buffers[tail], data, length);
+    memcpy(e1000_dev.tx_buffers[tail], data, length);
     e1000_dev.tx_descriptors[tail].length = (uint16_t)length;
     e1000_dev.tx_descriptors[tail].cmd = 0x0B;
     e1000_dev.tx_descriptors[tail].status = 0;
@@ -168,7 +161,7 @@ int e1000_receive_packet(void* buffer, size_t buffer_size) {
     // Do NOT subtract 4. SECRC strips the CRC and the length already reflects this.
     
     if (length > buffer_size) length = (uint16_t)buffer_size;
-    kmemcpy(buffer, e1000_dev.rx_buffers[next_idx], length);
+    memcpy(buffer, e1000_dev.rx_buffers[next_idx], length);
     
     e1000_dev.rx_descriptors[next_idx].status = 0;
     e1000_dev.rx_descriptors[next_idx].length = 0;

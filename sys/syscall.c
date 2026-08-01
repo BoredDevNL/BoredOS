@@ -14,7 +14,6 @@
 #include "ext4fs.h"
 #include "fat32.h"
 #include "graphics.h"
-#include "icmp.h"
 #include "keycodes.h"
 #include "keymap.h"
 #include "io.h"

@@ -230,12 +230,12 @@ uint32_t smp_init(struct limine_smp_response *smp_resp) {
             serial_write_num(cpu->lapic_id);
             serial_write(") online\n");
         } else {
-            void *ap_stack = kmalloc_aligned(65536, 65536);
+            void *ap_stack = kmalloc_aligned(KERNEL_STACK_SIZE, KERNEL_STACK_ALIGNMENT);
             if (!ap_stack) {
                 serial_write("[SMP] ERROR: Failed to allocate AP stack!\n");
                 continue;
             }
-            cpu_states[i].kernel_stack = (uint64_t)ap_stack + 65536;
+            cpu_states[i].kernel_stack = (uint64_t)ap_stack + KERNEL_STACK_SIZE;
             cpu_states[i].kernel_stack_alloc = ap_stack;
             cpu_states[i].online = false;
 

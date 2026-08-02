@@ -290,11 +290,11 @@ void process_init(void) {
     kernel_proc->kill_pending = false;
 
     kernel_proc->pml4_phys = paging_get_kernel_pml4_phys();
-    void *kstack = kmalloc_aligned(65536, 65536);
+    void *kstack = kmalloc_aligned(KERNEL_STACK_SIZE, KERNEL_STACK_ALIGNMENT);
     if (kstack) {
-        memset(kstack, 0, 65536);
+        memset(kstack, 0, KERNEL_STACK_SIZE);
         kernel_proc->kernel_stack_alloc = kstack;
-        kernel_proc->kernel_stack = (uint64_t)kstack + 65536;
+        kernel_proc->kernel_stack = (uint64_t)kstack + KERNEL_STACK_SIZE;
 
         extern void work_queue_drain_loop(void);
         uint64_t *stack_ptr = (uint64_t *)kernel_proc->kernel_stack;
@@ -658,16 +658,16 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
 
     // 3. Allocate generic User stack and Kernel stack for interrupts
     // Increase to 256KB to prevent stack smashing on heavy networking
-    size_t user_stack_size = 262144;
+    const size_t user_stack_size = 262144;
     void* stack = kmalloc_aligned(user_stack_size, 4096);
-    void* kernel_stack = kmalloc_aligned(65536, 65536); 
+    void* kernel_stack = kmalloc_aligned(KERNEL_STACK_SIZE, KERNEL_STACK_ALIGNMENT); 
     if (!stack || !kernel_stack) {
         kfree_null(stack);
         kfree_null(kernel_stack);
         return NULL;
     }
     memset(stack, 0, user_stack_size);
-    memset(kernel_stack, 0, 65536); 
+    memset(kernel_stack, 0, KERNEL_STACK_SIZE); 
     
     // Map User stack to 0x800000
     for (uint64_t i = 0; i < (user_stack_size / 4096); i++) {
@@ -782,7 +782,7 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
     user_argc[0] = (uint64_t)argc;
 
     // 4. Build Stack Frame for context switch via IRETQ
-    uint64_t* stack_ptr = (uint64_t*)((uint64_t)kernel_stack + 65536);
+    uint64_t* stack_ptr = (uint64_t*)((uint64_t)kernel_stack + KERNEL_STACK_SIZE);
     *(--stack_ptr) = 0x1B;            // SS (User Mode Data)
     *(--stack_ptr) = current_user_sp; // RSP (Updated user stack pointer)
     *(--stack_ptr) = 0x202;           // RFLAGS (Interrupts Enabled)
@@ -813,11 +813,11 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
     asm volatile("fninit");
     asm volatile("fxsave %0" : "=m"(*stack_ptr));
 
-    new_proc->kernel_stack = (uint64_t)kernel_stack + 65536;
+    new_proc->kernel_stack = (uint64_t)kernel_stack + KERNEL_STACK_SIZE;
     new_proc->kernel_stack_alloc = kernel_stack;
     new_proc->user_stack_alloc = stack;
     new_proc->rsp = (uint64_t)stack_ptr;
-    new_proc->used_memory = elf_load_size + user_stack_size + 65536;
+    new_proc->used_memory = elf_load_size + user_stack_size + KERNEL_STACK_SIZE;
 
     // Initialize FPU state for new process
     asm volatile("fninit");
@@ -1478,7 +1478,7 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
     proc->fs_base = 0;
     wrmsr(MSR_FS_BASE, 0);
     proc->is_cloned_child = false;
-    proc->used_memory = elf_load_size + user_stack_size + 65536;
+    proc->used_memory = elf_load_size + user_stack_size + KERNEL_STACK_SIZE;
     proc->heap_start = 0x20000000;
     proc->heap_end = 0x20000000;
     proc->mmap_current = 0x50000000;
@@ -1597,9 +1597,10 @@ process_t* process_duplicate(registers_t *parent_regs) {
     if (child->pml4_refcount) *child->pml4_refcount = 1;
 
     size_t stack_size = (uint64_t)parent->kernel_stack - (uint64_t)parent->kernel_stack_alloc;
-    if (stack_size == 0) stack_size = 65536;
+    if (stack_size == 0) stack_size = KERNEL_STACK_SIZE;
 
-    child->kernel_stack_alloc = kmalloc_aligned(stack_size, 4096);
+    const size_t stack_alignment = 4096;
+    child->kernel_stack_alloc = kmalloc_aligned(stack_size, stack_alignment);
     if (!child->kernel_stack_alloc) {
         extern void paging_destroy_user_pml4_phys(uint64_t pml4_phys, bool free_mapped);
         paging_destroy_user_pml4_phys(child->pml4_phys, true);
@@ -1723,8 +1724,8 @@ process_t* process_create_thread(registers_t *parent_regs, uint64_t entry_point,
         __atomic_fetch_add(child->pml4_refcount, 1, __ATOMIC_RELAXED);
     }
 
-    size_t stack_size = 65536;
-    child->kernel_stack_alloc = kmalloc_aligned(stack_size, 4096);
+    const size_t stack_alignment = 4096;
+    child->kernel_stack_alloc = kmalloc_aligned(KERNEL_STACK_SIZE, stack_alignment);
     if (!child->kernel_stack_alloc) {
         if (child->pml4_refcount) {
             __atomic_fetch_sub(child->pml4_refcount, 1, __ATOMIC_RELAXED);
@@ -1733,8 +1734,8 @@ process_t* process_create_thread(registers_t *parent_regs, uint64_t entry_point,
         spinlock_release_irqrestore(&runqueue_lock, rflags);
         return NULL;
     }
-    memset(child->kernel_stack_alloc, 0, stack_size);
-    child->kernel_stack = (uint64_t)child->kernel_stack_alloc + stack_size;
+    memset(child->kernel_stack_alloc, 0, KERNEL_STACK_SIZE);
+    child->kernel_stack = (uint64_t)child->kernel_stack_alloc + KERNEL_STACK_SIZE;
     child->user_stack_alloc = NULL;
 
     fpu_save_to(parent_regs->fxsave_region);

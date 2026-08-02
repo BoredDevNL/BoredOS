@@ -29,6 +29,10 @@ typedef struct {
 #define PCI_SUBCLASS_IDE                  0x01
 #define PCI_SUBCLASS_I2C                  0x03
 
+#define PCI_COMMAND_REGISTER (0x04)
+#define PCI_COMMAND_IO_SPACE (1u << 0)
+#define PCI_COMMAND_BUS_MASTER (1u << 2)
+
 uint32_t pci_read_config(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset);
 void pci_write_config(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint32_t value);
 int pci_device_exists(uint8_t bus, uint8_t device, uint8_t function);

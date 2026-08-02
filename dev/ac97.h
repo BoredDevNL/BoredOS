@@ -8,6 +8,27 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+// OSS-compatible DSP ioctl numbers
+
+#define SNDCTL_DSP_RESET      0x5001
+#define SNDCTL_DSP_SYNC       0x5002
+#define SNDCTL_DSP_SPEED      0x5003
+#define SNDCTL_DSP_STEREO     0x5004
+#define SNDCTL_DSP_GETFMTS    0x5005
+#define SNDCTL_DSP_SETFMT     0x5006
+#define SNDCTL_DSP_CHANNELS   0x5007
+
+// OSS mixer ioctl numbers
+
+#define SOUND_MIXER_READ_VOLUME   0x6001
+#define SOUND_MIXER_WRITE_VOLUME  0x6002
+#define SOUND_MIXER_READ_PCM      0x6003
+#define SOUND_MIXER_WRITE_PCM     0x6004
+#define SOUND_MIXER_READ_MIC      0x6005
+#define SOUND_MIXER_WRITE_MIC     0x6006
+
+#define DEFAULT_SAMPLE_SPEED (48000)
+
 // AC97 Buffer Descriptor List entry. The hardware DMA engine reads an array of
 // these to find the next buffer to play. Must be packed to match the hardware layout.
 typedef struct {

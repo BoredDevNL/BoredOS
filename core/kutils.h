@@ -8,6 +8,10 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#define USEC_PER_MSEC (1000) // Microseconds in milisecond
+#define MSEC_PER_SEC (1000) // Miliseconds in second
+#define USEC_PER_SEC (USEC_PER_MSEC * MSEC_PER_SEC) // Microseconds in second
+
 // Kernel string utilities
 void *memmove(void *dest, const void *src, uint64_t n);
 void *memset(void *dest, int val, size_t len);

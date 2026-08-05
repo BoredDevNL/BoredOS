@@ -3,12 +3,13 @@
 This document describes how AF_UNIX (local /domain) sockets are implemented in BoredOS, how to use the userland API (the usual BSD-style socket functions), and where the kernel-side implementation lives.
 
 **Userland API:**
-- `socket(AF_UNIX, SOCK_STREAM, 0)` — create a unix domain stream socket.
-- `bind()` with `struct sockaddr_un` (path stored in `sun_path`) — bind to a filesystem pathname.
-- `listen()` — mark the socket as listening.
-- `accept()` — accept an incoming connection; returns a new file descriptor for the connection.
-- `connect()` — connect to a listening pathname.
-- `send()` / `recv()` (or `write()` / `read()`) — exchange data on a connected socket.
+- `socket(AF_UNIX, SOCK_STREAM, 0)` creates a unix domain stream socket.
+- `bind()` with `struct sockaddr_un` (path stored in `sun_path`) binds a socket to a filesystem pathname.
+- `listen()` marks the socket as listening.
+- `accept()` accepts an incoming connection; returns a new file descriptor for the connection.
+- `connect()` connects to a listening pathname.
+- `send()` / `recv()` (or `write()` / `read()`) exchanges data on a connected socket.
+- `sendmsg()` / `recvmsg()` with `struct cmsghdr` (`SOL_SOCKET`, `SCM_RIGHTS`) passes open file descriptors across processes over UNIX domain sockets.
 
 Notes:
 - AF_UNIX paths are carried in `sockaddr_un.sun_path`; pathname length is limited by the `sun_path` buffer size.

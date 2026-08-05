@@ -67,9 +67,9 @@
 #include "lwip/sys.h"
 #include "lwip/ip.h"
 #if ENABLE_LOOPBACK
-#if LWIP_NETIF_LOOPBACK_MULTITHREADING
+#if LWIP_NETIF_LOOPBACK_MULTITHREADING || !NO_SYS
 #include "lwip/tcpip.h"
-#endif /* LWIP_NETIF_LOOPBACK_MULTITHREADING */
+#endif /* LWIP_NETIF_LOOPBACK_MULTITHREADING || !NO_SYS */
 #endif /* ENABLE_LOOPBACK */
 
 #include "netif/ethernet.h"

@@ -9,6 +9,7 @@
 #include "platform.h"
 #include "kutils.h"
 #include "kconsole.h"
+#include "idt.h"
 
 static e1000_device_t e1000_dev;
 static int e1000_initialized = 0;
@@ -16,6 +17,14 @@ static e1000_tx_desc_t tx_descriptors[E1000_TX_RING_SIZE] __attribute__((aligned
 static e1000_rx_desc_t rx_descriptors[E1000_RX_RING_SIZE] __attribute__((aligned(16)));
 static uint8_t tx_buffers[E1000_TX_RING_SIZE][2048] __attribute__((aligned(16)));
 static uint8_t rx_buffers[E1000_RX_RING_SIZE][2048] __attribute__((aligned(16)));
+
+static void (*e1000_rx_notify_cb)(void) = NULL;
+
+void e1000_set_rx_notify(void (*callback)(void)) {
+    e1000_rx_notify_cb = callback;
+}
+
+static uint64_t e1000_irq_handler(struct registers_t *regs);
 
 int e1000_init(pci_device_t* pci_dev) {
     if (e1000_initialized) return 0;
@@ -109,6 +118,23 @@ int e1000_init(pci_device_t* pci_dev) {
     e1000_write_reg(mmio_base, E1000_REG_CTRL, ctrl | E1000_CTRL_SLU);
     e1000_dev.initialized = 1;
     e1000_initialized = 1;
+
+    uint8_t irq_line = (uint8_t)(pci_read_config(pci_dev->bus, pci_dev->device,
+                                                   pci_dev->function, 0x3C) & 0xFF);
+    e1000_dev.irq_line = irq_line;
+
+    e1000_write_reg(mmio_base, E1000_REG_IMC, 0xFFFFFFFF);
+    e1000_write_reg(mmio_base, E1000_REG_IMS, E1000_ICR_RXT0 | E1000_ICR_LSC);
+
+    if (irq_line > 0 && irq_line < 16) {
+        idt_register_irq_handler(irq_line, e1000_irq_handler);
+        serial_write("[E1000] IRQ handler registered on IRQ ");
+        char irq_buf[8];
+        itoa(irq_line, irq_buf);
+        serial_write(irq_buf);
+        serial_write("\n");
+    }
+
     return 0;
 }
 
@@ -167,7 +193,29 @@ int e1000_receive_packet(void* buffer, size_t buffer_size) {
     e1000_dev.rx_descriptors[next_idx].length = 0;
     
     e1000_dev.rx_tail = next_idx;
-    e1000_write_reg(e1000_dev.mmio_base, E1000_REG_RDT, e1000_dev.rx_tail);
     
     return (int)length;
+}
+
+void e1000_flush_rx(void) {
+    if (e1000_initialized && e1000_dev.initialized) {
+        e1000_write_reg(e1000_dev.mmio_base, E1000_REG_RDT, e1000_dev.rx_tail);
+    }
+}
+
+static uint64_t e1000_irq_handler(struct registers_t *regs) {
+    (void)regs;
+    if (!e1000_initialized) goto eoi;
+
+    uint32_t icr = e1000_read_reg(e1000_dev.mmio_base, E1000_REG_ICR);
+    if (icr & E1000_ICR_RXT0) {
+        if (e1000_rx_notify_cb) {
+            e1000_rx_notify_cb();
+        }
+    }
+
+eoi:
+    extern void lapic_eoi(void);
+    lapic_eoi();
+    return (uint64_t)regs;
 }

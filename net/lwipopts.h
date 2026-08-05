@@ -20,20 +20,39 @@
 #define LWIP_UDP                   1
 #define LWIP_TCP                   1
 
-#define LWIP_DHCP                  1
-#define LWIP_DNS                   1
+#define LWIP_DHCP                  0
+#define LWIP_IP_ACCEPT_UDP_PORT(port) ((port) == PP_NTOHS(68))
+#define LWIP_DNS                   0
 #define LWIP_IGMP                  0
 #define LWIP_COMPAT_SOCKETS        1
 #define LWIP_POSIX_SOCKETS_IO_NAMES 1
+
+#define LWIP_IPV6                  1
+#define LWIP_IPV6_DHCP6            0
+#define LWIP_IPV6_AUTOCONFIG       1
+#define LWIP_IPV6_ICMP6            1
+#define LWIP_IPV6_MLD              0
+#define IPV6_FRAG_COPYHEADER       1
+
+#define LWIP_SO_RCVTIMEO           1
+#define LWIP_SO_SNDTIMEO           1
+#define LWIP_SO_RCVBUF             1
+#define LWIP_SO_REUSE              1
 
 #define LWIP_NETIF_HOSTNAME        1
 #define LWIP_NETIF_STATUS_CALLBACK 1
 #define LWIP_NETIF_LINK_CALLBACK   1
 
 #define TCP_MSS                    1460
-#define TCP_WND                    (32 * TCP_MSS)
-#define TCP_SND_BUF                (32 * TCP_MSS)
+#define TCP_WND                    (256 * TCP_MSS)
+#define TCP_SND_BUF                (256 * TCP_MSS)
 #define TCP_SND_QUEUELEN           (4 * (TCP_SND_BUF/TCP_MSS))
+
+#define LWIP_WND_SCALE             1
+#define TCP_RCV_SCALE              3
+#define TCP_SNDLOWAT               (2 * TCP_MSS)
+#define LWIP_TCP_SACK_OUT          1
+#define LWIP_TCP_TIMESTAMPS        1
 
 #define MEM_ALIGNMENT              8
 
@@ -45,11 +64,14 @@
 #define MEMP_MEM_MALLOC            0
 #define MEM_LIBC_MALLOC            0
 #define MEM_SIZE                   (16 * 1024 * 1024)
-#define PBUF_POOL_SIZE             256
-#define MEMP_NUM_TCP_SEG           128
-#define MEMP_NUM_PBUF              256
-#define MEMP_NUM_TCP_PCB           16
+#define PBUF_POOL_SIZE             2048
+#define MEMP_NUM_TCP_SEG           1024
+#define MEMP_NUM_PBUF              2048
+#define MEMP_NUM_TCP_PCB           256
+#define MEMP_NUM_RAW_PCB           16
 #define PBUF_POOL_FREE_OOSEQ_QUEUE_CALL() pbuf_free_ooseq()
+#define LWIP_NETIF_LOOPBACK 1
+#define LWIP_HAVE_LOOPIF    1
 #define LWIP_NETIF_LOOPBACK_MULTITHREADING 0
 
 #endif /* LWIPOPTS_H */

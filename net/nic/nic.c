@@ -31,7 +31,7 @@ static int nic_initialized = 0;
 
 static int register_e1000(pci_device_t* dev) {
     if (e1000_init(dev) == 0) {
-        active_nic_driver.name = "e1000";
+        active_nic_driver.name = "em0";
         active_nic_driver.init = e1000_init;
         active_nic_driver.send_packet = e1000_send_packet;
         active_nic_driver.receive_packet = e1000_receive_packet;
@@ -43,7 +43,7 @@ static int register_e1000(pci_device_t* dev) {
 
 static int register_rtl8139(pci_device_t* dev) {
     if (rtl8139_init(dev) == 0) {
-        active_nic_driver.name = "rtl8139";
+        active_nic_driver.name = "re0";
         active_nic_driver.init = rtl8139_init;
         active_nic_driver.send_packet = rtl8139_send_packet;
         active_nic_driver.receive_packet = rtl8139_receive_packet;
@@ -55,7 +55,7 @@ static int register_rtl8139(pci_device_t* dev) {
 
 static int register_virtio_net(pci_device_t* dev) {
     if (virtio_net_init(dev) == 0) {
-        active_nic_driver.name = "virtio-net";
+        active_nic_driver.name = "vtnet0";
         active_nic_driver.init = virtio_net_init;
         active_nic_driver.send_packet = virtio_net_send_packet;
         active_nic_driver.receive_packet = virtio_net_receive_packet;
@@ -67,7 +67,7 @@ static int register_virtio_net(pci_device_t* dev) {
 
 static int register_rtl8111(pci_device_t* dev) {
     if (rtl8111_init(dev) == 0) {
-        active_nic_driver.name = "rtl8111";
+        active_nic_driver.name = "re0";
         active_nic_driver.init = rtl8111_init;
         active_nic_driver.send_packet = rtl8111_send_packet;
         active_nic_driver.receive_packet = rtl8111_receive_packet;
@@ -142,6 +142,9 @@ int nic_get_mac_address(uint8_t* mac_out) {
 }
 
 const char* nic_get_active_name(void) {
+    if (!nic_initialized) {
+        nic_init();
+    }
     if (!nic_initialized || !active_nic_driver.name) return NULL;
     return active_nic_driver.name;
 }

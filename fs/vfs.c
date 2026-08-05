@@ -465,6 +465,29 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
             }
         }
 
+        // Handle TUN device: /dev/net/tun or /dev/tun
+        if (strcmp(devname, "net/tun") == 0 || strcmp(devname, "tun") == 0 || strcmp(devname, "tun0") == 0) {
+            extern void* tun_open(void);
+            void *th = tun_open();
+            if (th) {
+                vfs_file_t *vf = vfs_alloc_file();
+                if (vf) {
+                    vf->mount = &mounts[0];
+                    vf->fs_handle = th;
+                    vf->is_device = true;
+                    vf->device_type = DEVICE_TYPE_TUN;
+                    vf->position = 0;
+                    spinlock_release_irqrestore(&vfs_lock, flags);
+                    return vf;
+                } else {
+                    extern void tun_close(void *handle);
+                    tun_close(th);
+                    spinlock_release_irqrestore(&vfs_lock, flags);
+                    return NULL;
+                }
+            }
+        }
+
         // Handle Shared Memory: /dev/shm/some_name
         if (str_starts_with(devname, "shm/")) {
             const char *shm_name = devname + 4;
@@ -553,6 +576,11 @@ void vfs_close(vfs_file_t *file) {
 
     if (file->is_device && file->device_type == DEVICE_TYPE_AUDIO) {
         ac97_close_client(file->fs_handle);
+    }
+
+    if (file->is_device && file->device_type == DEVICE_TYPE_TUN) {
+        extern void tun_close(void *handle);
+        tun_close(file->fs_handle);
     }
 
     vfs_mount_t *mount = file->mount;
@@ -654,6 +682,10 @@ int vfs_read(vfs_file_t *file, void *buf, size_t size) {
             extern int rtc_dev_read(void *buf, size_t size, uint64_t *position);
             return rtc_dev_read(buf, size, &file->position);
         }
+        else if (file->device_type == DEVICE_TYPE_TUN) {
+            extern int tun_read(void *handle, void *buf, size_t count);
+            return tun_read(file->fs_handle, buf, size);
+        }
         return -1;
     }
 
@@ -745,6 +777,10 @@ int vfs_write(vfs_file_t *file, const void *buf, size_t size) {
             extern int rtc_dev_write(const void *buf, size_t size, uint64_t *position);
             return rtc_dev_write(buf, size, &file->position);
         }
+        else if (file->device_type == DEVICE_TYPE_TUN) {
+            extern int tun_write(void *handle, const void *buf, size_t count);
+            return tun_write(file->fs_handle, buf, size);
+        }
         return -1;
     }
 
@@ -763,6 +799,9 @@ int vfs_ioctl(vfs_file_t *file, uint64_t request, void *arg) {
         } else if (file->device_type == DEVICE_TYPE_PTY_MASTER || file->device_type == DEVICE_TYPE_PTY_SLAVE) {
             extern int pty_ioctl(int pty_id, uint64_t request, void *arg);
             return pty_ioctl((int)(uintptr_t)file->fs_handle, request, arg);
+        } else if (file->device_type == DEVICE_TYPE_TUN) {
+            extern int tun_ioctl(void *handle, unsigned long request, void *arg);
+            return tun_ioctl(file->fs_handle, (unsigned long)request, arg);
         } else if (file->device_type == DEVICE_TYPE_FRAMEBUFFER) {
             // Handle framebuffer ioctls
             
@@ -1398,6 +1437,7 @@ bool vfs_exists(const char *path) {
         if (strcmp(dev, "ptmx") == 0) return true;
         if (strcmp(dev, "pts") == 0) return true;
         if (str_starts_with(dev, "pts/")) return true;
+        if (strcmp(dev, "net") == 0 || strcmp(dev, "net/tun") == 0 || strcmp(dev, "tun") == 0 || strcmp(dev, "tun0") == 0) return true;
         if (strcmp(dev, "keyboard") == 0 || str_starts_with(dev, "keyboard")) return true;
         if (strcmp(dev, "mouse") == 0 || str_starts_with(dev, "mouse")) return true;
         if (str_starts_with(dev, "tty")) return true;
@@ -1448,6 +1488,7 @@ bool vfs_is_directory(const char *path) {
     spinlock_release_irqrestore(&vfs_lock, flags_vfs);
 
     if (strcmp(normalized, "/dev") == 0 || 
+        strcmp(normalized, "/dev/net") == 0 ||
         strcmp(normalized, "/dev/shm") == 0 || 
         strcmp(normalized, "/dev/pts") == 0 || 
         strcmp(normalized, "/sys") == 0 || 
@@ -1457,6 +1498,7 @@ bool vfs_is_directory(const char *path) {
         const char *dev = normalized + 5;
         if (strcmp(dev, "ptmx") == 0) return false;
         if (str_starts_with(dev, "pts/")) return false;
+        if (strcmp(dev, "net/tun") == 0 || strcmp(dev, "tun") == 0 || strcmp(dev, "tun0") == 0) return false;
         // Check if it's a framebuffer device (not a directory)
         if (strcmp(dev, "fb0") == 0 || strcmp(dev, "fb") == 0) return false;
         Disk *d = disk_get_by_name(dev);
@@ -1546,6 +1588,24 @@ int vfs_get_info(const char *path, vfs_dirent_t *info) {
         const char *dev = normalized + 5;
         if (strcmp(dev, "ptmx") == 0) {
             strcpy(info->name, "ptmx");
+            info->size = 0;
+            info->is_directory = 0;
+            info->start_cluster = 0;
+            info->write_date = 0;
+            info->write_time = 0;
+            return 0;
+        }
+        if (strcmp(dev, "net") == 0) {
+            strcpy(info->name, "net");
+            info->size = 0;
+            info->is_directory = 1;
+            info->start_cluster = 0;
+            info->write_date = 0;
+            info->write_time = 0;
+            return 0;
+        }
+        if (strcmp(dev, "net/tun") == 0 || strcmp(dev, "tun") == 0 || strcmp(dev, "tun0") == 0) {
+            strcpy(info->name, "tun");
             info->size = 0;
             info->is_directory = 0;
             info->start_cluster = 0;

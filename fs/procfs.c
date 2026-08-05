@@ -93,7 +93,7 @@ int procfs_read(void *fs_private, void *handle, void *buf, size_t size) {
 
             uint32_t ticks = get_ticks();
 
-            itoa(ticks / 60, out);
+            itoa(ticks / 1000, out);
             strcpy(out + strlen(out), " seconds\nRaw_Ticks:");
 
             char t_s[16];

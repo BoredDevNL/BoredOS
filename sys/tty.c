@@ -9,6 +9,7 @@
 #include "memory_manager.h"
 #include "graphics.h"
 #include "kutils.h"
+#include "process.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -609,6 +610,28 @@ int tty_read_mouse(int id, uint8_t *buf, size_t len) {
 void tty_push_char(int id, uint8_t c) {
     tty_t *t = tty_get(id);
     if (!t) return;
+
+    if (c == 0x03) { // Ctrl+C (ETX / SIGINT)
+        int fg = t->fg_pid;
+        process_t *target = NULL;
+        if (fg > 0) {
+            target = process_get_by_pid((uint32_t)fg);
+        }
+        if (!target) {
+            target = process_find_child_on_tty(id);
+        }
+        if (target && target->pid > 1) {
+            tty_write_output(id, "^C\n", 3);
+            target->signal_pending |= (1ULL << 2); // SIGINT = 2
+            if (target->state == PROC_STATE_BLOCKED) {
+                target->state = PROC_STATE_RUNNING;
+                target->sleep_until = 0;
+            }
+            t->fg_pid = -1;
+            return;
+        }
+    }
+
     tty_queue_push(&t->char_queue, c);
 }
 

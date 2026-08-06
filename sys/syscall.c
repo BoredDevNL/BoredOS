@@ -1344,6 +1344,10 @@ static uint64_t sys_cmd_kill_signal(const syscall_args_t *args) {
   }
 
   target->signal_pending |= (1ULL << (uint32_t)sig);
+  if (target->state == PROC_STATE_BLOCKED) {
+    target->state = PROC_STATE_RUNNING;
+    target->sleep_until = 0;
+  }
   return 0;
 }
 

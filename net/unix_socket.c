@@ -125,6 +125,9 @@ int unix_socket_connect(void *s, const char *path) {
         server_unp->accept_queue[server_unp->accept_count++] = server_conn_unp;
         spinlock_release_irqrestore(&server_unp->lock, sflags);
         wait_queue_wake_all(&server_unp->accept_waitq);
+        if (server_listener_sock) {
+            wait_queue_wake_all(&server_listener_sock->accept_waitq);
+        }
         return 0;
     } else {
         spinlock_release_irqrestore(&server_unp->lock, sflags);
@@ -260,8 +263,8 @@ int unix_socket_recv(void *s, void *data, size_t len, int nonblock, void **out_o
     unpcb_t *unp = (unpcb_t *)sock->unpcb;
 
     while (sockbuf_is_empty(&sock->rx_sb)) {
-        if (nonblock) return -2; // EWOULDBLOCK
         if (unp->state == UNP_STATE_CLOSED || (unp->peer == NULL && unp->state != UNP_STATE_LISTENING)) return 0; // Connection closed
+        if (nonblock) return -2; // EWOULDBLOCK
         wait_queue_wait(&sock->rx_sb.waitq);
     }
 
@@ -319,6 +322,10 @@ void unix_socket_close(void *s) {
         uint64_t pflags = spinlock_acquire_irqsave(&unp->peer->lock);
         unp->peer->peer = NULL;
         spinlock_release_irqrestore(&unp->peer->lock, pflags);
+        if (unp->peer->sock) {
+            process_fd_socket_t *peer_sock = (process_fd_socket_t *)unp->peer->sock;
+            wait_queue_wake_all(&peer_sock->rx_sb.waitq);
+        }
         unp->peer = NULL;
     }
 

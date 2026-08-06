@@ -242,8 +242,13 @@ void process_socket_release(process_fd_socket_t *sock) {
     sock->refs--;
     if (sock->refs > 0) return;
 
-    extern void network_socket_close(process_fd_socket_t *sock);
-    network_socket_close(sock);
+    if (sock->domain == 1 || sock->unpcb != NULL) {
+        extern void unix_socket_close(void *sock);
+        unix_socket_close(sock);
+    } else {
+        extern void network_socket_close(process_fd_socket_t *sock);
+        network_socket_close(sock);
+    }
 
     accept_queue_entry_t *curr = sock->accept_head;
     while (curr) {

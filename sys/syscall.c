@@ -380,8 +380,9 @@ static uint64_t fs_cmd_unix_socket_accept(const syscall_args_t *args) {
     return -1;
 
   if (sock->domain == AF_UNIX) {
+    int nonblock = (proc->fd_flags[fd] & O_NONBLOCK) ? 1 : 0;
     extern void* unix_socket_accept(void *sock, int nonblock);
-    process_fd_socket_t *client = (process_fd_socket_t *)unix_socket_accept(sock, 0);
+    process_fd_socket_t *client = (process_fd_socket_t *)unix_socket_accept(sock, nonblock);
     if (!client) return (uint64_t)-2;
 
     int newfd = fs_alloc_fd_slot(proc, 0);
@@ -1031,10 +1032,18 @@ static uint64_t fs_cmd_poll(const syscall_args_t *args) {
       process_fd_socket_t *sock = (process_fd_socket_t *)proc->fds[fd];
       if (sock) {
         if (sock->is_listening) {
-          if (pt->qproc)
-            pt->qproc(&sock->accept_waitq, pt);
-          if (sock->accept_queue_count > 0)
-            mask |= POLLIN;
+          if (sock->domain == AF_UNIX && sock->unpcb) {
+            unpcb_t *unp = (unpcb_t *)sock->unpcb;
+            if (pt->qproc)
+              pt->qproc(&unp->accept_waitq, pt);
+            if (unp->accept_count > 0)
+              mask |= POLLIN;
+          } else {
+            if (pt->qproc)
+              pt->qproc(&sock->accept_waitq, pt);
+            if (sock->accept_queue_count > 0)
+              mask |= POLLIN;
+          }
         } else {
           if (pt->qproc) {
             pt->qproc(&sock->rx_sb.waitq, pt);
@@ -1042,6 +1051,12 @@ static uint64_t fs_cmd_poll(const syscall_args_t *args) {
           }
           extern int sockbuf_readable(sockbuf_t *sb);
           if (sockbuf_readable(&sock->rx_sb)) mask |= POLLIN;
+          if (sock->domain == AF_UNIX && sock->unpcb) {
+            unpcb_t *unp = (unpcb_t *)sock->unpcb;
+            if (unp->state == UNP_STATE_CLOSED || (unp->peer == NULL && unp->state == UNP_STATE_CONNECTED)) {
+              mask |= (POLLIN | POLLHUP);
+            }
+          }
           if (sock->tcp_closed) mask |= (POLLIN | POLLHUP);
           if (sock->tcp_connect_error) mask |= POLLERR;
           if (sock->is_connected || sock->type == 2) mask |= POLLOUT;

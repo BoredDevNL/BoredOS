@@ -1,0 +1,38 @@
+# /etc/services
+# Standard Internet Services
+domain          53/tcp          nameserver
+domain          53/udp          nameserver
+http            80/tcp          www
+https           443/tcp
+echo            7/tcp
+echo            7/udp
+discard         9/tcp           sink null
+discard         9/udp           sink null
+systat          11/tcp          users
+daytime         13/tcp
+daytime         13/udp
+netstat         15/tcp
+qotd            17/tcp          quote
+chargen         19/tcp          ttytst source
+ftp-data        20/tcp
+ftp             21/tcp
+ssh             22/tcp
+telnet          23/tcp
+smtp            25/tcp          mail
+time            37/tcp          timserver
+time            37/udp          timserver
+whois           43/tcp          nicname
+bootps          67/udp          dhcps
+bootpc          68/udp          dhcpc
+tftp            69/udp
+gopher          70/tcp
+finger          79/tcp
+ntp             123/udp
+imap            143/tcp
+snmp            161/udp
+snmptrap        162/udp
+bgp             179/tcp
+irc             194/tcp
+ldaps           636/tcp
+imaps           993/tcp
+pop3s           995/tcp

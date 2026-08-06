@@ -94,7 +94,8 @@ int tun_ioctl(void *handle, unsigned long request, void *arg) {
             if (netif_add(&tun_dev.netif, &ipaddr, &netmask, &gw, &tun_dev, tun_netif_init, (tun_dev.flags & IFF_TAP) ? ethernet_input : ip_input) != NULL) {
                 netif_set_up(&tun_dev.netif);
                 tun_dev.is_active = 1;
-                strncpy(ifr->ifr_name, "tun0", 16);
+                memset(ifr->ifr_name, 0, sizeof(ifr->ifr_name));
+                strncpy(ifr->ifr_name, "tun0", sizeof(ifr->ifr_name) - 1);
                 spinlock_release_irqrestore(&tun_dev.lock, flags);
                 return 0;
             }

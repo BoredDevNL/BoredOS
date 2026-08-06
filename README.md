@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="base/Library/Images/branding/bOS_full_gradient_cropped.png" alt="BoredOS Logo" width="450" />
+  <img src="base/Library/Images/branding/bos.png" alt="BoredOS Logo" width="250" />
 
   <h3>An operating system built for the enjoyment of building it.</h3>
 

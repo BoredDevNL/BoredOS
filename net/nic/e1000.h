@@ -16,6 +16,7 @@
 #define E1000_REG_EERD     0x0014
 #define E1000_REG_ICR      0x00C0
 #define E1000_REG_IMS      0x00D0
+#define E1000_REG_IMC      0x00D8
 #define E1000_REG_RCTL     0x0100
 #define E1000_REG_TCTL     0x0400
 #define E1000_REG_TIPG     0x0410
@@ -53,6 +54,7 @@
 #define E1000_TCTL_COLD    (0x3FF << 12)
 
 #define E1000_ICR_TXDW     (1 << 0)
+#define E1000_ICR_LSC      (1 << 2)
 #define E1000_ICR_RXT0     (1 << 7)
 
 #define E1000_TX_RING_SIZE 256
@@ -81,6 +83,7 @@ typedef struct {
     volatile uint32_t* mmio_base;
     pci_device_t pci_dev;
     int initialized;
+    uint8_t irq_line;
     struct { uint8_t bytes[6]; } mac_address;
     e1000_tx_desc_t* tx_descriptors;
     void* tx_buffers[E1000_TX_RING_SIZE];
@@ -98,5 +101,6 @@ static inline void e1000_write_reg(volatile uint32_t* mmio_base, uint16_t offset
 e1000_device_t* e1000_get_device(void);
 int e1000_send_packet(const void* data, size_t length);
 int e1000_receive_packet(void* buffer, size_t buffer_size);
+void e1000_set_rx_notify(void (*callback)(void));
 
 #endif

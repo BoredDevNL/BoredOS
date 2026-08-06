@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "wait_queue.h"
 #include "kutils.h"
+#include "process.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -104,7 +105,23 @@ int pty_write_input(int pty_id, const char *buf, size_t len) {
     pty_pair_t *p = pty_get(pty_id);
     if (!p || !p->used) return 0;
     for (size_t i = 0; i < len; i++) {
-        pty_queue_push(&p->master_to_slave, (uint8_t)buf[i]);
+        uint8_t c = (uint8_t)buf[i];
+        if (c == CTRL_C_CHAR) { // Ctrl+C (SIGINT)
+            int fg = p->fg_pid;
+            process_t *target = NULL;
+            if (fg > 0) {
+                target = process_get_by_pid((uint32_t)fg);
+            }
+            if (!target) {
+                target = process_find_child_on_tty(pty_id);
+            }
+            if (target && target->pid > 1) {
+                process_terminate_with_status(target, 128 + SIGINT_CODE);
+                p->fg_pid = -1;
+                continue;
+            }
+        }
+        pty_queue_push(&p->master_to_slave, c);
     }
     return (int)len;
 }

@@ -39,6 +39,8 @@ void wait_queue_init(wait_queue_head_t *h);
 void wait_queue_add(wait_queue_head_t *h, wait_queue_entry_t *entry);
 void wait_queue_remove(wait_queue_head_t *h, wait_queue_entry_t *entry);
 void wait_queue_wake_all(wait_queue_head_t *h);
+void wait_queue_wait(wait_queue_head_t *h);
+void wait_queue_wait_timeout(wait_queue_head_t *h, uint32_t timeout_ms);
 
 // --- Poll/Select Support ---
 #define POLLIN      0x0001

@@ -64,9 +64,10 @@ int network_get_mac_address(mac_address_t* mac);
 int network_get_nic_name(char* name_out);
 int network_get_ipv4_address(ipv4_address_t* ip);
 int network_set_ipv4_address(const ipv4_address_t* ip);
+int network_set_gateway_ip(const ipv4_address_t* ip);
 int network_send_frame(const void* data, size_t length);
 int network_receive_frame(void* buffer, size_t buffer_size);
-void network_process_frames(void);
+int network_process_frames(void);
 int arp_send_request(const ipv4_address_t* target_ip);
 int arp_lookup(const ipv4_address_t* ip, mac_address_t* mac);
 void arp_process_packet(const arp_header_t* arp, size_t length);
@@ -86,17 +87,26 @@ int network_get_udp_callbacks_called(void);
 int network_get_e1000_receive_calls(void);
 int network_get_e1000_receive_empty(void);
 int network_get_process_calls(void);
-int network_dhcp_acquire(void);
 int network_get_gateway_ip(ipv4_address_t* ip);
 int network_icmp_single_ping(ipv4_address_t *dest);
 int network_socket_bind(void *sock, uint32_t ip_val, uint16_t port);
-int network_socket_listen(void *sock);
+int network_socket_listen(void *sock, int backlog);
 int network_socket_connect(void *sock, uint32_t ip_val, uint16_t port);
 int network_socket_recv(void *sock, void *buf, size_t max_len, int nonblock);
 int network_socket_send(void *sock, const void *data, size_t len, int nonblock);
 int network_socket_recvfrom(void *sock, void *buf, size_t max_len, int nonblock, uint32_t *from_ip, uint16_t *from_port);
 int network_socket_sendto(void *sock, const void *data, size_t len, uint32_t dest_ip, uint16_t dest_port);
 void network_socket_close(void *sock);
-void network_socket_get_remote_info(void *sock, uint16_t *port, uint32_t *ip);
+typedef struct { uint8_t bytes[16]; } ipv6_address_t;
+
+int network_socket_bind_v6(void *s, const ipv6_address_t *ip6, uint16_t port);
+int network_socket_connect_v6(void *s, const ipv6_address_t *ip6, uint16_t port);
+int network_socket_recvfrom_v6(void *s, void *buf, size_t max_len, int nonblock, ipv6_address_t *from_ip, uint16_t *from_port);
+int network_socket_sendto_v6(void *s, const void *data, size_t len, const ipv6_address_t *dest_ip, uint16_t dest_port);
+int network_icmp6_single_ping(const ipv6_address_t *dest);
+
+int network_setsockopt(void *s, int level, int optname, const void *optval, size_t optlen);
+int network_getsockopt(void *s, int level, int optname, void *optval, size_t *optlen);
+int network_if_ioctl(unsigned long cmd, void *arg);
 
 #endif

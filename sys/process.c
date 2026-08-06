@@ -216,31 +216,19 @@ void process_close_fd_inner(process_t *proc, int fd) {
     proc->fd_flags[fd] = 0;
 }
 
-static void process_socket_drop_pipes(process_fd_socket_t *sock) {
-    if (!sock) return;
-    if (sock->rx_pipe) {
-        process_fd_pipe_t *pipe = sock->rx_pipe;
-        pipe->readers--;
-        if (pipe->readers <= 0 && pipe->writers <= 0) {
-            kfree_null(pipe);
-        }
-        sock->rx_pipe = NULL;
-    }
-    if (sock->tx_pipe) {
-        process_fd_pipe_t *pipe = sock->tx_pipe;
-        pipe->writers--;
-        if (pipe->readers <= 0 && pipe->writers <= 0) {
-            kfree_null(pipe);
-        }
-        sock->tx_pipe = NULL;
-    }
-}
+
 
 process_fd_socket_t *process_socket_create(void) {
     process_fd_socket_t *sock = (process_fd_socket_t *)kmalloc(sizeof(*sock));
     if (!sock) return NULL;
     memset(sock, 0, sizeof(*sock));
     sock->refs = 1;
+    sock->lock = SPINLOCK_INIT;
+    sock->backlog_max = 128;
+    sockbuf_init(&sock->rx_sb, 64 * 1024);
+    sockbuf_init(&sock->tx_sb, 64 * 1024);
+    wait_queue_init(&sock->accept_waitq);
+    wait_queue_init(&sock->rx_waitq);
     return sock;
 }
 
@@ -254,15 +242,24 @@ void process_socket_release(process_fd_socket_t *sock) {
     sock->refs--;
     if (sock->refs > 0) return;
 
-    if (sock->domain == 2) {
-        extern void network_socket_close(process_fd_socket_t *sock);
-        network_socket_close(sock);
-    } else {
-        if (sock->is_bound && sock->path[0]) {
-            unix_unregister_listener(sock->path);
+    extern void network_socket_close(process_fd_socket_t *sock);
+    network_socket_close(sock);
+
+    accept_queue_entry_t *curr = sock->accept_head;
+    while (curr) {
+        accept_queue_entry_t *next = curr->next;
+        if (curr->client_sock) {
+            process_socket_release((process_fd_socket_t *)curr->client_sock);
         }
-        process_socket_drop_pipes(sock);
+        kfree_null(curr);
+        curr = next;
     }
+    sock->accept_head = NULL;
+    sock->accept_tail = NULL;
+    sock->accept_queue_count = 0;
+
+    sockbuf_destroy(&sock->rx_sb);
+    sockbuf_destroy(&sock->tx_sb);
     kfree_null(sock);
 }
 
@@ -1058,9 +1055,6 @@ static void process_cleanup_inner(process_t *proc) {
 
     extern void cmd_process_finished(void);
     cmd_process_finished();
-
-    extern void network_cleanup(void);
-    network_cleanup();
 }
 
 #define MAX_TTY_KILL_PROCS 64
@@ -1080,6 +1074,23 @@ static void kill_tty_cb(process_t *proc, void *arg) {
             }
         }
     }
+}
+
+static void find_child_tty_cb(process_t *proc, void *arg) {
+    kill_tty_arg_t *a = (kill_tty_arg_t *)arg;
+    if (proc && proc->pid > 1 && proc->tty_id == a->tty_id) {
+        if (proc->state != PROC_STATE_ZOMBIE && !proc->kill_pending && !proc->is_terminal_proc) {
+            if (!a->procs[0] || proc->pid > a->procs[0]->pid) {
+                a->procs[0] = proc;
+            }
+        }
+    }
+}
+
+process_t* process_find_child_on_tty(int tty_id) {
+    kill_tty_arg_t a = { .tty_id = tty_id, .procs = {0}, .count = 0 };
+    process_table_for_each(find_child_tty_cb, &a);
+    return a.procs[0];
 }
 
 void process_kill_by_tty(int tty_id) {

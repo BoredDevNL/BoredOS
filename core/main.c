@@ -632,6 +632,9 @@ static void init_tty(void) {
     extern void bootfs_refresh_from_disk(void);
     bootfs_refresh_from_disk();
 
+    extern void hostname_init(void);
+    hostname_init();
+
     tty_init();
     pty_init();
     kconsole_set_active(false);

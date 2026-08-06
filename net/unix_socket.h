@@ -2,38 +2,47 @@
 #define UNIX_SOCKET_H
 
 #include <stdint.h>
+#include <stddef.h>
 #include "wait_queue.h"
+#include "spinlock.h"
+#include "sockbuf.h"
 
-typedef struct unix_listener unix_listener_t;
+#define UNP_STATE_UNCONNECTED 0
+#define UNP_STATE_BOUND       1
+#define UNP_STATE_LISTENING   2
+#define UNP_STATE_CONNECTED   3
+#define UNP_STATE_CLOSED      4
 
-typedef struct unix_pending_conn {
-	void *pipe1; // client->server
-	void *pipe2; // server->client
-	int client_pid;
-	int client_fd;
-	struct unix_pending_conn *next;
-} unix_pending_conn_t;
+typedef struct unpcb {
+    char path[108];
+    uint8_t type;            // SOCK_STREAM or SOCK_DGRAM
+    uint8_t state;           // UNP_STATE_*
+    spinlock_t lock;
+    struct unpcb *peer;      // Peer unpcb for stream or connected dgram
+    void *sock;              // Backpointer to process_fd_socket_t
 
-// Register a listener for a pathname. Returns 0 on success.
-int unix_register_listener(const char *path, int owner_pid, int owner_fd);
-// Unregister listener by pathname
-int unix_unregister_listener(const char *path);
-// Find listener by path; returns NULL if not found
-unix_listener_t *unix_find_listener(const char *path);
-// Find listener by owner pid and fd
-unix_listener_t *unix_find_listener_by_owner(int owner_pid, int owner_fd);
+    // Accept queue for stream listener
+    struct unpcb *accept_queue[16];
+    int accept_count;
+    wait_queue_head_t accept_waitq;
 
-void unix_listener_set_listening(unix_listener_t *lst, int listening);
-int unix_listener_is_listening(unix_listener_t *lst);
+    // Ancillary passed file descriptor storage (SCM_RIGHTS)
+    void *passed_objs[16];
+    uint8_t passed_kinds[16];
+    int passed_flags[16];
+    int passed_fd_count;
 
-// Enqueue a pending connection structure onto listener
-int unix_enqueue_pending(unix_listener_t *lst, unix_pending_conn_t *pc);
-// Dequeue a pending connection; returns NULL if none
-unix_pending_conn_t *unix_dequeue_pending(unix_listener_t *lst);
-wait_queue_head_t *unix_listener_get_accept_waitq(unix_listener_t *lst);
-int unix_listener_has_pending(unix_listener_t *lst);
+    struct unpcb *next;      // Listener linked list
+} unpcb_t;
 
-// Create a pending connection object (holds pipe pointers)
-unix_pending_conn_t *unix_create_pending_conn(void *pipe1, void *pipe2, int client_pid, int client_fd);
+int  unix_socket_create(void *sock, int type);
+int  unix_socket_bind(void *sock, const char *path);
+int  unix_socket_listen(void *sock, int backlog);
+int  unix_socket_connect(void *sock, const char *path);
+void* unix_socket_accept(void *sock, int nonblock);
+int  unix_socket_send(void *sock, const void *data, size_t len, int nonblock, const int *pass_fds, int pass_fd_count, const char *dest_path);
+int  unix_socket_recv(void *sock, void *data, size_t len, int nonblock, void **out_objs, uint8_t *out_kinds, int *out_flags, int *out_fd_count);
+int  unix_socketpair(void *sock1, void *sock2, int type);
+void unix_socket_close(void *sock);
 
 #endif

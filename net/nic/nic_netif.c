@@ -16,14 +16,17 @@
 
 static err_t nic_low_level_output(struct netif *netif, struct pbuf *p) {
   (void)netif;
+  extern void raw_tap_broadcast(const void *data, size_t len);
 
   if (p->next == NULL) {
+    raw_tap_broadcast(p->payload, p->len);
     if (nic_send_packet(p->payload, p->len) != 0) {
       return ERR_IF;
     }
   } else {
     u8_t buffer[2048];
     u16_t copied = pbuf_copy_partial(p, buffer, 2048, 0);
+    raw_tap_broadcast(buffer, copied);
     if (nic_send_packet(buffer, copied) != 0) {
       return ERR_IF;
     }
@@ -33,33 +36,46 @@ static err_t nic_low_level_output(struct netif *netif, struct pbuf *p) {
   return ERR_OK;
 }
 
-static void nic_low_level_input(struct netif *netif) {
-  u8_t buffer[2048];
+static int nic_low_level_input(struct netif *netif) {
+  static u8_t buffer[2048];
   int len;
+  int count = 0;
+  extern void raw_tap_broadcast(const void *data, size_t len);
+  extern void e1000_flush_rx(void);
   
   while ((len = nic_receive_packet(buffer, sizeof(buffer))) > 0) {
-    
+    count++;
+    raw_tap_broadcast(buffer, len);
     struct pbuf *p = pbuf_alloc(PBUF_RAW, len, PBUF_POOL);
     if (p != NULL) {
       pbuf_take(p, buffer, len);
-      if (netif->input(p, netif) != ERR_OK) {
+      err_t err = netif->input(p, netif);
+      if (err != ERR_OK) {
         pbuf_free(p);
       } else {
         LINK_STATS_INC(link.recv);
       }
     }
   }
+  if (count > 0) {
+    e1000_flush_rx();
+  }
+  return count;
 }
 
 err_t nic_netif_init(struct netif *netif) {
-  netif->name[0] = IFNAME0;
-  netif->name[1] = IFNAME1;
-  netif->output = etharp_output;
-  netif->linkoutput = nic_low_level_output;
-  
   nic_driver_t* dev = nic_get_driver();
   if (!dev) return ERR_IF;
-  
+
+  if (dev->name && dev->name[0] && dev->name[1]) {
+    netif->name[0] = dev->name[0];
+    netif->name[1] = dev->name[1];
+  } else {
+    netif->name[0] = 'e';
+    netif->name[1] = 'm';
+  }
+  netif->output = etharp_output;
+  netif->linkoutput = nic_low_level_output;
   netif->hwaddr_len = 6;
   nic_get_mac_address(netif->hwaddr);
   
@@ -72,6 +88,6 @@ err_t nic_netif_init(struct netif *netif) {
   return ERR_OK;
 }
 
-void nic_netif_poll(struct netif *netif) {
-  nic_low_level_input(netif);
+int nic_netif_poll(struct netif *netif) {
+  return nic_low_level_input(netif);
 }

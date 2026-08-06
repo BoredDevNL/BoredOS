@@ -83,6 +83,7 @@ typedef struct vfs_fs_ops {
 #define DEVICE_TYPE_RTC         9
 #define DEVICE_TYPE_PTY_MASTER  10
 #define DEVICE_TYPE_PTY_SLAVE   11
+#define DEVICE_TYPE_TUN         12
 
 // VFS file handle
 struct vfs_file {

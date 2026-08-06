@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include "sockbuf.h"
 
 #define MAX_PROCESS_FDS 64
 #define MAX_SIGNALS 64
@@ -23,6 +24,43 @@
 #define PROC_FD_KIND_PIPE_WRITE 3
 #define PROC_FD_KIND_TTY 4
 #define PROC_FD_KIND_SOCKET 5
+
+// Socket Domains
+#ifndef AF_UNIX
+#define AF_UNIX 1
+#endif
+#ifndef AF_INET
+#define AF_INET 2
+#endif
+#ifndef AF_INET6
+#define AF_INET6 10
+#endif
+#ifndef AF_PACKET
+#define AF_PACKET 17
+#endif
+
+// Socket Types
+#ifndef SOCK_STREAM
+#define SOCK_STREAM 1
+#endif
+#ifndef SOCK_DGRAM
+#define SOCK_DGRAM 2
+#endif
+#ifndef SOCK_RAW
+#define SOCK_RAW 3
+#endif
+
+// Socket Protocols
+#ifndef IPPROTO_ICMP
+#define IPPROTO_ICMP 1
+#endif
+#ifndef IPPROTO_ICMPV6
+#define IPPROTO_ICMPV6 58
+#endif
+
+// Signal numbers and bitmasks
+#define SIGINT_CODE 2
+#define SIGINT      (1ULL << SIGINT_CODE)
 
 typedef struct {
     void *file;
@@ -42,26 +80,46 @@ typedef struct {
     wait_queue_head_t write_queue;
 } process_fd_pipe_t;
 
+typedef struct accept_queue_entry {
+    void *client_sock; // process_fd_socket_t*
+    struct accept_queue_entry *next;
+} accept_queue_entry_t;
+
 typedef struct {
     int refs;
-    uint8_t domain; // 1 = AF_UNIX, 2 = AF_INET
-    uint8_t type;   // 1 = SOCK_STREAM, 2 = SOCK_DGRAM
+    spinlock_t lock;
+    uint8_t domain;   // AF_UNIX, AF_INET, AF_INET6, AF_PACKET
+    uint8_t type;     // SOCK_STREAM, SOCK_DGRAM, SOCK_RAW
+    uint8_t protocol; // IPPROTO_ICMP, IPPROTO_ICMPV6, etc.
     uint8_t is_bound;
     uint8_t is_listening;
     uint8_t is_connected;
     char path[108];
-    process_fd_pipe_t *rx_pipe;
-    process_fd_pipe_t *tx_pipe;
+
+    // Unix domain socket PCB
+    void *unpcb;
 
     // TCP/IP socket fields
-    void *pcb;              // Pointer to struct tcp_pcb
+    void *pcb;              // Pointer to struct tcp_pcb or udp_pcb or raw_pcb
+    sockbuf_t rx_sb;        // Receive socket buffer
+    sockbuf_t tx_sb;        // Send socket buffer
     void *recv_queue;       // Pointer to struct pbuf
     uint8_t tcp_closed;
     uint8_t tcp_connect_error;
     uint8_t tcp_connect_done;
 
+    // Socket options
+    uint32_t rcvtimeo;      // Receive timeout in ms
+    uint32_t sndtimeo;      // Send timeout in ms
+    uint8_t  reuseaddr;
+    uint8_t  reuseport;
+    uint8_t  keepalive;
+    uint8_t  nodelay;
+
     // Backlog of accepted client sockets
-    void *accept_queue[16]; // Backlog of process_fd_socket_t*
+    uint32_t backlog_max;
+    accept_queue_entry_t *accept_head;
+    accept_queue_entry_t *accept_tail;
     int accept_queue_count;
     wait_queue_head_t accept_waitq;
     wait_queue_head_t rx_waitq;
@@ -168,6 +226,7 @@ typedef struct process {
     char ping_result[64];
     poll_wtable_t poll_table;
     wait_queue_entry_t pipe_wait_entry;
+    wait_queue_entry_t wait_node;
 } __attribute__((aligned(16))) process_t;
 
 // Loads the ELF executable at 'path' using fat32 into the pagemap given by user_pml4.
@@ -209,6 +268,7 @@ process_t* process_get_by_pid(uint32_t pid);
 void process_hold(process_t *proc);
 void process_put(process_t *proc);
 void process_table_for_each(void (*cb)(process_t *proc, void *arg), void *arg);
+process_t* process_find_child_on_tty(int tty_id);
 int process_get_all_pids(uint32_t *pids_out, int max_pids);
 extern uint32_t reaper_pid; /* PID of the userspace zombie reaper daemon */
 int process_waitpid(uint32_t caller_pid, int target_pid, int options, int *status_out);

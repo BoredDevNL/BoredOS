@@ -12,6 +12,7 @@
 #include "platform.h"
 #include "disk.h"
 #include <limits.h>
+#include "hostname.h"
 
 // --- Graphics Implementation ---
 static int read_gfx_drm(char *buf, size_t size, size_t offset) {
@@ -610,6 +611,29 @@ static int read_gpio_debug(char *buf, size_t size, size_t offset) {
     return (int)to_copy;
 }
 
+
+static int read_sys_hostname(char *buf, size_t size, size_t offset) {
+    if (!buf || size == 0) return -1;
+    char host_name[MAX_HOSTNAME_LEN];
+    kernel_get_hostname(host_name, sizeof(host_name));
+    strcat(host_name, "\n");
+    size_t len = strlen(host_name);
+    if (offset >= len) return 0;
+    size_t to_copy = len - offset;
+    if (to_copy > size) to_copy = size;
+    memcpy(buf, host_name + offset, to_copy);
+    return (int)to_copy;
+}
+
+static int write_sys_hostname(const char *buf, size_t count, size_t offset) {
+    (void)offset;
+    if (!buf || count == 0) return -1;
+    if (kernel_set_hostname(buf, count) == 0) {
+        return (int)count;
+    }
+    return -1;
+}
+
 void sysfs_init_subsystems(void) {
     kernel_subsystem_t *kernel, *devices, *bus, *class, *debug, *mem_debug;
 
@@ -633,6 +657,7 @@ void sysfs_init_subsystems(void) {
     subsystem_add_file(kernel, "ticks", read_ticks_info, NULL);
     subsystem_add_file(kernel, "meminfo", read_mem_info, NULL);
     subsystem_add_file(kernel, "keyboard_layout", read_keyboard_layout, write_keyboard_layout);
+    subsystem_add_file(kernel, "hostname", read_sys_hostname, write_sys_hostname);
 
     // Bus info
     kernel_subsystem_t *pci_bus;
@@ -666,8 +691,4 @@ void sysfs_init_subsystems(void) {
 
     // GPIO
     subsystem_add_file(debug, "gpio", read_gpio_debug, NULL);
-
-    // Network Interface Class
-    extern void sysfs_net_init(void);
-    sysfs_net_init();
 }

@@ -79,3 +79,34 @@ void wait_queue_wake_all(wait_queue_head_t *h) {
     
     spinlock_release_irqrestore(&h->lock, flags);
 }
+
+void wait_queue_wait(wait_queue_head_t *h) {
+    if (!h) return;
+    process_t *curr = process_get_current();
+    if (curr) {
+        curr->wait_node.proc = curr;
+        curr->wait_node.next = NULL;
+        wait_queue_add(h, &curr->wait_node);
+        curr->state = PROC_STATE_BLOCKED;
+        asm volatile("int $0x20");
+        wait_queue_remove(h, &curr->wait_node);
+    }
+}
+
+void wait_queue_wait_timeout(wait_queue_head_t *h, uint32_t timeout_ms) {
+    if (!h) return;
+    process_t *curr = process_get_current();
+    if (curr) {
+        curr->wait_node.proc = curr;
+        curr->wait_node.next = NULL;
+        wait_queue_add(h, &curr->wait_node);
+        curr->state = PROC_STATE_BLOCKED;
+        if (timeout_ms > 0) {
+            extern uint64_t get_ticks(void);
+            curr->sleep_until = get_ticks() + timeout_ms;
+        }
+        asm volatile("int $0x20");
+        curr->sleep_until = 0;
+        wait_queue_remove(h, &curr->wait_node);
+    }
+}

@@ -614,14 +614,14 @@ static int read_gpio_debug(char *buf, size_t size, size_t offset) {
 
 static int read_sys_hostname(char *buf, size_t size, size_t offset) {
     if (!buf || size == 0) return -1;
-    char name[64];
-    kernel_get_hostname(name, sizeof(name));
-    strcat(name, "\n");
-    size_t len = strlen(name);
+    char host_name[MAX_HOSTNAME_LEN];
+    kernel_get_hostname(host_name, sizeof(host_name));
+    strcat(host_name, "\n");
+    size_t len = strlen(host_name);
     if (offset >= len) return 0;
     size_t to_copy = len - offset;
     if (to_copy > size) to_copy = size;
-    memcpy(buf, name + offset, to_copy);
+    memcpy(buf, host_name + offset, to_copy);
     return (int)to_copy;
 }
 

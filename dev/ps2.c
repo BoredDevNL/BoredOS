@@ -127,11 +127,11 @@ uint64_t keyboard_handler(registers_t *regs) {
                             extern process_t* process_get_by_pid(uint32_t pid);
                             process_t *proc = process_get_by_pid((uint32_t)fg_pid);
                             if (proc) {
-                                proc->signal_pending |= (1ULL << 2); // SIGINT = 2
+                                proc->signal_pending |= SIGINT;
                             }
                         } else {
                             // No foreground process, send as input character
-                            tty_push_char(tty_id, 0x03); // Ctrl+C = ETX
+                            tty_push_char(tty_id, CTRL_C_CHAR); // Ctrl+C = ETX
                         }
                     } else if (cp >= 'a' && cp <= 'z') {
                         tty_push_char(tty_id, (uint8_t)(cp - 0x60));

@@ -12,6 +12,8 @@
 
 #define TIOCGWINSZ 0x5413
 
+#define CTRL_C_CHAR 0x03
+
 struct winsize {
     unsigned short ws_row;
     unsigned short ws_col;

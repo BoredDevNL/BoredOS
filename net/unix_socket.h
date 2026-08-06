@@ -7,10 +7,16 @@
 #include "spinlock.h"
 #include "sockbuf.h"
 
+#define UNP_STATE_UNCONNECTED 0
+#define UNP_STATE_BOUND       1
+#define UNP_STATE_LISTENING   2
+#define UNP_STATE_CONNECTED   3
+#define UNP_STATE_CLOSED      4
+
 typedef struct unpcb {
     char path[108];
-    uint8_t type;            // SOCK_STREAM (1) or SOCK_DGRAM (2)
-    uint8_t state;           // 0=unconnected, 1=bound, 2=listening, 3=connected, 4=closed
+    uint8_t type;            // SOCK_STREAM or SOCK_DGRAM
+    uint8_t state;           // UNP_STATE_*
     spinlock_t lock;
     struct unpcb *peer;      // Peer unpcb for stream or connected dgram
     void *sock;              // Backpointer to process_fd_socket_t

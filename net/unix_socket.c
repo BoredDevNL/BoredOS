@@ -17,7 +17,7 @@ int unix_socket_create(void *s, int type) {
     memset(unp, 0, sizeof(*unp));
 
     unp->type = (uint8_t)type;
-    unp->state = 0;
+    unp->state = UNP_STATE_UNCONNECTED;
     unp->lock = SPINLOCK_INIT;
     unp->peer = NULL;
     unp->sock = sock;
@@ -36,13 +36,13 @@ int unix_socket_bind(void *s, const char *path) {
 
     unpcb_t *unp = (unpcb_t *)sock->unpcb;
     uint64_t flags = spinlock_acquire_irqsave(&unp->lock);
-    if (unp->state != 0) {
+    if (unp->state != UNP_STATE_UNCONNECTED) {
         spinlock_release_irqrestore(&unp->lock, flags);
         return -1;
     }
 
     strncpy(unp->path, path, sizeof(unp->path) - 1);
-    unp->state = 1; // bound
+    unp->state = UNP_STATE_BOUND;
     spinlock_release_irqrestore(&unp->lock, flags);
 
     flags = spinlock_acquire_irqsave(&unix_listeners_lock);
@@ -61,11 +61,11 @@ int unix_socket_listen(void *s, int backlog) {
 
     unpcb_t *unp = (unpcb_t *)sock->unpcb;
     uint64_t flags = spinlock_acquire_irqsave(&unp->lock);
-    if (unp->state != 1) { // must be bound
+    if (unp->state != UNP_STATE_BOUND) { // must be bound
         spinlock_release_irqrestore(&unp->lock, flags);
         return -1;
     }
-    unp->state = 2; // listening
+    unp->state = UNP_STATE_LISTENING;
     spinlock_release_irqrestore(&unp->lock, flags);
 
     if (backlog > 0) {
@@ -93,7 +93,7 @@ int unix_socket_connect(void *s, const char *path) {
     }
     spinlock_release_irqrestore(&unix_listeners_lock, lflags);
 
-    if (!server_unp || server_unp->state != 2) {
+    if (!server_unp || server_unp->state != UNP_STATE_LISTENING) {
         return -1; // Not listening
     }
 
@@ -109,8 +109,8 @@ int unix_socket_connect(void *s, const char *path) {
     // Connect peers symmetrically
     client_unp->peer = server_conn_unp;
     server_conn_unp->peer = client_unp;
-    client_unp->state = 3; // connected
-    server_conn_unp->state = 3; // connected
+    client_unp->state = UNP_STATE_CONNECTED;
+    server_conn_unp->state = UNP_STATE_CONNECTED;
 
     client_sock->is_connected = 1;
     server_conn_sock->is_connected = 1;
@@ -177,8 +177,8 @@ int unix_socketpair(void *s1, void *s2, int type) {
     unp1->peer = unp2;
     unp2->peer = unp1;
 
-    unp1->state = 3;
-    unp2->state = 3;
+    unp1->state = UNP_STATE_CONNECTED;
+    unp2->state = UNP_STATE_CONNECTED;
 
     sock1->is_connected = 1;
     sock2->is_connected = 1;
@@ -261,7 +261,7 @@ int unix_socket_recv(void *s, void *data, size_t len, int nonblock, void **out_o
 
     while (sockbuf_is_empty(&sock->rx_sb)) {
         if (nonblock) return -2; // EWOULDBLOCK
-        if (unp->state == 4 || (unp->peer == NULL && unp->state != 2)) return 0; // Connection closed
+        if (unp->state == UNP_STATE_CLOSED || (unp->peer == NULL && unp->state != UNP_STATE_LISTENING)) return 0; // Connection closed
         wait_queue_wait(&sock->rx_sb.waitq);
     }
 
@@ -295,10 +295,10 @@ void unix_socket_close(void *s) {
 
     unpcb_t *unp = (unpcb_t *)sock->unpcb;
     uint8_t old_state = unp->state;
-    unp->state = 4; // closed
+    unp->state = UNP_STATE_CLOSED;
 
     // Unlink from listeners if was bound or listening
-    if (old_state == 1 || old_state == 2) {
+    if (old_state == UNP_STATE_BOUND || old_state == UNP_STATE_LISTENING) {
         uint64_t lflags = spinlock_acquire_irqsave(&unix_listeners_lock);
         unpcb_t *prev = NULL;
         unpcb_t *curr = unix_listeners;

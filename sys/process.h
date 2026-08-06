@@ -25,6 +25,43 @@
 #define PROC_FD_KIND_TTY 4
 #define PROC_FD_KIND_SOCKET 5
 
+// Socket Domains
+#ifndef AF_UNIX
+#define AF_UNIX 1
+#endif
+#ifndef AF_INET
+#define AF_INET 2
+#endif
+#ifndef AF_INET6
+#define AF_INET6 10
+#endif
+#ifndef AF_PACKET
+#define AF_PACKET 17
+#endif
+
+// Socket Types
+#ifndef SOCK_STREAM
+#define SOCK_STREAM 1
+#endif
+#ifndef SOCK_DGRAM
+#define SOCK_DGRAM 2
+#endif
+#ifndef SOCK_RAW
+#define SOCK_RAW 3
+#endif
+
+// Socket Protocols
+#ifndef IPPROTO_ICMP
+#define IPPROTO_ICMP 1
+#endif
+#ifndef IPPROTO_ICMPV6
+#define IPPROTO_ICMPV6 58
+#endif
+
+// Signal numbers and bitmasks
+#define SIGINT_CODE 2
+#define SIGINT      (1ULL << SIGINT_CODE)
+
 typedef struct {
     void *file;
     int refs;
@@ -51,9 +88,9 @@ typedef struct accept_queue_entry {
 typedef struct {
     int refs;
     spinlock_t lock;
-    uint8_t domain; // 1 = AF_UNIX, 2 = AF_INET, 10 = AF_INET6
-    uint8_t type;   // 1 = SOCK_STREAM, 2 = SOCK_DGRAM, 3 = SOCK_RAW
-    uint8_t protocol; // 1 = IPPROTO_ICMP, 58 = IPPROTO_ICMPV6, etc.
+    uint8_t domain;   // AF_UNIX, AF_INET, AF_INET6, AF_PACKET
+    uint8_t type;     // SOCK_STREAM, SOCK_DGRAM, SOCK_RAW
+    uint8_t protocol; // IPPROTO_ICMP, IPPROTO_ICMPV6, etc.
     uint8_t is_bound;
     uint8_t is_listening;
     uint8_t is_connected;

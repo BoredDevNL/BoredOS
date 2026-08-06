@@ -255,13 +255,13 @@ static uint64_t fs_cmd_unix_socket_create(const syscall_args_t *args) {
   sock->type = (uint8_t)type;
   sock->protocol = (uint8_t)protocol;
 
-  if (domain == 1) { // AF_UNIX
+  if (domain == AF_UNIX) {
     extern int unix_socket_create(void *sock, int type);
     unix_socket_create(sock, type);
-  } else if (domain == 17 || type == 3) { // AF_PACKET / SOCK_RAW
+  } else if (domain == AF_PACKET || type == SOCK_RAW) {
     extern void raw_tap_register(void *sock);
     raw_tap_register(sock);
-  } else { // AF_INET or AF_INET6
+  } else {
     extern int network_is_initialized(void);
     extern int network_init(void);
     if (!network_is_initialized()) {
@@ -288,17 +288,17 @@ static uint64_t fs_cmd_unix_socket_bind(const syscall_args_t *args) {
   process_fd_socket_t *sock = (process_fd_socket_t *)proc->fds[fd];
   if (!sock) return -1;
 
-  if (sock->domain == 1) { // AF_UNIX
+  if (sock->domain == AF_UNIX) {
     char path[108];
     if (fs_copy_unix_path(addr, addrlen, path, sizeof(path)) < 0) return -1;
     extern int unix_socket_bind(void *sock, const char *path);
     return unix_socket_bind(sock, path);
-  } else if (sock->domain == 10) { // AF_INET6
+  } else if (sock->domain == AF_INET6) {
     if (addrlen < 24) return -1;
     uint16_t sin6_port = *(const uint16_t *)((const char *)addr + 2);
     uint16_t port = ((sin6_port & 0xFF) << 8) | ((sin6_port >> 8) & 0xFF);
     return network_socket_bind_v6(sock, (const ipv6_address_t *)((const char *)addr + 8), port);
-  } else { // AF_INET
+  } else {
     if (addrlen < 8) return -1;
     uint16_t sin_port = *(const uint16_t *)((const char *)addr + 2);
     uint16_t port = ((sin_port & 0xFF) << 8) | ((sin_port >> 8) & 0xFF);
@@ -322,10 +322,10 @@ static uint64_t fs_cmd_unix_socket_listen(const syscall_args_t *args) {
   process_fd_socket_t *sock = (process_fd_socket_t *)proc->fds[fd];
   if (!sock) return -1;
 
-  if (sock->domain == 1) { // AF_UNIX
+  if (sock->domain == AF_UNIX) {
     extern int unix_socket_listen(void *sock, int backlog);
     return unix_socket_listen(sock, backlog);
-  } else { // AF_INET / AF_INET6
+  } else {
     if (network_socket_listen(sock, backlog) < 0) return -1;
     sock->is_listening = 1;
     return 0;
@@ -345,17 +345,17 @@ static uint64_t fs_cmd_unix_socket_connect(const syscall_args_t *args) {
   process_fd_socket_t *sock = (process_fd_socket_t *)proc->fds[fd];
   if (!sock) return -1;
 
-  if (sock->domain == 1) { // AF_UNIX
+  if (sock->domain == AF_UNIX) {
     char path[108];
     if (fs_copy_unix_path(addr, addrlen, path, sizeof(path)) < 0) return -1;
     extern int unix_socket_connect(void *sock, const char *path);
     return unix_socket_connect(sock, path);
-  } else if (sock->domain == 10) { // AF_INET6
+  } else if (sock->domain == AF_INET6) {
     if (addrlen < 24) return -1;
     uint16_t sin6_port = *(const uint16_t *)((const char *)addr + 2);
     uint16_t port = ((sin6_port & 0xFF) << 8) | ((sin6_port >> 8) & 0xFF);
     return network_socket_connect_v6(sock, (const ipv6_address_t *)((const char *)addr + 8), port);
-  } else { // AF_INET
+  } else {
     if (addrlen < 8) return -1;
     uint16_t sin_port = *(const uint16_t *)((const char *)addr + 2);
     uint16_t port = ((sin_port & 0xFF) << 8) | ((sin_port >> 8) & 0xFF);
@@ -379,7 +379,7 @@ static uint64_t fs_cmd_unix_socket_accept(const syscall_args_t *args) {
   if (!sock || !sock->is_listening)
     return -1;
 
-  if (sock->domain == 1) { // AF_UNIX
+  if (sock->domain == AF_UNIX) {
     extern void* unix_socket_accept(void *sock, int nonblock);
     process_fd_socket_t *client = (process_fd_socket_t *)unix_socket_accept(sock, 0);
     if (!client) return (uint64_t)-2;
@@ -393,7 +393,7 @@ static uint64_t fs_cmd_unix_socket_accept(const syscall_args_t *args) {
     proc->fd_kind[newfd] = PROC_FD_KIND_SOCKET;
     proc->fd_flags[newfd] = O_RDWR;
     return newfd;
-  } else { // AF_INET / AF_INET6
+  } else {
     int nonblock = (proc->fd_flags[fd] & O_NONBLOCK) ? 1 : 0;
     while (1) {
       uint64_t flags = spinlock_acquire_irqsave(&sock->lock);
@@ -419,7 +419,7 @@ static uint64_t fs_cmd_unix_socket_accept(const syscall_args_t *args) {
 
         if (addr && addrlen && *addrlen >= 8) {
           uint8_t *a_bytes = (uint8_t *)addr;
-          *(uint16_t *)a_bytes = 2; // AF_INET
+          *(uint16_t *)a_bytes = AF_INET;
           uint16_t remote_port = 0; uint32_t remote_ip = 0;
           extern void network_socket_get_remote_info(void *sock, uint16_t *port, uint32_t *ip);
           network_socket_get_remote_info(client, &remote_port, &remote_ip);
@@ -2190,28 +2190,28 @@ static uint64_t handle_sys_recvfrom(const syscall_args_t *args) {
 
   int nonblock = ((flags & 0x40) || (proc->fd_flags[fd] & O_NONBLOCK)) ? 1 : 0;
 
-  if (sock->domain == 17) {
+  if (sock->domain == AF_PACKET) {
     extern int network_socket_recvfrom(void *sock, void *buf, size_t max_len, int nonblock, uint32_t *from_ip, uint16_t *from_port);
     int ret = network_socket_recvfrom(sock, buf, len, nonblock, NULL, NULL);
     if (ret == -2) return (uint64_t)-2;
     if (ret >= 0 && src_addr && addrlen_ptr && *addrlen_ptr >= 18) {
-      *(uint16_t *)src_addr = 17; // AF_PACKET
+      *(uint16_t *)src_addr = AF_PACKET;
       *addrlen_ptr = 18;
     }
     return (uint64_t)ret;
-  } else if (sock->domain == 1) {
+  } else if (sock->domain == AF_UNIX) {
     extern int unix_socket_recv(void *sock, void *data, size_t len, int nonblock, void **out_objs, uint8_t *out_kinds, int *out_flags, int *out_fd_count);
     int ret = unix_socket_recv(sock, buf, len, nonblock, NULL, NULL, NULL, NULL);
     if (ret == -2) return (uint64_t)-2;
     return (uint64_t)ret;
-  } else if (sock->domain == 2) {
-    if (sock->type == 1) {
+  } else if (sock->domain == AF_INET) {
+    if (sock->type == SOCK_STREAM) {
       // SOCK_STREAM (TCP) recv
       extern int network_socket_recv(void *sock, void *buf, size_t len, int nonblock);
       int ret = network_socket_recv(sock, buf, len, nonblock);
       if (ret == -2) return (uint64_t)-2;
       return (uint64_t)ret;
-    } else if (sock->type == 2 || sock->type == 3) {
+    } else if (sock->type == SOCK_DGRAM || sock->type == SOCK_RAW) {
       uint32_t from_ip = 0;
       uint16_t from_port = 0;
       extern int network_socket_recvfrom(void *sock, void *buf, size_t max_len, int nonblock, uint32_t *from_ip, uint16_t *from_port);
@@ -2220,7 +2220,7 @@ static uint64_t handle_sys_recvfrom(const syscall_args_t *args) {
         return (uint64_t)-2;
       }
       if (ret >= 0 && src_addr && addrlen_ptr && *addrlen_ptr >= 8) {
-        *(uint16_t *)src_addr = 2; // AF_INET
+        *(uint16_t *)src_addr = AF_INET;
         uint16_t sin_port = ((from_port & 0xFF) << 8) | ((from_port >> 8) & 0xFF);
         *(uint16_t *)((char *)src_addr + 2) = sin_port;
         *(uint32_t *)((char *)src_addr + 4) = from_ip;
@@ -2661,11 +2661,11 @@ static uint64_t handle_sys_getpeername(const syscall_args_t *args) {
   if (!proc || fd < 0 || fd >= MAX_PROCESS_FDS || !proc->fds[fd] || proc->fd_kind[fd] != PROC_FD_KIND_SOCKET)
     return -1;
   process_fd_socket_t *sock = (process_fd_socket_t *)proc->fds[fd];
-  if (sock->domain == 2 && addr && addrlen && *addrlen >= 8) {
+  if (sock->domain == AF_INET && addr && addrlen && *addrlen >= 8) {
     uint16_t port = 0; uint32_t ip = 0;
     extern void network_socket_get_remote_info(void *sock, uint16_t *port, uint32_t *ip);
     network_socket_get_remote_info(sock, &port, &ip);
-    *(uint16_t *)addr = 2; // AF_INET
+    *(uint16_t *)addr = AF_INET;
     *(uint16_t *)((char *)addr + 2) = ((port & 0xFF) << 8) | ((port >> 8) & 0xFF);
     *(uint32_t *)((char *)addr + 4) = ip;
     *addrlen = 8;

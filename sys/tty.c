@@ -611,7 +611,7 @@ void tty_push_char(int id, uint8_t c) {
     tty_t *t = tty_get(id);
     if (!t) return;
 
-    if (c == 0x03) { // Ctrl+C (ETX / SIGINT)
+    if (c == CTRL_C_CHAR) { // Ctrl+C (ETX / SIGINT)
         int fg = t->fg_pid;
         process_t *target = NULL;
         if (fg > 0) {
@@ -622,7 +622,7 @@ void tty_push_char(int id, uint8_t c) {
         }
         if (target && target->pid > 1) {
             tty_write_output(id, "^C\n", 3);
-            target->signal_pending |= (1ULL << 2); // SIGINT = 2
+            target->signal_pending |= SIGINT;
             if (target->state == PROC_STATE_BLOCKED) {
                 target->state = PROC_STATE_RUNNING;
                 target->sleep_until = 0;

@@ -106,7 +106,7 @@ int pty_write_input(int pty_id, const char *buf, size_t len) {
     if (!p || !p->used) return 0;
     for (size_t i = 0; i < len; i++) {
         uint8_t c = (uint8_t)buf[i];
-        if (c == 0x03) { // Ctrl+C (SIGINT)
+        if (c == CTRL_C_CHAR) { // Ctrl+C (SIGINT)
             int fg = p->fg_pid;
             process_t *target = NULL;
             if (fg > 0) {
@@ -116,7 +116,7 @@ int pty_write_input(int pty_id, const char *buf, size_t len) {
                 target = process_find_child_on_tty(pty_id);
             }
             if (target && target->pid > 1) {
-                process_terminate_with_status(target, 128 + 2); // SIGINT = 2
+                process_terminate_with_status(target, 128 + SIGINT_CODE);
                 p->fg_pid = -1;
                 continue;
             }

@@ -172,13 +172,6 @@ int network_process_frames(void) {
     return count;
 }
 
-
-
-int network_dhcp_acquire(void) {
-    // DHCP has been moved to userspace (dhclient.elf)
-    return -1;
-}
-
 int network_get_gateway_ip(ipv4_address_t *ip) {
     if (!lwip_initialized) return -1;
     uint64_t flags = spinlock_acquire_irqsave(&network_lock);

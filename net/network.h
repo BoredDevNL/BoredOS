@@ -87,7 +87,6 @@ int network_get_udp_callbacks_called(void);
 int network_get_e1000_receive_calls(void);
 int network_get_e1000_receive_empty(void);
 int network_get_process_calls(void);
-int network_dhcp_acquire(void);
 int network_get_gateway_ip(ipv4_address_t* ip);
 int network_icmp_single_ping(ipv4_address_t *dest);
 int network_socket_bind(void *sock, uint32_t ip_val, uint16_t port);

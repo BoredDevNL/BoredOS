@@ -1124,6 +1124,19 @@ void process_terminate_with_status(process_t *to_delete, int status) {
         prev->next = to_delete->next;
     }
 
+    if (to_delete->parent_pid != 0) {
+        process_t *parent = pid_table_find_unlocked(to_delete->parent_pid);
+        if (parent) {
+            wait_queue_wake_all(&parent->wait_exit_queue);
+        }
+    }
+    if (reaper_pid != 0 && to_delete->parent_pid != reaper_pid) {
+        process_t *reaper = pid_table_find_unlocked(reaper_pid);
+        if (reaper) {
+            wait_queue_wake_all(&reaper->wait_exit_queue);
+        }
+    }
+
     spinlock_release_irqrestore(&runqueue_lock, rflags);
 }
 
@@ -1206,6 +1219,13 @@ uint64_t process_terminate_current_with_status(int status, uint64_t current_rsp)
         if (parent) {
             wait_queue_wake_all(&parent->wait_exit_queue);
             process_put(parent);
+        }
+    }
+    if (reaper_pid != 0 && cur->parent_pid != reaper_pid) {
+        process_t *reaper = process_get_by_pid(reaper_pid);
+        if (reaper) {
+            wait_queue_wake_all(&reaper->wait_exit_queue);
+            process_put(reaper);
         }
     }
 

@@ -32,7 +32,7 @@ BoredOS uses **Limine** as its primary bootloader.
 3.  **Kernel Entry (`main.c`)**: The entry point `_start` is called on the Bootstrap Processor (BSP). It initializes the serial port, GDT/IDT, memory management, and paging.
 4.  **AP Bringup**: The BSP calls `smp_init()`, which sends the Startup Inter-Processor Interrupt (SIPI) sequence to all Application Processors (APs). Each AP initializes its own local GDT, TSS, and Page Tables before entering an idle loop.
 5.  **Driver Initialization**: PCI buses are scanned, finding the network card or disk controllers. The filesystem is mounted.
-6.  **TTY and Console**: The system initializes 10 virtual consoles (TTYs) and launches the standard command-line shell (`/bin/bsh.elf`) on the active TTY.
+6.  **TTY and Console**: The system initializes hardware/console TTY devices (10 graphical virtual consoles and 4 serial TTY devices) and supports dynamic Pseudo-Terminal (PTY) expansion up to thousands of sessions (`PTY_ID_BASE` 1024+). In graphical mode, interactive shells (`/bin/bsh.elf`) are launched on `/dev/tty1` through `/dev/tty10` while kernel debug output is routed to COM1. In headless mode (triggered via `headless=1` or when no framebuffer is detected), graphical VT shell spawning is skipped and an interactive shell is assigned to `/dev/ttyS0` (COM1), while debug logs are redirected to COM2 or silenced. See [`tty.md`](tty.md) for detailed architecture.
 
 ## Multi-Core & Scheduling
 

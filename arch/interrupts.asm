@@ -4,21 +4,26 @@
 section .text
 global isr0_wrapper
 global isr1_wrapper
+global isr3_wrapper
+global isr4_wrapper
+global isr5_wrapper
 global isr8_wrapper
+global isr9_wrapper
+global isr10_wrapper
+global isr11_wrapper
 global isr12_wrapper
 global isr14_wrapper
 global isr128_wrapper
 global isr_sched_ipi_wrapper
-global isr5_wrapper
-global isr9_wrapper
-global isr10_wrapper
-global isr11_wrapper
+
 extern timer_handler
 extern keyboard_handler
 extern mouse_handler
 extern sched_ipi_handler
 extern syscall_handler_c
 extern exception_handler_c
+extern serial_com1_handler
+extern serial_com2_handler
 extern ac97_handler
 extern pci_irq_handler
 
@@ -101,8 +106,11 @@ isr0_wrapper:
 isr1_wrapper:
     ISR_NOERRCODE keyboard_handler, 33
 
-isr12_wrapper:
-    ISR_NOERRCODE mouse_handler, 44
+isr3_wrapper:
+    ISR_NOERRCODE serial_com2_handler, 35
+
+isr4_wrapper:
+    ISR_NOERRCODE serial_com1_handler, 36
 
 isr5_wrapper:
     ISR_NOERRCODE ac97_handler, 37
@@ -115,6 +123,9 @@ isr10_wrapper:
 
 isr11_wrapper:
     ISR_NOERRCODE ac97_handler, 43
+
+isr12_wrapper:
+    ISR_NOERRCODE mouse_handler, 44
 
 isr_sched_ipi_wrapper:
     ISR_NOERRCODE sched_ipi_handler, 65

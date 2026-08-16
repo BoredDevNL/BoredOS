@@ -225,8 +225,8 @@ void idt_init(void) {
 
     pic_remap();
     
-    // Unmask IRQ 0 (Timer) in addition to IRQ 1 and 12
-    outb(0x21, 0xF8); // Unmask Timer (IRQ0), Keyboard (IRQ1) and Cascade (IRQ2)
+    // Unmask IRQ 0 (Timer), IRQ 1 (Keyboard), IRQ 2 (Cascade), IRQ 3 (COM2), IRQ 4 (COM1)
+    outb(0x21, 0xE0);
     outb(0xA1, 0xEF); // Unmask Mouse (IRQ12)
     
     pit_setup();
@@ -236,8 +236,13 @@ void idt_register_interrupts(void) {
     uint16_t cs;
     asm volatile ("mov %%cs, %0" : "=r"(cs));
     
+    extern void isr3_wrapper(void);
+    extern void isr4_wrapper(void);
+
     idt_set_gate(32, isr0_wrapper, cs, 0x8E);  // Timer (IRQ 0)
     idt_set_gate(33, isr1_wrapper, cs, 0x8E);  // Keyboard (IRQ 1)
+    idt_set_gate(35, isr3_wrapper, cs, 0x8E);  // COM2 (IRQ 3)
+    idt_set_gate(36, isr4_wrapper, cs, 0x8E);  // COM1 (IRQ 4)
     idt_set_gate(44, isr12_wrapper, cs, 0x8E); // Mouse (IRQ 12)
 
     // Exceptions

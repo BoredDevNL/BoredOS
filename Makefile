@@ -85,7 +85,7 @@ endif
 
 CFLAGS = -g -O2 -pipe -Wall -Wextra -std=gnu11 -ffreestanding \
          -fno-stack-protector -fno-stack-check -fno-lto -fPIE \
-         -m64 -march=x86-64 -msse -msse2 -mstackrealign -mno-red-zone \
+         -m64 -march=x86-64 -mno-sse -mno-sse2 -mno-mmx -mstackrealign -mno-red-zone \
          $(TOOLCHAIN_FLAGS) $(INCLUDES) \
          -Ifs/vendor/lwext4/include -Ifs/vendor/lwext4/include/misc
 
@@ -374,12 +374,18 @@ disk.qcow2:
 ifeq ($(HOST_OS),Darwin)
 run: run-mac
 run-hd: run-hd-mac
+run-serial: run-serial-mac
+run-hd-serial: run-hd-serial-mac
 else ifeq ($(HOST_OS),Linux)
 run: run-linux
 run-hd: run-hd-linux
+run-serial: run-serial-linux
+run-hd-serial: run-hd-serial-linux
 else
 run: run-windows
 run-hd: run-hd-windows
+run-serial: run-serial-windows
+run-hd-serial: run-hd-serial-windows
 endif
 
 run-windows: $(ISO_IMAGE) disk.qcow2
@@ -463,6 +469,73 @@ run-hd-linux: disk.qcow2 $(OVMF_VARS)
 		-display gtk,show-cursor=off \
 		-drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE.fd \
 		-drive if=pflash,format=raw,file=$(OVMF_VARS) \
+		-device ahci,id=ahci \
+		-drive file=disk.qcow2,format=qcow2,if=none,id=disk0 -device ide-hd,bus=ahci.0,drive=disk0 \
+		-cpu max
+
+run-serial-mac: $(ISO_IMAGE) disk.qcow2
+	$(call PRINT_STEP,RUNNING BOREDOS OVER SERIAL IN QEMU ON MACOS)
+	qemu-system-x86_64 -m 4G -serial stdio -serial file:kernel_debug.log -cdrom $< -boot d \
+	    -smp 4 \
+		-audiodev coreaudio,id=audio0,out.frequency=48000 -machine pcspk-audiodev=audio0 \
+		-device AC97,audiodev=audio0 \
+		-vga none -display none \
+		-device ahci,id=ahci -drive file=disk.qcow2,format=qcow2,if=none,id=disk0 -device ide-hd,bus=ahci.0,drive=disk0 \
+		-cpu max
+
+run-hd-serial-mac: disk.qcow2 $(OVMF_VARS)
+	$(call PRINT_STEP,BOOTING BOREDOS OVER SERIAL FROM HARD DRIVE ON MACOS)
+	qemu-system-x86_64 -m 4G -serial stdio -serial file:kernel_debug.log -boot c \
+	    -smp 4 \
+		-audiodev coreaudio,id=audio0,out.frequency=48000 -machine pcspk-audiodev=audio0 \
+		-device AC97,audiodev=audio0 \
+		-vga none -display none \
+		-drive if=pflash,format=raw,readonly=on,file=$(OVMF_CODE) \
+		-drive if=pflash,format=raw,file=$(OVMF_VARS) \
+		-device ahci,id=ahci \
+		-drive file=disk.qcow2,format=qcow2,if=none,id=disk0 -device ide-hd,bus=ahci.0,drive=disk0 \
+		-cpu max
+
+run-serial-linux: $(ISO_IMAGE) disk.qcow2
+	$(call PRINT_STEP,RUNNING BOREDOS OVER SERIAL IN QEMU ON LINUX)
+	qemu-system-x86_64 -m 4G -serial stdio -serial file:kernel_debug.log -cdrom $< -boot d \
+	    -smp 4 \
+		-audiodev pa,id=audio0 -machine pcspk-audiodev=audio0 \
+		-device AC97,audiodev=audio0 \
+		-vga none -display none \
+		-device ahci,id=ahci -drive file=disk.qcow2,format=qcow2,if=none,id=disk0 -device ide-hd,bus=ahci.0,drive=disk0 \
+		-cpu max
+
+run-hd-serial-linux: disk.qcow2 $(OVMF_VARS)
+	$(call PRINT_STEP,BOOTING BOREDOS OVER SERIAL FROM HARD DRIVE ON LINUX)
+	qemu-system-x86_64 -m 4G -serial stdio -serial file:kernel_debug.log -boot c \
+	    -smp 4 \
+		-audiodev pa,id=audio0 -machine pcspk-audiodev=audio0 \
+		-device AC97,audiodev=audio0 \
+		-vga none -display none \
+		-drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE.fd \
+		-drive if=pflash,format=raw,file=$(OVMF_VARS) \
+		-device ahci,id=ahci \
+		-drive file=disk.qcow2,format=qcow2,if=none,id=disk0 -device ide-hd,bus=ahci.0,drive=disk0 \
+		-cpu max
+
+run-serial-windows: $(ISO_IMAGE) disk.qcow2
+	$(call PRINT_STEP,RUNNING BOREDOS OVER SERIAL IN QEMU ON WINDOWS)
+	qemu-system-x86_64 -m 4G -serial stdio -serial file:kernel_debug.log -cdrom $< -boot d \
+	    -smp 4 \
+		-audiodev dsound,id=audio0 -machine pcspk-audiodev=audio0 \
+		-device AC97,audiodev=audio0 \
+		-vga none -display none \
+		-drive file=disk.qcow2,format=qcow2,file.locking=off \
+		-cpu max
+
+run-hd-serial-windows: disk.qcow2
+	$(call PRINT_STEP,BOOTING BOREDOS OVER SERIAL FROM HARD DRIVE ON WINDOWS)
+	qemu-system-x86_64 -m 4G -serial stdio -serial file:kernel_debug.log -boot c \
+	    -smp 4 \
+		-audiodev dsound,id=audio0 -machine pcspk-audiodev=audio0 \
+		-device AC97,audiodev=audio0 \
+		-vga none -display none \
 		-device ahci,id=ahci \
 		-drive file=disk.qcow2,format=qcow2,if=none,id=disk0 -device ide-hd,bus=ahci.0,drive=disk0 \
 		-cpu max

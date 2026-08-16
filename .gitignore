@@ -21,3 +21,4 @@ boredos.dump
 
 # Others
 .gitignore
+kernel_debug.log

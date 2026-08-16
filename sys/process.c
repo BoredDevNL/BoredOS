@@ -8,6 +8,7 @@
 #include "io.h"
 #include "platform.h"
 #include "memory_manager.h"
+#include "tty.h"
 #include "elf.h"
 #include "vfs.h"
 #include "spinlock.h"
@@ -579,6 +580,9 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
         if (tty_id >= 1024) {
             strcpy(tty_path, "/dev/pts/");
             itoa(tty_id - 1024, tty_path + 9);
+        } else if (tty_id >= GRAPHICAL_TTY_COUNT && tty_id < TTY_COUNT) {
+            strcpy(tty_path, "/dev/ttyS");
+            itoa(tty_id - GRAPHICAL_TTY_COUNT, tty_path + 9);
         } else {
             strcpy(tty_path, "/dev/tty");
             itoa(tty_id + 1, tty_path + 8);
@@ -601,6 +605,7 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
                     ref->refs++;
                 }
             }
+            tty_set_foreground(tty_id, new_proc->pid);
         }
     }
 

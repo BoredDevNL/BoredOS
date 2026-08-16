@@ -282,10 +282,42 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
     if (str_starts_with(normalized, "/dev/")) {
         const char *devname = normalized + 5;
         
-        // Handle TTY devices: /dev/ttyX
+        // Handle TTY devices: /dev/ttyX, /dev/ttyS0..ttyS3, /dev/console
+        if (str_starts_with(devname, "ttyS")) {
+            int s_id = atoi(devname + 4);
+            if (s_id >= 0 && s_id < SERIAL_TTY_COUNT) {
+                vfs_file_t *vf = vfs_alloc_file();
+                if (vf) {
+                    vf->mount = &mounts[0];
+                    vf->fs_handle = (void*)(uintptr_t)(GRAPHICAL_TTY_COUNT + s_id);
+                    vf->is_device = true;
+                    vf->device_type = DEVICE_TYPE_TTY;
+                    spinlock_release_irqrestore(&vfs_lock, flags);
+                    return vf;
+                }
+            }
+        }
+        if (strcmp(devname, "console") == 0) {
+            vfs_file_t *vf = vfs_alloc_file();
+            if (vf) {
+                vf->mount = &mounts[0];
+                extern bool g_headless_mode;
+                int console_id = g_headless_mode ? 10 : 0;
+                vf->fs_handle = (void*)(uintptr_t)console_id;
+                vf->is_device = true;
+                vf->device_type = DEVICE_TYPE_TTY;
+                spinlock_release_irqrestore(&vfs_lock, flags);
+                return vf;
+            }
+        }
         if (str_starts_with(devname, "tty")) {
             int id = atoi(devname + 3);
             if (id >= 1 && id <= TTY_COUNT) {
+                extern bool g_headless_mode;
+                if (g_headless_mode && id <= 10) {
+                    spinlock_release_irqrestore(&vfs_lock, flags);
+                    return NULL;
+                }
                 vfs_file_t *vf = vfs_alloc_file();
                 if (vf) {
                     vf->mount = &mounts[0];
@@ -378,6 +410,11 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
 
         // Handle Framebuffer devices: /dev/fb0 or /dev/fbX
         if (str_starts_with(devname, "fb")) {
+            extern bool g_headless_mode;
+            if (g_headless_mode) {
+                spinlock_release_irqrestore(&vfs_lock, flags);
+                return NULL;
+            }
             int id = 0;
             if (strcmp(devname, "fb0") == 0 || strcmp(devname, "fb") == 0) {
                 id = 0;
@@ -1197,15 +1234,26 @@ int vfs_list_directory(const char *path, vfs_dirent_t *entries, int max, int off
 
         // Special case: /dev listing for block devices and TTYs
         if (strcmp(normalized, "/dev") == 0) {
-            // TTY devices
-            for (int i = 0; i < TTY_COUNT && count < max; i++) {
+            extern bool g_headless_mode;
+            
+            // Graphical TTY devices (tty1..tty10) - only present when not headless
+            if (!g_headless_mode) {
+                for (int i = 0; i < GRAPHICAL_TTY_COUNT && count < max; i++) {
+                    char name[16];
+                    strcpy(name, "tty");
+                    itoa(i + 1, name + 3);
+                    strcpy(entries[count].name, name);
+                    entries[count].size = 0;
+                    entries[count].is_directory = 0;
+                    count++;
+                }
+            }
+
+            // Serial TTY devices (ttyS0, ttyS1)
+            for (int i = 0; i < SERIAL_TTY_COUNT && count < max; i++) {
                 char name[16];
-                strcpy(name, "tty");
-                int pos = 3;
-                if (i + 1 >= 10) name[pos++] = '1';
-                name[pos++] = '0' + ((i + 1) % 10);
-                name[pos] = '\0';
-                
+                strcpy(name, "ttyS");
+                itoa(i, name + 4);
                 strcpy(entries[count].name, name);
                 entries[count].size = 0;
                 entries[count].is_directory = 0;
@@ -1267,9 +1315,9 @@ int vfs_list_directory(const char *path, vfs_dirent_t *entries, int max, int off
                 }
             }
 
-
             // Framebuffer device
-            if (count < max) {
+            extern bool g_headless_mode;
+            if (!g_headless_mode && count < max) {
                 strcpy(entries[count].name, "fb0");
                 vfs_framebuffer_info_t fb = graphics_get_fb_params();
                 entries[count].size = (uint64_t)fb.width * fb.height * (fb.bpp / 8);

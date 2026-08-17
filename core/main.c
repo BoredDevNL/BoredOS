@@ -381,6 +381,14 @@ static void init_memory(void) {
     if (memmap_request.response != NULL) {
         memory_manager_init_from_memmap(memmap_request.response);
         log_ok("Memory manager ready");
+
+        extern bool vma_run_tests(void);
+        if (vma_run_tests()) {
+            log_ok("VMA Augmented RB-Tree unit tests passed");
+        } else {
+            log_fail("VMA Augmented RB-Tree unit tests failed");
+        }
+
         smp_init_bsp();
         log_ok("SMP BSP initialized");
     } else {

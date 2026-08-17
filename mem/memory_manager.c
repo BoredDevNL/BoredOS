@@ -2,8 +2,22 @@
 // This software is released under the GNU General Public License v3.0. See LICENSE file for details.
 // This header needs to maintain in any file it is present in, as per the GPL license terms.
 
-// Kernel memory manager — provides kmalloc/kfree/krealloc for the rest of the kernel.
-// Uses a slab allocator for small objects (<= 512 B) and a sorted block-list allocator for everything else.
+
+/*
+
+this shit needs to GET NUKEDDDD
+
+
+YES. NUKED.
+
+VERY MUCH NUKED.
+
+keeping it temporarily though, might need something(?)
+
+
+*/
+
+
 
 #include "memory_manager.h"
 #include <stdint.h>

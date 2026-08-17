@@ -19,13 +19,13 @@ THIS IS SCAFFOLDING, CAN VERY MUCH BE CHANGED!!
 #include <stddef.h>
 #include <stdbool.h>
 #include "vma.h"
-#include "arch/mmu.h"
+#include "mmu.h"
 #include "spinlock.h"
 
 typedef struct vmm_space {
     mmu_context_t mmu_ctx;
     vm_area_t *vma_head;
-    vm_area_t *vma_root;
+    rb_root_t vma_root;
     spinlock_t lock;
     uint32_t refcount;
     uintptr_t mmap_base;

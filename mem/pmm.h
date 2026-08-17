@@ -18,9 +18,9 @@ THIS IS SCAFFOLDING, CAN VERY MUCH BE CHANGED!!
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
-#include "limine.h"
 
 #define PMM_PAGE_SIZE 4096UL
+#define PMM_MAX_ORDER 11
 
 #define PAGE_FLAG_FREE      (1 << 0)
 #define PAGE_FLAG_RESERVED  (1 << 1)
@@ -30,6 +30,29 @@ THIS IS SCAFFOLDING, CAN VERY MUCH BE CHANGED!!
 #define PAGE_FLAG_ZERO      (1 << 5)
 #define PAGE_FLAG_CACHED    (1 << 6)
 #define PAGE_FLAG_DIRTY     (1 << 7)
+
+typedef enum {
+    PMM_REGION_USABLE = 1,
+    PMM_REGION_RESERVED,
+    PMM_REGION_ACPI_RECLAIM,
+    PMM_REGION_ACPI_NVS,
+    PMM_REGION_BAD_RAM,
+    PMM_REGION_BOOTLOADER_RECLAIM,
+    PMM_REGION_KERNEL,
+    PMM_REGION_FRAMEBUFFER
+} pmm_region_type_t;
+
+typedef struct {
+    uintptr_t base;
+    size_t length;
+    pmm_region_type_t type;
+} pmm_mem_region_t;
+
+typedef struct {
+    pmm_mem_region_t *regions;
+    size_t region_count;
+    uintptr_t direct_map_base;
+} pmm_boot_map_t;
 
 typedef struct page {
     uint32_t flags;
@@ -48,7 +71,11 @@ typedef struct {
     size_t user_pages;
 } pmm_stats_t;
 
-void pmm_init(struct limine_memmap_response *memmap);
+void pmm_init(const pmm_boot_map_t *boot_map);
+
+void pmm_set_direct_map(uintptr_t direct_map_base);
+uintptr_t pmm_get_direct_map(void);
+
 page_t *pmm_alloc_page(uint32_t flags);
 page_t *pmm_alloc_pages(size_t count, uint32_t flags);
 void pmm_free_page(page_t *page);

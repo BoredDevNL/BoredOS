@@ -389,6 +389,15 @@ static void init_memory(void) {
             log_fail("VMA Augmented RB-Tree unit tests failed");
         }
 
+        extern void mmu_init(void);
+        extern bool mmu_run_tests(void);
+        mmu_init();
+        if (mmu_run_tests()) {
+            log_ok("MMU Hardware Driver unit tests passed");
+        } else {
+            log_fail("MMU Hardware Driver unit tests failed");
+        }
+
         smp_init_bsp();
         log_ok("SMP BSP initialized");
     } else {

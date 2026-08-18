@@ -331,9 +331,6 @@ $(ISO_IMAGE): $(KERNEL_ELF) $(BUILD_DIR)/initrd.tar.lz4 limine.conf limine-setup
 	@printf "$(YELLOW)[COPY]$(RESET) Initrd...\n"
 	cp $(BUILD_DIR)/initrd.tar.lz4 $(ISO_DIR)/
 
-	@printf "$(YELLOW)[CONFIG]$(RESET) Adding initrd module path...\n"
-	printf "    module_path: boot():/initrd.tar.lz4\n" >> $(ISO_DIR)/limine.conf
-	
 	@printf "$(YELLOW)[COPY]$(RESET) Optional splash image...\n"
 	@if [ -f base/boot/splash.jpg ]; then printf "  -> splash.jpg\n"; cp base/boot/splash.jpg $(ISO_DIR)/splash.jpg; else printf "  -> no splash.jpg found\n"; fi
 	

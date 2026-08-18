@@ -23,9 +23,9 @@ THIS IS SCAFFOLDING, CAN VERY MUCH BE CHANGED!!
 #include "spinlock.h"
 
 typedef struct vmm_space {
-    mmu_context_t mmu_ctx;
+    mmu_context_t *mmu_ctx;
     vm_area_t *vma_head;
-    rb_root_t vma_root;
+    vm_area_t *vma_root;
     spinlock_t lock;
     uint32_t refcount;
     uintptr_t mmap_base;

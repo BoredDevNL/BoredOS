@@ -9,6 +9,10 @@
 #include "msrs.h"
 #include <string.h>
 
+#define EINVAL 22
+#define ENOMEM 12
+#define EEXIST 17
+
 #define PAGE_SIZE 4096UL
 #define PAGE_MASK (PAGE_SIZE - 1)
 #define HUGE_PAGE_2M (2UL * 1024 * 1024)
@@ -32,16 +36,21 @@
 #define PT_2M_ADDR_MASK  0x000FFFFFFFE00000ULL
 #define PT_1G_ADDR_MASK  0x000FFFFFC0000000ULL
 
-#define EINVAL 22
-#define ENOMEM 12
-#define EEXIST 17
-
 typedef struct {
     uint64_t entries[512];
 } page_table_t;
 
 static mmu_context_t kernel_context;
 static mmu_context_t *active_context = &kernel_context;
+
+static inline size_t pml4_idx(uintptr_t v) { return (v >> 39) & 0x1FF; }
+static inline size_t pdpt_idx(uintptr_t v) { return (v >> 30) & 0x1FF; }
+static inline size_t pd_idx(uintptr_t v)   { return (v >> 21) & 0x1FF; }
+static inline size_t pt_idx(uintptr_t v)   { return (v >> 12) & 0x1FF; }
+
+static inline page_table_t *p2table(uint64_t entry) {
+    return (page_table_t *)p2v(entry & PT_ADDR_MASK);
+}
 
 static inline uint64_t read_cr3(void) {
     uint64_t cr3;
@@ -67,21 +76,12 @@ static void pat_init(void) {
 static inline uint64_t mmu_flags_to_pte(uint32_t flags) {
     uint64_t pte = PT_PRESENT;
 
-    if ((flags & MMU_PROT_WRITE) && !(flags & MMU_FLAG_COW)) {
-        pte |= PT_RW;
-    }
-    if (flags & MMU_PROT_USER) {
-        pte |= PT_USER;
-    }
-    if (!(flags & MMU_PROT_EXEC)) {
-        pte |= PT_NX;
-    }
-    if (flags & MMU_FLAG_GLOBAL) {
-        pte |= PT_GLOBAL;
-    }
-    if (flags & MMU_FLAG_COW) {
-        pte |= PT_COW;
-    }
+    if ((flags & MMU_PROT_WRITE) && !(flags & MMU_FLAG_COW)) pte |= PT_RW;
+    if (flags & MMU_PROT_USER) pte |= PT_USER;
+    if (!(flags & MMU_PROT_EXEC)) pte |= PT_NX;
+    if (flags & MMU_FLAG_GLOBAL) pte |= PT_GLOBAL;
+    if (flags & MMU_FLAG_COW) pte |= PT_COW;
+
     if (flags & MMU_FLAG_WC) {
         pte |= PT_PAT_4K;
     } else if (flags & MMU_FLAG_NOCACHE) {
@@ -129,17 +129,6 @@ void mmu_init(void) {
     kernel_context.pml4_phys = read_cr3() & PT_ADDR_MASK;
     kernel_context.lock = SPINLOCK_INIT;
     active_context = &kernel_context;
-
-    page_table_t *k_pml4 = (page_table_t *)p2v(kernel_context.pml4_phys);
-    for (int i = 256; i < 512; i++) {
-        if (!(k_pml4->entries[i] & PT_PRESENT)) {
-            uintptr_t pdpt_phys = 0;
-            page_table_t *pdpt = alloc_table_frame(&pdpt_phys);
-            if (pdpt) {
-                k_pml4->entries[i] = pdpt_phys | PT_PRESENT | PT_RW;
-            }
-        }
-    }
 }
 
 mmu_context_t *mmu_get_kernel_context(void) {
@@ -238,54 +227,54 @@ void mmu_tlb_shootdown(uintptr_t virt, size_t count) {
 
 static int mmu_map_page_unlocked(mmu_context_t *ctx, uintptr_t virt, uintptr_t phys, uint32_t flags) {
     page_table_t *pml4 = (page_table_t *)p2v(ctx->pml4_phys);
-    size_t pml4_idx = (virt >> 39) & 0x1FF;
-    size_t pdpt_idx = (virt >> 30) & 0x1FF;
-    size_t pd_idx   = (virt >> 21) & 0x1FF;
-    size_t pt_idx   = (virt >> 12) & 0x1FF;
+    size_t l4 = pml4_idx(virt);
+    size_t l3 = pdpt_idx(virt);
+    size_t l2 = pd_idx(virt);
+    size_t l1 = pt_idx(virt);
 
     uintptr_t new_pdpt_phys = 0;
     uintptr_t new_pd_phys   = 0;
     uintptr_t new_pt_phys   = 0;
 
     page_table_t *pdpt = NULL;
-    if (!(pml4->entries[pml4_idx] & PT_PRESENT)) {
+    if (!(pml4->entries[l4] & PT_PRESENT)) {
         pdpt = alloc_table_frame(&new_pdpt_phys);
         if (!pdpt) return -ENOMEM;
-        pml4->entries[pml4_idx] = new_pdpt_phys | PT_PRESENT | PT_RW | PT_USER;
+        pml4->entries[l4] = new_pdpt_phys | PT_PRESENT | PT_RW | PT_USER;
     } else {
-        pdpt = (page_table_t *)p2v(pml4->entries[pml4_idx] & PT_ADDR_MASK);
+        pdpt = p2table(pml4->entries[l4]);
     }
 
-    if (pdpt->entries[pdpt_idx] & PT_HUGE) {
+    if (pdpt->entries[l3] & PT_HUGE) {
         if (new_pdpt_phys) {
-            pml4->entries[pml4_idx] = 0;
+            pml4->entries[l4] = 0;
             free_table_frame(new_pdpt_phys);
         }
         return -EEXIST;
     }
 
     page_table_t *pd = NULL;
-    if (!(pdpt->entries[pdpt_idx] & PT_PRESENT)) {
+    if (!(pdpt->entries[l3] & PT_PRESENT)) {
         pd = alloc_table_frame(&new_pd_phys);
         if (!pd) {
             if (new_pdpt_phys) {
-                pml4->entries[pml4_idx] = 0;
+                pml4->entries[l4] = 0;
                 free_table_frame(new_pdpt_phys);
             }
             return -ENOMEM;
         }
-        pdpt->entries[pdpt_idx] = new_pd_phys | PT_PRESENT | PT_RW | PT_USER;
+        pdpt->entries[l3] = new_pd_phys | PT_PRESENT | PT_RW | PT_USER;
     } else {
-        pd = (page_table_t *)p2v(pdpt->entries[pdpt_idx] & PT_ADDR_MASK);
+        pd = p2table(pdpt->entries[l3]);
     }
 
-    if (pd->entries[pd_idx] & PT_HUGE) {
+    if (pd->entries[l2] & PT_HUGE) {
         if (new_pd_phys) {
-            pdpt->entries[pdpt_idx] = 0;
+            pdpt->entries[l3] = 0;
             free_table_frame(new_pd_phys);
         }
         if (new_pdpt_phys) {
-            pml4->entries[pml4_idx] = 0;
+            pml4->entries[l4] = 0;
             free_table_frame(new_pdpt_phys);
         }
         return -EEXIST;
@@ -299,7 +288,7 @@ static int mmu_map_page_unlocked(mmu_context_t *ctx, uintptr_t virt, uintptr_t p
         uint64_t pde_val = (phys & PT_2M_ADDR_MASK) | mmu_flags_to_pte(flags) | PT_HUGE;
         if (flags & MMU_FLAG_WC) pde_val |= PT_PAT_2M;
 
-        uint64_t old_pde = __atomic_exchange_n(&pd->entries[pd_idx], pde_val, __ATOMIC_SEQ_CST);
+        uint64_t old_pde = __atomic_exchange_n(&pd->entries[l2], pde_val, __ATOMIC_SEQ_CST);
         if ((read_cr3() & PT_ADDR_MASK) == ctx->pml4_phys) {
             invlpg(virt);
         }
@@ -309,26 +298,26 @@ static int mmu_map_page_unlocked(mmu_context_t *ctx, uintptr_t virt, uintptr_t p
     }
 
     page_table_t *pt = NULL;
-    if (!(pd->entries[pd_idx] & PT_PRESENT)) {
+    if (!(pd->entries[l2] & PT_PRESENT)) {
         pt = alloc_table_frame(&new_pt_phys);
         if (!pt) {
             if (new_pd_phys) {
-                pdpt->entries[pdpt_idx] = 0;
+                pdpt->entries[l3] = 0;
                 free_table_frame(new_pd_phys);
             }
             if (new_pdpt_phys) {
-                pml4->entries[pml4_idx] = 0;
+                pml4->entries[l4] = 0;
                 free_table_frame(new_pdpt_phys);
             }
             return -ENOMEM;
         }
-        pd->entries[pd_idx] = new_pt_phys | PT_PRESENT | PT_RW | PT_USER;
+        pd->entries[l2] = new_pt_phys | PT_PRESENT | PT_RW | PT_USER;
     } else {
-        pt = (page_table_t *)p2v(pd->entries[pd_idx] & PT_ADDR_MASK);
+        pt = p2table(pd->entries[l2]);
     }
 
     uint64_t pte_val = (phys & PT_ADDR_MASK) | mmu_flags_to_pte(flags);
-    uint64_t old_pte = __atomic_exchange_n(&pt->entries[pt_idx], pte_val, __ATOMIC_SEQ_CST);
+    uint64_t old_pte = __atomic_exchange_n(&pt->entries[l1], pte_val, __ATOMIC_SEQ_CST);
 
     if ((read_cr3() & PT_ADDR_MASK) == ctx->pml4_phys) {
         invlpg(virt);
@@ -350,22 +339,22 @@ int mmu_map_page(mmu_context_t *ctx, uintptr_t virt, uintptr_t phys, uint32_t fl
 
 static int mmu_unmap_page_unlocked(mmu_context_t *ctx, uintptr_t virt) {
     page_table_t *pml4 = (page_table_t *)p2v(ctx->pml4_phys);
-    size_t pml4_idx = (virt >> 39) & 0x1FF;
-    size_t pdpt_idx = (virt >> 30) & 0x1FF;
-    size_t pd_idx   = (virt >> 21) & 0x1FF;
-    size_t pt_idx   = (virt >> 12) & 0x1FF;
+    size_t l4 = pml4_idx(virt);
+    size_t l3 = pdpt_idx(virt);
+    size_t l2 = pd_idx(virt);
+    size_t l1 = pt_idx(virt);
 
-    if (!(pml4->entries[pml4_idx] & PT_PRESENT)) return 0;
+    if (!(pml4->entries[l4] & PT_PRESENT)) return 0;
 
-    page_table_t *pdpt = (page_table_t *)p2v(pml4->entries[pml4_idx] & PT_ADDR_MASK);
-    if (!(pdpt->entries[pdpt_idx] & PT_PRESENT)) return 0;
-    if (pdpt->entries[pdpt_idx] & PT_HUGE) return -EINVAL;
+    page_table_t *pdpt = p2table(pml4->entries[l4]);
+    if (!(pdpt->entries[l3] & PT_PRESENT)) return 0;
+    if (pdpt->entries[l3] & PT_HUGE) return -EINVAL;
 
-    page_table_t *pd = (page_table_t *)p2v(pdpt->entries[pdpt_idx] & PT_ADDR_MASK);
-    if (!(pd->entries[pd_idx] & PT_PRESENT)) return 0;
+    page_table_t *pd = p2table(pdpt->entries[l3]);
+    if (!(pd->entries[l2] & PT_PRESENT)) return 0;
 
-    if (pd->entries[pd_idx] & PT_HUGE) {
-        uint64_t old_pde = __atomic_exchange_n(&pd->entries[pd_idx], 0ULL, __ATOMIC_SEQ_CST);
+    if (pd->entries[l2] & PT_HUGE) {
+        uint64_t old_pde = __atomic_exchange_n(&pd->entries[l2], 0ULL, __ATOMIC_SEQ_CST);
         if (old_pde & PT_PRESENT) {
             uintptr_t phys = old_pde & PT_2M_ADDR_MASK;
             page_t *pg = pmm_paddr_to_page(phys);
@@ -376,21 +365,21 @@ static int mmu_unmap_page_unlocked(mmu_context_t *ctx, uintptr_t virt) {
                 invlpg(virt);
             }
         }
-        if (pml4_idx < 256 && is_table_empty(pd)) {
-            uintptr_t pd_phys = pdpt->entries[pdpt_idx] & PT_ADDR_MASK;
-            pdpt->entries[pdpt_idx] = 0;
+        if (l4 < 256 && is_table_empty(pd)) {
+            uintptr_t pd_phys = pdpt->entries[l3] & PT_ADDR_MASK;
+            pdpt->entries[l3] = 0;
             free_table_frame(pd_phys);
             if (is_table_empty(pdpt)) {
-                uintptr_t pdpt_phys = pml4->entries[pml4_idx] & PT_ADDR_MASK;
-                pml4->entries[pml4_idx] = 0;
+                uintptr_t pdpt_phys = pml4->entries[l4] & PT_ADDR_MASK;
+                pml4->entries[l4] = 0;
                 free_table_frame(pdpt_phys);
             }
         }
         return 0;
     }
 
-    page_table_t *pt = (page_table_t *)p2v(pd->entries[pd_idx] & PT_ADDR_MASK);
-    uint64_t old_pte = __atomic_exchange_n(&pt->entries[pt_idx], 0ULL, __ATOMIC_SEQ_CST);
+    page_table_t *pt = p2table(pd->entries[l2]);
+    uint64_t old_pte = __atomic_exchange_n(&pt->entries[l1], 0ULL, __ATOMIC_SEQ_CST);
 
     if (old_pte & PT_PRESENT) {
         uintptr_t phys = old_pte & PT_ADDR_MASK;
@@ -404,19 +393,19 @@ static int mmu_unmap_page_unlocked(mmu_context_t *ctx, uintptr_t virt) {
         }
     }
 
-    if (pml4_idx < 256 && is_table_empty(pt)) {
-        uintptr_t pt_phys = pd->entries[pd_idx] & PT_ADDR_MASK;
-        pd->entries[pd_idx] = 0;
+    if (l4 < 256 && is_table_empty(pt)) {
+        uintptr_t pt_phys = pd->entries[l2] & PT_ADDR_MASK;
+        pd->entries[l2] = 0;
         free_table_frame(pt_phys);
 
         if (is_table_empty(pd)) {
-            uintptr_t pd_phys = pdpt->entries[pdpt_idx] & PT_ADDR_MASK;
-            pdpt->entries[pdpt_idx] = 0;
+            uintptr_t pd_phys = pdpt->entries[l3] & PT_ADDR_MASK;
+            pdpt->entries[l3] = 0;
             free_table_frame(pd_phys);
 
             if (is_table_empty(pdpt)) {
-                uintptr_t pdpt_phys = pml4->entries[pml4_idx] & PT_ADDR_MASK;
-                pml4->entries[pml4_idx] = 0;
+                uintptr_t pdpt_phys = pml4->entries[l4] & PT_ADDR_MASK;
+                pml4->entries[l4] = 0;
                 free_table_frame(pdpt_phys);
             }
         }
@@ -471,32 +460,32 @@ int mmu_protect_page(mmu_context_t *ctx, uintptr_t virt, uint32_t flags) {
     uint64_t rflags = spinlock_acquire_irqsave(&ctx->lock);
 
     page_table_t *pml4 = (page_table_t *)p2v(ctx->pml4_phys);
-    size_t pml4_idx = (virt >> 39) & 0x1FF;
-    size_t pdpt_idx = (virt >> 30) & 0x1FF;
-    size_t pd_idx   = (virt >> 21) & 0x1FF;
-    size_t pt_idx   = (virt >> 12) & 0x1FF;
+    size_t l4 = pml4_idx(virt);
+    size_t l3 = pdpt_idx(virt);
+    size_t l2 = pd_idx(virt);
+    size_t l1 = pt_idx(virt);
 
-    if (!(pml4->entries[pml4_idx] & PT_PRESENT)) {
+    if (!(pml4->entries[l4] & PT_PRESENT)) {
         spinlock_release_irqrestore(&ctx->lock, rflags);
         return -EINVAL;
     }
 
-    page_table_t *pdpt = (page_table_t *)p2v(pml4->entries[pml4_idx] & PT_ADDR_MASK);
-    if (!(pdpt->entries[pdpt_idx] & PT_PRESENT) || (pdpt->entries[pdpt_idx] & PT_HUGE)) {
+    page_table_t *pdpt = p2table(pml4->entries[l4]);
+    if (!(pdpt->entries[l3] & PT_PRESENT) || (pdpt->entries[l3] & PT_HUGE)) {
         spinlock_release_irqrestore(&ctx->lock, rflags);
         return -EINVAL;
     }
 
-    page_table_t *pd = (page_table_t *)p2v(pdpt->entries[pdpt_idx] & PT_ADDR_MASK);
-    if (!(pd->entries[pd_idx] & PT_PRESENT)) {
+    page_table_t *pd = p2table(pdpt->entries[l3]);
+    if (!(pd->entries[l2] & PT_PRESENT)) {
         spinlock_release_irqrestore(&ctx->lock, rflags);
         return -EINVAL;
     }
 
-    if (pd->entries[pd_idx] & PT_HUGE) {
-        uint64_t phys = pd->entries[pd_idx] & PT_2M_ADDR_MASK;
+    if (pd->entries[l2] & PT_HUGE) {
+        uint64_t phys = pd->entries[l2] & PT_2M_ADDR_MASK;
         uint64_t new_pde = phys | mmu_flags_to_pte(flags) | PT_HUGE;
-        uint64_t old_pde = __atomic_exchange_n(&pd->entries[pd_idx], new_pde, __ATOMIC_SEQ_CST);
+        uint64_t old_pde = __atomic_exchange_n(&pd->entries[l2], new_pde, __ATOMIC_SEQ_CST);
 
         if ((read_cr3() & PT_ADDR_MASK) == ctx->pml4_phys) {
             invlpg(virt);
@@ -507,15 +496,15 @@ int mmu_protect_page(mmu_context_t *ctx, uintptr_t virt, uint32_t flags) {
         return 0;
     }
 
-    page_table_t *pt = (page_table_t *)p2v(pd->entries[pd_idx] & PT_ADDR_MASK);
-    if (!(pt->entries[pt_idx] & PT_PRESENT)) {
+    page_table_t *pt = p2table(pd->entries[l2]);
+    if (!(pt->entries[l1] & PT_PRESENT)) {
         spinlock_release_irqrestore(&ctx->lock, rflags);
         return -EINVAL;
     }
 
-    uint64_t phys = pt->entries[pt_idx] & PT_ADDR_MASK;
+    uint64_t phys = pt->entries[l1] & PT_ADDR_MASK;
     uint64_t new_pte = phys | mmu_flags_to_pte(flags);
-    uint64_t old_pte = __atomic_exchange_n(&pt->entries[pt_idx], new_pte, __ATOMIC_SEQ_CST);
+    uint64_t old_pte = __atomic_exchange_n(&pt->entries[l1], new_pte, __ATOMIC_SEQ_CST);
 
     if (old_pte & PT_DIRTY) {
         page_t *pg = pmm_paddr_to_page(phys);
@@ -536,47 +525,47 @@ uintptr_t mmu_virt_to_phys(mmu_context_t *ctx, uintptr_t virt) {
     uint64_t rflags = spinlock_acquire_irqsave(&ctx->lock);
 
     page_table_t *pml4 = (page_table_t *)p2v(ctx->pml4_phys);
-    size_t pml4_idx = (virt >> 39) & 0x1FF;
-    size_t pdpt_idx = (virt >> 30) & 0x1FF;
-    size_t pd_idx   = (virt >> 21) & 0x1FF;
-    size_t pt_idx   = (virt >> 12) & 0x1FF;
+    size_t l4 = pml4_idx(virt);
+    size_t l3 = pdpt_idx(virt);
+    size_t l2 = pd_idx(virt);
+    size_t l1 = pt_idx(virt);
 
-    if (!(pml4->entries[pml4_idx] & PT_PRESENT)) {
+    if (!(pml4->entries[l4] & PT_PRESENT)) {
         spinlock_release_irqrestore(&ctx->lock, rflags);
         return 0;
     }
 
-    page_table_t *pdpt = (page_table_t *)p2v(pml4->entries[pml4_idx] & PT_ADDR_MASK);
-    if (!(pdpt->entries[pdpt_idx] & PT_PRESENT)) {
+    page_table_t *pdpt = p2table(pml4->entries[l4]);
+    if (!(pdpt->entries[l3] & PT_PRESENT)) {
         spinlock_release_irqrestore(&ctx->lock, rflags);
         return 0;
     }
 
-    if (pdpt->entries[pdpt_idx] & PT_HUGE) {
-        uintptr_t phys = (pdpt->entries[pdpt_idx] & PT_1G_ADDR_MASK) | (virt & 0x3FFFFFFFULL);
+    if (pdpt->entries[l3] & PT_HUGE) {
+        uintptr_t phys = (pdpt->entries[l3] & PT_1G_ADDR_MASK) | (virt & 0x3FFFFFFFULL);
         spinlock_release_irqrestore(&ctx->lock, rflags);
         return phys;
     }
 
-    page_table_t *pd = (page_table_t *)p2v(pdpt->entries[pdpt_idx] & PT_ADDR_MASK);
-    if (!(pd->entries[pd_idx] & PT_PRESENT)) {
+    page_table_t *pd = p2table(pdpt->entries[l3]);
+    if (!(pd->entries[l2] & PT_PRESENT)) {
         spinlock_release_irqrestore(&ctx->lock, rflags);
         return 0;
     }
 
-    if (pd->entries[pd_idx] & PT_HUGE) {
-        uintptr_t phys = (pd->entries[pd_idx] & PT_2M_ADDR_MASK) | (virt & 0x1FFFFFULL);
+    if (pd->entries[l2] & PT_HUGE) {
+        uintptr_t phys = (pd->entries[l2] & PT_2M_ADDR_MASK) | (virt & 0x1FFFFFULL);
         spinlock_release_irqrestore(&ctx->lock, rflags);
         return phys;
     }
 
-    page_table_t *pt = (page_table_t *)p2v(pd->entries[pd_idx] & PT_ADDR_MASK);
-    if (!(pt->entries[pt_idx] & PT_PRESENT)) {
+    page_table_t *pt = p2table(pd->entries[l2]);
+    if (!(pt->entries[l1] & PT_PRESENT)) {
         spinlock_release_irqrestore(&ctx->lock, rflags);
         return 0;
     }
 
-    uintptr_t phys = (pt->entries[pt_idx] & PT_ADDR_MASK) | (virt & PAGE_MASK);
+    uintptr_t phys = (pt->entries[l1] & PT_ADDR_MASK) | (virt & PAGE_MASK);
     spinlock_release_irqrestore(&ctx->lock, rflags);
     return phys;
 }

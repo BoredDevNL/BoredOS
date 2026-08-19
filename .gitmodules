@@ -86,3 +86,6 @@
 [submodule "usr/tinygl"]
 	path = usr/tinygl
 	url = https://github.com/boredos/tinygl.git
+[submodule "usr/btvi"]
+	path = usr/btvi
+	url = https://github.com/BoredOS/btvi.git

@@ -29,6 +29,8 @@ It isn't fully POSIX compliant, so software generally needs some porting work be
 | **Lua** | Available as a shell tool or embeddable in other programs. |
 | **mlibc** | The managarm C standard library. |
 | **kilo** | A simple text editor. |
+| **kirc** | A simple IRC client. |
+| **tvi** | A vi-like text editor. |
 
 ### Package manager
 

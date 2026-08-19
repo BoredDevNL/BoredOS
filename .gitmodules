@@ -89,3 +89,6 @@
 [submodule "usr/btvi"]
 	path = usr/btvi
 	url = https://github.com/BoredOS/btvi.git
+[submodule "usr/kirc"]
+	path = usr/kirc
+	url = https://github.com/BoredOS/kirc.git

@@ -47,7 +47,7 @@ KERNEL_ELF = $(BUILD_DIR)/boredos.elf
 ISO_IMAGE = boredos.iso
 
 # Package-based applications/assets
-PACKAGES = kilo lua bfonts nova doomgeneric bart serenityicons tcc netutils bearssl tinygl btvi
+PACKAGES = kilo lua bfonts nova doomgeneric bart serenityicons tcc netutils bearssl tinygl btvi kirc
 
 BLUE  = \033[1;34m
 GREEN = \033[1;32m
@@ -226,6 +226,8 @@ userland: build/sdk
 	$(MAKE) -C usr/tinygl BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
 	$(MAKE) -C usr/bpm BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
 	$(MAKE) -C usr/btvi BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
+	$(MAKE) -C usr/kirc BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
+
 	@printf "$(GREEN)[OK]$(RESET) Userland build complete.\n"
 
 .PHONY: packages

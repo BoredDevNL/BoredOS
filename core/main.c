@@ -23,6 +23,8 @@
 #include "kconsole.h"
 #include "kutils.h"
 #include "memory_manager.h"
+#include "pmm.h"
+#include "pmm_test.h"
 #include "platform.h"
 #include "smp.h"
 #include "work_queue.h"
@@ -387,6 +389,30 @@ static void init_memory(void) {
             log_ok("VMA Augmented RB-Tree unit tests passed");
         } else {
             log_fail("VMA Augmented RB-Tree unit tests failed");
+        }
+
+        extern void pmm_init(const pmm_boot_map_t *boot_map);
+        extern bool pmm_run_tests(void);
+        extern uint64_t hhdm_offset;
+
+        pmm_mem_region_t pmm_regions[memmap_request.response->entry_count];
+        for (uint64_t i = 0; i < memmap_request.response->entry_count; i++) {
+            struct limine_memmap_entry *entry = memmap_request.response->entries[i];
+            pmm_regions[i].base = entry->base;
+            pmm_regions[i].length = entry->length;
+            pmm_regions[i].type = (entry->type == LIMINE_MEMMAP_USABLE) ? PMM_REGION_USABLE : PMM_REGION_RESERVED;
+        }
+        pmm_boot_map_t boot_map = {
+            .regions = pmm_regions,
+            .region_count = memmap_request.response->entry_count,
+            .direct_map_base = hhdm_offset,
+        };
+        pmm_init(&boot_map);
+
+        if (pmm_run_tests()) {
+            log_ok("PMM unit tests passed");
+        } else {
+            log_fail("PMM unit tests failed");
         }
 
         extern void mmu_init(void);

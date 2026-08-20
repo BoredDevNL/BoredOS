@@ -1,16 +1,6 @@
 // Copyright (c) 2023-2026 Christiaan (chris@boreddev.nl)
 // This software is released under the GNU General Public License v3.0. See LICENSE file for details.
 // This header needs to maintain in any file it is present in, as per the GPL license terms.
-/*
-################################################################
-
-BEWARE
-
-THIS IS SCAFFOLDING, CAN VERY MUCH BE CHANGED!!
-
-#################################################################
-
-*/
 
 #ifndef BOREDOS_PMM_H
 #define BOREDOS_PMM_H
@@ -20,6 +10,7 @@ THIS IS SCAFFOLDING, CAN VERY MUCH BE CHANGED!!
 #include <stdbool.h>
 
 #define PMM_PAGE_SIZE 4096UL
+#define PMM_PAGE_SHIFT 12
 #define PMM_MAX_ORDER 11
 
 #define PAGE_FLAG_FREE      (1 << 0)
@@ -30,6 +21,16 @@ THIS IS SCAFFOLDING, CAN VERY MUCH BE CHANGED!!
 #define PAGE_FLAG_ZERO      (1 << 5)
 #define PAGE_FLAG_CACHED    (1 << 6)
 #define PAGE_FLAG_DIRTY     (1 << 7)
+#define PAGE_FLAG_LOCKED    (1 << 8)
+#define PAGE_FLAG_DMA       (1 << 9)
+#define PAGE_FLAG_DMA32     (1 << 10)
+
+typedef enum {
+    PMM_ZONE_DMA = 0,
+    PMM_ZONE_DMA32,
+    PMM_ZONE_NORMAL,
+    PMM_ZONE_COUNT
+} pmm_zone_id_t;
 
 typedef enum {
     PMM_REGION_USABLE = 1,
@@ -56,11 +57,23 @@ typedef struct {
 
 typedef struct page {
     uint32_t flags;
-    uint32_t refcount;
+    _Atomic uint32_t refcount;
     uint8_t order;
-    struct page *next_free;
-    void *cache_mapping;
-    uint64_t index;
+    uint8_t zone;
+
+    union {
+        struct {
+            struct page *free_prev;
+            struct page *free_next;
+        };
+        struct {
+            void *mapping;
+            uint64_t index;
+            struct page *cache_next;
+            struct page *lru_prev;
+            struct page *lru_next;
+        };
+    };
 } page_t;
 
 typedef struct {
@@ -72,13 +85,17 @@ typedef struct {
 } pmm_stats_t;
 
 void pmm_init(const pmm_boot_map_t *boot_map);
+void pmm_init_percpu(void);
 
 void pmm_set_direct_map(uintptr_t direct_map_base);
 uintptr_t pmm_get_direct_map(void);
 
 page_t *pmm_alloc_page(uint32_t flags);
+page_t *pmm_alloc_order(uint8_t order, uint32_t flags);
 page_t *pmm_alloc_pages(size_t count, uint32_t flags);
+
 void pmm_free_page(page_t *page);
+void pmm_free_order(page_t *page, uint8_t order);
 void pmm_free_pages(page_t *page, size_t count);
 
 void pmm_page_ref(page_t *page);

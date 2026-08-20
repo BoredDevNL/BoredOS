@@ -47,7 +47,7 @@ KERNEL_ELF = $(BUILD_DIR)/boredos.elf
 ISO_IMAGE = boredos.iso
 
 # Package-based applications/assets
-PACKAGES = kilo lua bfonts nova doomgeneric bart serenityicons tcc netutils bearssl tinygl
+PACKAGES = kilo lua bfonts nova doomgeneric bart serenityicons tcc netutils bearssl tinygl btvi kirc
 
 BLUE  = \033[1;34m
 GREEN = \033[1;32m
@@ -225,6 +225,9 @@ userland: build/sdk
 	$(MAKE) -C usr/doomgeneric BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
 	$(MAKE) -C usr/tinygl BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
 	$(MAKE) -C usr/bpm BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
+	$(MAKE) -C usr/btvi BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
+	$(MAKE) -C usr/kirc BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
+
 	@printf "$(GREEN)[OK]$(RESET) Userland build complete.\n"
 
 .PHONY: packages
@@ -331,9 +334,6 @@ $(ISO_IMAGE): $(KERNEL_ELF) $(BUILD_DIR)/initrd.tar.lz4 limine.conf limine-setup
 	@printf "$(YELLOW)[COPY]$(RESET) Initrd...\n"
 	cp $(BUILD_DIR)/initrd.tar.lz4 $(ISO_DIR)/
 
-	@printf "$(YELLOW)[CONFIG]$(RESET) Adding initrd module path...\n"
-	printf "    module_path: boot():/initrd.tar.lz4\n" >> $(ISO_DIR)/limine.conf
-	
 	@printf "$(YELLOW)[COPY]$(RESET) Optional splash image...\n"
 	@if [ -f base/boot/splash.jpg ]; then printf "  -> splash.jpg\n"; cp base/boot/splash.jpg $(ISO_DIR)/splash.jpg; else printf "  -> no splash.jpg found\n"; fi
 	

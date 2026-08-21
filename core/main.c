@@ -22,9 +22,11 @@
 #include "vfs.h"
 #include "kconsole.h"
 #include "kutils.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "pmm.h"
 #include "pmm_test.h"
+#include "slab.h"
+#include "slab_test.h"
 #include "platform.h"
 #include "smp.h"
 #include "work_queue.h"
@@ -381,16 +383,6 @@ static void init_verbose_console(void) {
 
 static void init_memory(void) {
     if (memmap_request.response != NULL) {
-        memory_manager_init_from_memmap(memmap_request.response);
-        log_ok("Memory manager ready");
-
-        extern bool vma_run_tests(void);
-        if (vma_run_tests()) {
-            log_ok("VMA Augmented RB-Tree unit tests passed");
-        } else {
-            log_fail("VMA Augmented RB-Tree unit tests failed");
-        }
-
         extern void pmm_init(const pmm_boot_map_t *boot_map);
         extern bool pmm_run_tests(void);
         extern uint64_t hhdm_offset;
@@ -415,6 +407,13 @@ static void init_memory(void) {
             log_fail("PMM unit tests failed");
         }
 
+        slab_init();
+        if (slab_run_tests()) {
+            log_ok("SLAB Allocator unit tests passed");
+        } else {
+            log_fail("SLAB Allocator unit tests failed");
+        }
+
         extern void mmu_init(void);
         extern bool mmu_run_tests(void);
         mmu_init();
@@ -422,6 +421,13 @@ static void init_memory(void) {
             log_ok("MMU Hardware Driver unit tests passed");
         } else {
             log_fail("MMU Hardware Driver unit tests failed");
+        }
+
+        extern bool vma_run_tests(void);
+        if (vma_run_tests()) {
+            log_ok("VMA Augmented RB-Tree unit tests passed");
+        } else {
+            log_fail("VMA Augmented RB-Tree unit tests failed");
         }
 
         smp_init_bsp();
@@ -614,19 +620,14 @@ static void init_modules(void) {
                     
                     serial_write("[INIT] Decompression successful! Parsing TAR...\n");
                     
-                    uint8_t *shrunk_buf = (uint8_t *)krealloc(decomp_buf, decomp_size);
-                    if (shrunk_buf) {
-                        decomp_buf = shrunk_buf;
-                    }
-                    
                     tar_parse(decomp_buf, decomp_size);
-                    
-                    g_bootfs_state.initrd_ptr = decomp_buf;
-                    g_bootfs_state.initrd_size = decomp_size;
+                    kfree(decomp_buf);
+                    g_bootfs_state.initrd_ptr = NULL;
+                    g_bootfs_state.initrd_size = 0;
                 } else {
                     tar_parse(mod->address, mod->size);
-                    g_bootfs_state.initrd_ptr = mod->address;
-                    g_bootfs_state.initrd_size = mod->size;
+                    g_bootfs_state.initrd_ptr = NULL;
+                    g_bootfs_state.initrd_size = 0;
                 }
             } else {
                 char dir_path[256];

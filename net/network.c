@@ -73,11 +73,18 @@ static void net_worker_loop(void) {
     }
 }
 
+static spinlock_t net_init_lock = SPINLOCK_INIT;
+
 int network_init(void) {
-    if (lwip_initialized) return 0;
+    uint64_t rflags = spinlock_acquire_irqsave(&net_init_lock);
+    if (lwip_initialized) {
+        spinlock_release_irqrestore(&net_init_lock, rflags);
+        return 0;
+    }
     
     // First, find and initialize the generic NIC device if not already done
     if (nic_init() != 0) {
+        spinlock_release_irqrestore(&net_init_lock, rflags);
         return -1; // No supported NIC found
     }
 
@@ -92,6 +99,7 @@ int network_init(void) {
     ip4_addr_set_zero(&gw);
     
     if (netif_add(&nic_netif, &ipaddr, &netmask, &gw, NULL, nic_netif_init, ethernet_input) == NULL) {
+        spinlock_release_irqrestore(&net_init_lock, rflags);
         return -1;
     }
     
@@ -106,6 +114,7 @@ int network_init(void) {
     extern void serial_write(const char *str);
     serial_write("[NET] Network interface initialized and background net thread spawned\n");
 
+    spinlock_release_irqrestore(&net_init_lock, rflags);
     return 0;
 }
 

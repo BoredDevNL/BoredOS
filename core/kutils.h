@@ -12,11 +12,12 @@
 #define MSEC_PER_SEC (1000) // Miliseconds in second
 #define USEC_PER_SEC (USEC_PER_MSEC * MSEC_PER_SEC) // Microseconds in second
 
-// Kernel string utilities
+void page_zero_fast(void *page);
+void page_copy_fast(void *dest, const void *src);
 void *memmove(void *dest, const void *src, uint64_t n);
 void *memset(void *dest, int val, size_t len);
 void *memcpy(void *dest, const void *src, size_t len);
-int memcmp (const void *str1, const void *str2, size_t count);
+int memcmp(const void *str1, const void *str2, size_t count);
 size_t strlen(const char *str);
 int strcmp(const char *s1, const char *s2);
 int strncmp(const char *s1, const char *s2, size_t n);

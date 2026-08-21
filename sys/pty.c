@@ -84,6 +84,7 @@ int pty_destroy(int pty_id) {
     p->used = false;
     p->fg_pid = -1;
     spinlock_release_irqrestore(&g_pty_global_lock, flags);
+    process_kill_by_tty(pty_id);
     return 0;
 }
 

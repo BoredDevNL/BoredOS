@@ -11,7 +11,7 @@
 
 #define PMM_PAGE_SIZE 4096UL
 #define PMM_PAGE_SHIFT 12
-#define PMM_MAX_ORDER 11
+#define PMM_MAX_ORDER 18
 
 #define PAGE_FLAG_FREE      (1 << 0)
 #define PAGE_FLAG_RESERVED  (1 << 1)
@@ -24,6 +24,9 @@
 #define PAGE_FLAG_LOCKED    (1 << 8)
 #define PAGE_FLAG_DMA       (1 << 9)
 #define PAGE_FLAG_DMA32     (1 << 10)
+#define PAGE_FLAG_SLAB      (1 << 11)
+#define PAGE_FLAG_KMALLOC_LARGE (1 << 12)
+#define PAGE_FLAG_VMALLOC   (1 << 13)
 
 typedef enum {
     PMM_ZONE_DMA = 0,

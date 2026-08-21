@@ -6,6 +6,7 @@
 #include "spinlock.h"
 #include "platform.h"
 #include "smp.h"
+#include "kutils.h"
 #include <string.h>
 
 #define PMM_DMA_LIMIT   0x01000000ULL       // 16 MiB
@@ -34,6 +35,7 @@ static bool pmm_smp_ready = false;
 
 static page_t *pages_array = NULL;
 static size_t total_page_count = 0;
+static size_t usable_page_count = 0;
 static uintptr_t pmm_direct_map_base = 0;
 
 static inline uint64_t irq_save(void) {
@@ -115,6 +117,7 @@ static void add_free_block(uintptr_t base_pfn, uint8_t order) {
 
     list_add_head(&z->free_lists[order], page);
     z->free_pages += (1UL << order);
+    usable_page_count += (1UL << order);
 }
 
 static void ingest_usable_range(uintptr_t start_paddr, uintptr_t end_paddr) {
@@ -142,6 +145,7 @@ static void ingest_usable_range(uintptr_t start_paddr, uintptr_t end_paddr) {
 void pmm_init(const pmm_boot_map_t *boot_map) {
     if (!boot_map || boot_map->region_count == 0) return;
     pmm_direct_map_base = boot_map->direct_map_base;
+    usable_page_count = 0;
 
     for (size_t z = 0; z < PMM_ZONE_COUNT; z++) {
         zones[z].lock = SPINLOCK_INIT;
@@ -269,7 +273,7 @@ page_t *pmm_alloc_order(uint8_t order, uint32_t flags) {
             page->refcount = 1;
 
             if (flags & PAGE_FLAG_ZERO) {
-                memset((void *)p2v(pmm_page_to_paddr(page)), 0, PMM_PAGE_SIZE);
+                page_zero_fast((void *)p2v(pmm_page_to_paddr(page)));
             }
             return page;
         }
@@ -303,7 +307,7 @@ page_t *pmm_alloc_order(uint8_t order, uint32_t flags) {
             ret->refcount = 1;
 
             if (flags & PAGE_FLAG_ZERO) {
-                memset((void *)p2v(pmm_page_to_paddr(ret)), 0, PMM_PAGE_SIZE);
+                page_zero_fast((void *)p2v(pmm_page_to_paddr(ret)));
             }
             return ret;
         }
@@ -332,8 +336,10 @@ page_t *pmm_alloc_order(uint8_t order, uint32_t flags) {
 
     if (allocated && (flags & PAGE_FLAG_ZERO)) {
         uintptr_t phys = pmm_page_to_paddr(allocated);
-        size_t size = (1UL << order) * PMM_PAGE_SIZE;
-        memset((void *)p2v(phys), 0, size);
+        size_t pages = (1UL << order);
+        for (size_t i = 0; i < pages; i++) {
+            page_zero_fast((void *)p2v(phys + i * PMM_PAGE_SIZE));
+        }
     }
 
     return allocated;
@@ -469,10 +475,10 @@ void *pmm_page_to_vaddr(const page_t *page) {
 
 pmm_stats_t pmm_get_stats(void) {
     pmm_stats_t stats = {0};
-    stats.total_pages = total_page_count;
+    stats.total_pages = usable_page_count;
     for (size_t z = 0; z < PMM_ZONE_COUNT; z++) {
         stats.free_pages += zones[z].free_pages;
     }
-    stats.reserved_pages = stats.total_pages - stats.free_pages;
+    stats.reserved_pages = (stats.total_pages > stats.free_pages) ? (stats.total_pages - stats.free_pages) : 0;
     return stats;
 }

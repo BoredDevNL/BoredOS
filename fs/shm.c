@@ -1,7 +1,7 @@
 #include "shm.h"
 #include "vfs.h"
 #include "spinlock.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "kutils.h"
 #include "platform.h"
 

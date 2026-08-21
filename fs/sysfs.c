@@ -1,6 +1,6 @@
 #include "vfs.h"
 #include "kernel_subsystem.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "kutils.h"
 
 typedef struct {

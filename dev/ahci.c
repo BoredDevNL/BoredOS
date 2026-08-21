@@ -4,7 +4,7 @@
 #include "ahci.h"
 #include "pci.h"
 #include "disk.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "paging.h"
 #include "io.h"
 #include <stddef.h>
@@ -521,7 +521,13 @@ void ahci_init(void) {
             // Register as a block device
             Disk *disk = (Disk*)kmalloc(sizeof(Disk));
             if (disk) {
+                memset(disk, 0, sizeof(Disk));
                 AHCIDriverData *drv = (AHCIDriverData*)kmalloc(sizeof(AHCIDriverData));
+                if (!drv) {
+                    kfree_null(disk);
+                    continue;
+                }
+                memset(drv, 0, sizeof(AHCIDriverData));
                 drv->ahci_port = i;
 
                 disk->devname[0] = 0; // Auto-assign

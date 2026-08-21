@@ -2,7 +2,8 @@
 #include "process.h"
 #include "syscall.h"
 #include "disk.h"
-#include "memory_manager.h"
+#include "slab.h"
+#include "pmm.h"
 #include "kutils.h"
 #include "platform.h"
 #include "version.h"
@@ -265,15 +266,16 @@ int procfs_read(void *fs_private, void *handle, void *buf, size_t size) {
 
             strcpy(out + strlen(out), "\n");
         } else if (strcmp(h->type, "meminfo") == 0) {
-            extern MemStats memory_get_stats(void);
-            MemStats stats = memory_get_stats();
+            pmm_stats_t stats = pmm_get_stats();
+            uint64_t total_kb = (stats.total_pages * 4096) / 1024;
+            uint64_t used_kb = (stats.reserved_pages * 4096) / 1024;
 
             char temp[32];
             strcpy(out, "MemTotal: ");
-            utoa(stats.total_memory / 1024, temp);
+            utoa(total_kb, temp);
             strcpy(out + strlen(out), temp);
             strcpy(out + strlen(out), " kB\nMemUsed: ");
-            utoa(stats.used_memory / 1024, temp);
+            utoa(used_kb, temp);
             strcpy(out + strlen(out), temp);
             strcpy(out + strlen(out), " kB\n");
         }
@@ -314,8 +316,7 @@ int procfs_read(void *fs_private, void *handle, void *buf, size_t size) {
             uint64_t mem_val = proc->used_memory;
 
             if (h->pid == 0) {
-                extern MemStats memory_get_stats(void);
-                mem_val = memory_get_stats().used_memory;
+                mem_val = pmm_get_stats().reserved_pages * 4096;
             }
 
             char mem_s[32];

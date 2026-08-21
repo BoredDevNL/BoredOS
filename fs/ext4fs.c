@@ -5,7 +5,7 @@
 
 #include "ext4fs.h"
 #include "disk.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "spinlock.h"
 #include <stddef.h>
 #include <string.h>

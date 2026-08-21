@@ -7,7 +7,7 @@
 #include "paging.h"
 #include "io.h"
 #include "platform.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "elf.h"
 #include "vfs.h"
 #include "spinlock.h"

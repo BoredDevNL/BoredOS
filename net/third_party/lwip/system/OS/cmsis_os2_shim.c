@@ -2,7 +2,7 @@
 #include "wait_queue.h"
 #include "process.h"
 #include "spinlock.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "kutils.h"
 #include <string.h>
 #include <stdlib.h>

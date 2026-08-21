@@ -4,7 +4,7 @@
 #include "mkfs_fat32.h"
 #include "disk.h"
 #include <stddef.h>
-#include "memory_manager.h"
+#include "slab.h"
 #include "kutils.h"
 
 extern void serial_write(const char *str);

@@ -10,7 +10,7 @@
 #include "kutils.h"
 #include "platform.h"
 #include "kconsole.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include <limits.h>
 #include <string.h>
 

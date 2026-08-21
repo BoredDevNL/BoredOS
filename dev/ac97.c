@@ -5,7 +5,7 @@
 #include "pci.h"
 #include "audio.h"
 #include "io.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "platform.h"
 #include "spinlock.h"
 #include "kutils.h"

@@ -3,7 +3,7 @@
 // This header needs to maintain in any file it is present in, as per the GPL license terms.
 #include "fat32.h"
 #include "vfs.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "io.h"
 #include "disk.h"
 #include <stdbool.h>
@@ -888,7 +888,9 @@ static int realfs_read_file(FAT32_FileHandle *handle, void *buffer, size_t size,
         }
     }
     
-    kfree_null(cluster_buf);
+    if (!ext_cluster_buf) {
+        kfree_null(cluster_buf);
+    }
     return bytes_read;
 }
 
@@ -1057,7 +1059,7 @@ static int realfs_write_file(FAT32_FileHandle *handle, const void *buffer, size_
     if (handle->cluster == 0) {
         uint32_t new_cluster = realfs_allocate_cluster(vol);
         if (new_cluster == 0) {
-            kfree_null(cluster_buf);
+            if (!ext_cluster_buf) kfree_null(cluster_buf);
             return 0;
         }
         handle->start_cluster = new_cluster;
@@ -1146,7 +1148,9 @@ static int realfs_write_file(FAT32_FileHandle *handle, const void *buffer, size_
     }
     
     if (bytes_written > 0) realfs_update_dir_entry_size(vol, handle);
-    kfree_null(cluster_buf);
+    if (!ext_cluster_buf) {
+        kfree_null(cluster_buf);
+    }
     return bytes_written;
 }
 

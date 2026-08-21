@@ -5,7 +5,7 @@
 #include "mmu.h"
 #include "pmm.h"
 #include "platform.h"
-#include "kmalloc.h"
+#include "slab.h"
 #include "msrs.h"
 #include <string.h>
 

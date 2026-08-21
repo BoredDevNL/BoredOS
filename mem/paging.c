@@ -2,8 +2,9 @@
 // This software is released under the GNU General Public License v3.0. See LICENSE file for details.
 // This header needs to maintain in any file it is present in, as per the GPL license terms.
 #include "paging.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "platform.h"
+#include "kutils.h"
 
 #include "../graphics/graphics.h"
 #include "../core/msrs.h"
@@ -30,16 +31,9 @@ static void write_cr3(uint64_t cr3) {
 static uint64_t alloc_page_table_phys(void) {
     void *ptr = kmalloc_aligned(PAGE_SIZE, PAGE_SIZE);
     if (!ptr) return 0;
-    
-    page_table_t* table = (page_table_t*)ptr;
-    
-    // Clear table 
-    for (int i = 0; i < 512; i++) {
-        table->entries[i] = 0;
-    }
-    
-    // Return the physical address of this table
-    return v2p((uint64_t)table);
+
+    page_zero_fast(ptr);
+    return v2p((uint64_t)ptr);
 }
 
 static bool paging_map_page_2m(uint64_t pml4_phys, uint64_t virtual_addr, uint64_t physical_addr, uint64_t flags) {
@@ -344,11 +338,9 @@ uint64_t paging_clone_user_pml4(uint64_t parent_pml4_phys) {
                                     // Check if this physical frame belongs to standard RAM/heap
                                     extern bool mm_is_heap_address(void *ptr);
                                     if (mm_is_heap_address((void*)p2v(parent_phys))) {
-                                        // Allocate a clean page for the child and copy content
                                         void *child_page = kmalloc_aligned(4096, 4096);
                                         if (!child_page) goto fail;
-                                        extern void *memcpy(void *dest, const void *src, size_t n);
-                                        memcpy(child_page, (void*)p2v(parent_phys), 4096);
+                                        page_copy_fast(child_page, (void*)p2v(parent_phys));
                                         child_pt->entries[pt_idx] = v2p((uint64_t)child_page) | flags;
                                     } else {
                                         // Device mapping (like framebuffer), just share the physical address

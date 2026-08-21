@@ -2,7 +2,7 @@
 // This software is released under the GNU General Public License v3.0. See LICENSE file for details.
 // This header needs to maintain in any file it is present in, as per the GPL license terms.
 #include "sockbuf.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "kutils.h"
 
 void sockbuf_init(sockbuf_t *sb, uint32_t hiwat) {

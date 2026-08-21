@@ -4,7 +4,7 @@
 // present in, as per the GPL license terms.
 #include "syscall.h"
 #include "gdt.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "process.h"
 #include "vfs.h"
 #include "shm.h"
@@ -1353,8 +1353,12 @@ static uint64_t sys_cmd_kill_signal(const syscall_args_t *args) {
   if (sig <= 0 || sig >= MAX_SIGNALS)
     return -1;
 
-  if (sig == 9) {
+  if (sig == 9 || target->signal_handlers[sig] == 0) {
     process_terminate_with_status(target, 128 + sig);
+    return 0;
+  }
+
+  if (target->signal_handlers[sig] == 1) {
     return 0;
   }
 

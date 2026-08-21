@@ -3,7 +3,7 @@
 // This header needs to maintain in any file it is present in, as per the GPL license terms.
 #include "disk.h"
 #include "pci.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "io.h"
 #include "ahci.h"
 #include "vfs.h"
@@ -359,6 +359,7 @@ void disk_register_partition(Disk *parent, uint32_t lba_offset, uint32_t sector_
 
     Disk *part = (Disk*)kmalloc(sizeof(Disk));
     if (!part) return;
+    memset(part, 0, sizeof(Disk));
 
     // Build name: parent_devname + partition number (e.g. "sda1")
     size_t len = strlen(parent->devname);
@@ -374,6 +375,9 @@ void disk_register_partition(Disk *parent, uint32_t lba_offset, uint32_t sector_
     part->total_sectors = sector_count;
     part->read_sector = parent->read_sector;
     part->write_sector = parent->write_sector;
+    part->read_sectors = parent->read_sectors;
+    part->write_sectors = parent->write_sectors;
+    part->sync = parent->sync;
     part->driver_data = parent->driver_data;
     part->parent = parent;
     part->is_partition = true;
@@ -603,6 +607,7 @@ static void try_add_ata_drive(uint16_t port, bool slave, const char *name) {
     if (sectors > 0) {
         Disk *new_disk = (Disk*)kmalloc(sizeof(Disk));
         if (!new_disk) return;
+        memset(new_disk, 0, sizeof(Disk));
 
         ATADriverData *data = (ATADriverData*)kmalloc(sizeof(ATADriverData));
         data->port_base = port;

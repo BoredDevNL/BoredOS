@@ -3,7 +3,7 @@
 // This header needs to maintain in any file it is present in, as per the GPL license terms.
 
 #include "vma.h"
-#include "kmalloc.h"
+#include "slab.h"
 #include <string.h>
 
 #define PAGE_SIZE 4096UL

@@ -1,6 +1,6 @@
 #include "unix_socket.h"
 #include "process.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "kutils.h"
 #include "spinlock.h"
 #include <string.h>

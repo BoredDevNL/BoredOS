@@ -7,7 +7,7 @@
 #include "acpi_i2c.h"
 #include "pci.h"
 #include "platform.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "paging.h"
 #include "kutils.h"
 #include <string.h>

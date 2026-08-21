@@ -3,7 +3,7 @@
 // This header needs to maintain in any file it is present in, as per the GPL license terms.
 #include "wait_queue.h"
 #include "process.h"
-#include "memory_manager.h"
+#include "slab.h"
 
 extern void serial_write(const char *str);
 extern void serial_write_num(uint64_t n);

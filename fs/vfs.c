@@ -3,7 +3,7 @@
 // This header needs to maintain in any file it is present in, as per the GPL license terms.
 #include "vfs.h"
 #include "shm.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "spinlock.h"
 #include <stddef.h>
 #include "disk.h"

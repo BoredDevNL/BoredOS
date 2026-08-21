@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include "memory_manager.h"
+#include "slab.h"
 
 #define malloc  kmalloc
 #define free    kfree

@@ -6,7 +6,7 @@
 #include "spinlock.h"
 #include "wait_queue.h"
 #include "font.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "graphics.h"
 #include "kutils.h"
 #include "process.h"

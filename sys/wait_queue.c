@@ -8,14 +8,10 @@
 extern void serial_write(const char *str);
 extern void serial_write_num(uint64_t n);
 
-static bool is_valid_kernel_ptr(const void *ptr) {
+static inline bool is_valid_kernel_ptr(const void *ptr) {
     if (!ptr) return false;
     uint64_t addr = (uint64_t)ptr;
-    if ((addr & 0xFFFF800000000000ULL) != 0xFFFF800000000000ULL) return false;
-    if (addr < 0xFFFF800000000000ULL || addr > 0xFFFFFFFFFFFFF000ULL) return false;
-    extern bool mm_is_heap_address(void *p);
-    if (addr < 0xFFFFFFFF80000000ULL && !mm_is_heap_address((void *)ptr)) return false;
-    return true;
+    return (addr >= 0xFFFF800000000000ULL);
 }
 
 void wait_queue_init(wait_queue_head_t *h) {
@@ -68,16 +64,23 @@ void wait_queue_wake_all(wait_queue_head_t *h) {
     if (!is_valid_kernel_ptr(h)) return;
     uint64_t flags = spinlock_acquire_irqsave(&h->lock);
     
+    bool woken = false;
     wait_queue_entry_t *curr = h->head;
     while (curr) {
         if (curr->proc) {
             curr->proc->state = PROC_STATE_RUNNING;
             curr->proc->sleep_until = 0;
+            woken = true;
         }
         curr = curr->next;
     }
     
     spinlock_release_irqrestore(&h->lock, flags);
+
+    if (woken) {
+        extern void smp_wake_idle_cpus(void);
+        smp_wake_idle_cpus();
+    }
 }
 
 void wait_queue_wait(wait_queue_head_t *h) {
@@ -86,8 +89,8 @@ void wait_queue_wait(wait_queue_head_t *h) {
     if (curr) {
         curr->wait_node.proc = curr;
         curr->wait_node.next = NULL;
-        wait_queue_add(h, &curr->wait_node);
         curr->state = PROC_STATE_BLOCKED;
+        wait_queue_add(h, &curr->wait_node);
         asm volatile("int $0x20");
         wait_queue_remove(h, &curr->wait_node);
     }
@@ -99,12 +102,12 @@ void wait_queue_wait_timeout(wait_queue_head_t *h, uint32_t timeout_ms) {
     if (curr) {
         curr->wait_node.proc = curr;
         curr->wait_node.next = NULL;
-        wait_queue_add(h, &curr->wait_node);
         curr->state = PROC_STATE_BLOCKED;
         if (timeout_ms > 0) {
             extern uint64_t get_ticks(void);
             curr->sleep_until = get_ticks() + timeout_ms;
         }
+        wait_queue_add(h, &curr->wait_node);
         asm volatile("int $0x20");
         curr->sleep_until = 0;
         wait_queue_remove(h, &curr->wait_node);

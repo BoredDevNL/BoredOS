@@ -56,67 +56,29 @@ void *memset(void *dest, int val, size_t len) {
 
     uint8_t *d = (uint8_t *)dest;
     uint8_t val8 = (uint8_t)val;
+    uint64_t val64 = (uint64_t)val8 * 0x0101010101010101ULL;
 
-    if (len >= 16) {
-        while (len && ((uintptr_t)d & 15)) {
-            *d++ = val8;
-            len--;
-        }
+    size_t qwords = len / 8;
+    size_t bytes = len % 8;
 
-        uint64_t val64 = (uint64_t)val8 * 0x0101010101010101ULL;
-
-        size_t vec_chunks = len / 64;
-        if (vec_chunks > 0) {
-            asm volatile(
-                "movq %2, %%xmm0\n\t"
-                "punpcklqdq %%xmm0, %%xmm0\n\t"
-                "1:\n\t"
-                "movdqa %%xmm0, 0(%0)\n\t"
-                "movdqa %%xmm0, 16(%0)\n\t"
-                "movdqa %%xmm0, 32(%0)\n\t"
-                "movdqa %%xmm0, 48(%0)\n\t"
-                "add $64, %0\n\t"
-                "dec %1\n\t"
-                "jnz 1b\n\t"
-                : "+r"(d), "+r"(vec_chunks)
-                : "r"(val64)
-                : "xmm0", "memory", "cc"
-            );
-            len %= 64;
-        }
-
-        size_t xmm_chunks = len / 16;
-        if (xmm_chunks > 0) {
-            asm volatile(
-                "movq %2, %%xmm0\n\t"
-                "punpcklqdq %%xmm0, %%xmm0\n\t"
-                "2:\n\t"
-                "movdqa %%xmm0, 0(%0)\n\t"
-                "add $16, %0\n\t"
-                "dec %1\n\t"
-                "jnz 2b\n\t"
-                : "+r"(d), "+r"(xmm_chunks)
-                : "r"(val64)
-                : "xmm0", "memory", "cc"
-            );
-            len %= 16;
-        }
+    if (qwords > 0) {
+        asm volatile(
+            "rep stosq"
+            : "+D"(d), "+c"(qwords)
+            : "a"(val64)
+            : "memory"
+        );
     }
 
-    size_t words = len / 8;
-    if (words > 0 && (((uintptr_t)d & 7) == 0)) {
-        uint64_t val64 = (uint64_t)val8 * 0x0101010101010101ULL;
-        uint64_t *d64 = (uint64_t *)d;
-        for (size_t i = 0; i < words; i++) {
-            d64[i] = val64;
-        }
-        d += words * 8;
-        len %= 8;
+    if (bytes > 0) {
+        asm volatile(
+            "rep stosb"
+            : "+D"(d), "+c"(bytes)
+            : "a"(val8)
+            : "memory"
+        );
     }
 
-    for (size_t i = 0; i < len; i++) {
-        *d++ = val8;
-    }
     return dest;
 }
 
@@ -126,82 +88,27 @@ void *memcpy(void *dest, const void *src, size_t len) {
     uint8_t *d = (uint8_t *)dest;
     const uint8_t *s = (const uint8_t *)src;
 
-    if (len >= 16) {
-        if ((((uintptr_t)d & 15) == 0) && (((uintptr_t)s & 15) == 0)) {
-            size_t vec_chunks = len / 64;
-            if (vec_chunks > 0) {
-                asm volatile(
-                    "1:\n\t"
-                    "movdqa 0(%1), %%xmm0\n\t"
-                    "movdqa 16(%1), %%xmm1\n\t"
-                    "movdqa 32(%1), %%xmm2\n\t"
-                    "movdqa 48(%1), %%xmm3\n\t"
-                    "movdqa %%xmm0, 0(%0)\n\t"
-                    "movdqa %%xmm1, 16(%0)\n\t"
-                    "movdqa %%xmm2, 32(%0)\n\t"
-                    "movdqa %%xmm3, 48(%0)\n\t"
-                    "add $64, %0\n\t"
-                    "add $64, %1\n\t"
-                    "dec %2\n\t"
-                    "jnz 1b\n\t"
-                    : "+r"(d), "+r"(s), "+r"(vec_chunks)
-                    :
-                    : "xmm0", "xmm1", "xmm2", "xmm3", "memory", "cc"
-                );
-                len %= 64;
-            }
+    size_t qwords = len / 8;
+    size_t bytes = len % 8;
 
-            size_t xmm_chunks = len / 16;
-            if (xmm_chunks > 0) {
-                asm volatile(
-                    "2:\n\t"
-                    "movdqa 0(%1), %%xmm0\n\t"
-                    "movdqa %%xmm0, 0(%0)\n\t"
-                    "add $16, %0\n\t"
-                    "add $16, %1\n\t"
-                    "dec %2\n\t"
-                    "jnz 2b\n\t"
-                    : "+r"(d), "+r"(s), "+r"(xmm_chunks)
-                    :
-                    : "xmm0", "memory", "cc"
-                );
-                len %= 16;
-            }
-        } else {
-            size_t xmm_chunks = len / 16;
-            if (xmm_chunks > 0) {
-                asm volatile(
-                    "3:\n\t"
-                    "movdqu 0(%1), %%xmm0\n\t"
-                    "movdqu %%xmm0, 0(%0)\n\t"
-                    "add $16, %0\n\t"
-                    "add $16, %1\n\t"
-                    "dec %2\n\t"
-                    "jnz 3b\n\t"
-                    : "+r"(d), "+r"(s), "+r"(xmm_chunks)
-                    :
-                    : "xmm0", "memory", "cc"
-                );
-                len %= 16;
-            }
-        }
+    if (qwords > 0) {
+        asm volatile(
+            "rep movsq"
+            : "+D"(d), "+S"(s), "+c"(qwords)
+            :
+            : "memory"
+        );
     }
 
-    size_t words = len / 8;
-    if (words > 0 && (((uintptr_t)d & 7) == 0) && (((uintptr_t)s & 7) == 0)) {
-        uint64_t *d64 = (uint64_t *)d;
-        const uint64_t *s64 = (const uint64_t *)s;
-        for (size_t i = 0; i < words; i++) {
-            d64[i] = s64[i];
-        }
-        d += words * 8;
-        s += words * 8;
-        len %= 8;
+    if (bytes > 0) {
+        asm volatile(
+            "rep movsb"
+            : "+D"(d), "+S"(s), "+c"(bytes)
+            :
+            : "memory"
+        );
     }
 
-    for (size_t i = 0; i < len; i++) {
-        *d++ = *s++;
-    }
     return dest;
 }
 

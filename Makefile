@@ -86,8 +86,11 @@ endif
 CFLAGS = -g -O2 -pipe -Wall -Wextra -std=gnu11 -ffreestanding \
          -fno-stack-protector -fno-stack-check -fno-lto -fPIE \
          -m64 -march=x86-64 -msse -msse2 -mstackrealign -mno-red-zone \
+         -MMD -MP \
          $(TOOLCHAIN_FLAGS) $(INCLUDES) \
          -Ifs/vendor/lwext4/include -Ifs/vendor/lwext4/include/misc
+
+-include $(OBJ_FILES:.o=.d)
 
 LDFLAGS = -m elf_x86_64 -nostdlib -static -pie --no-dynamic-linker \
           -z text -z max-page-size=0x1000 -T linker.ld
@@ -298,7 +301,7 @@ $(BUILD_DIR)/initrd.tar: $(KERNEL_ELF) userland packages
 
 	@printf "$(YELLOW)[COPY]$(RESET) Root files...\n"
 	@if [ -f LICENSE ]; then printf "  -> LICENSE\n"; mkdir -p $(BUILD_DIR)/initrd/docs; cp LICENSE $(BUILD_DIR)/initrd/docs/; fi
-	@if [ -f limine.conf ]; then printf "  -> limine.conf\n"; cp limine.conf $(BUILD_DIR)/initrd/; fi
+	@if [ -f base/boot/limine.conf ]; then printf "  -> limine.conf\n"; cp base/boot/limine.conf $(BUILD_DIR)/initrd/; fi
 	
 	@printf "$(YELLOW)[STRIP]$(RESET) Stripping ELF binaries to reduce initrd size...\n"
 	@find $(BUILD_DIR)/initrd/bin $(BUILD_DIR)/initrd/usr/bin -name '*.elf' 2>/dev/null | while read f; do \
@@ -316,7 +319,7 @@ $(BUILD_DIR)/initrd.tar.lz4: $(BUILD_DIR)/initrd.tar
 	lz4 -f -9 --content-size $(BUILD_DIR)/initrd.tar $(BUILD_DIR)/initrd.tar.lz4
 	@printf "$(GREEN)[OK]$(RESET) LZ4 compressed initrd created: $(BUILD_DIR)/initrd.tar.lz4\n"
 
-$(ISO_IMAGE): $(KERNEL_ELF) $(BUILD_DIR)/initrd.tar.lz4 limine.conf limine-setup
+$(ISO_IMAGE): $(KERNEL_ELF) $(BUILD_DIR)/initrd.tar.lz4 base/boot/limine.conf limine-setup
 	$(call PRINT_STEP,CREATING ISO IMAGE)
 	@printf "$(YELLOW)[ISO]$(RESET) Cleaning previous ISO root...\n"
 	rm -rf $(ISO_DIR)
@@ -329,7 +332,7 @@ $(ISO_IMAGE): $(KERNEL_ELF) $(BUILD_DIR)/initrd.tar.lz4 limine.conf limine-setup
 	cp $(KERNEL_ELF) $(ISO_DIR)/
 
 	@printf "$(YELLOW)[COPY]$(RESET) Limine config...\n"
-	cp limine.conf $(ISO_DIR)/
+	cp base/boot/limine.conf $(ISO_DIR)/
 	
 	@printf "$(YELLOW)[COPY]$(RESET) Initrd...\n"
 	cp $(BUILD_DIR)/initrd.tar.lz4 $(ISO_DIR)/
@@ -395,7 +398,7 @@ run-mac: $(ISO_IMAGE) disk.qcow2
 	$(call PRINT_STEP,RUNNING BOREDOS IN QEMU ON MACOS)
 	qemu-system-x86_64 -m 4G -serial stdio -cdrom $< -boot d \
 	    -smp 4 \
-		-audiodev coreaudio,id=audio0,out.frequency=48000 -machine pcspk-audiodev=audio0 \
+		-audiodev coreaudio,id=audio0,out.frequency=48000 \
 		-device AC97,audiodev=audio0 \
 		-vga std -global VGA.xres=1920 -global VGA.yres=1080 \
 		-display cocoa,show-cursor=off \

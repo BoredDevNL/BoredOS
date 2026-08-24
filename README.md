@@ -52,8 +52,8 @@ Networking is handled by lwIP, with drivers for Intel e1000, Realtek RTL8139/RTL
 |-----------|---------|
 | **SMP** | Multi-core support via LAPIC. Per-CPU state lives in the GS segment. XSAVE/XRSTOR handle FPU context across switches. |
 | **Scheduler** | Preemptive round-robin over a circular process list, with sleep/wake support, per-CPU affinity, and cross-core IPI for AP scheduling. |
-| **Memory** | A slab allocator with object pooling, plus physical and virtual mapping. |
-| **VFS** | One layer over FAT32, ext4, ProcFS, and SysFS. |
+| **Memory** | Physical page allocator (PMM), slab allocator, 4-level MMU with COW, VMA tracking with an RB-tree, demand paging, and a page cache. |
+| **VFS** | Virtual filesystem layer supporting tmpfs, FAT32, ext4, ProcFS, and SysFS. |
 | **IPC** | Unix domain sockets, shared memory through `/dev/shm`, wait queues, and work queues. |
 | **PTY** | Full pseudo-terminal support. |
 | **Devices** | PCI, AHCI (SATA), PS/2, ACPI, I2C, AC97 audio, and RTC. |

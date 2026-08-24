@@ -1,71 +1,64 @@
-# Kernel Memory Manager Architecture
+# Slab Allocator & Kernel Heap
 
-BoredOS utilizes a highly optimized, two-tier kernel memory manager (`memory_manager.c`) designed for performance, concurrency safety, and long-term stability. The API provides the standard POSIX-like `kmalloc`, `krealloc`, and `kfree` functions used universally throughout the kernel.
+Source: [`mem/slab.c`](../../mem/slab.c), [`mem/slab.h`](../../mem/slab.h)
 
-## 1. High-Level Design
+The slab allocator handles kernel object caches and dynamic heap allocations (`kmalloc`, `kfree`).
 
-The memory manager delegates allocation requests to one of two internal sub-systems based on the requested size and alignment parameters:
+## Allocator Structure
 
-1. **Slab Allocator**: Optimally handles all small allocations (<= 512 bytes) with an alignment restriction of <= 8 bytes.
-2. **Block-List Allocator**: Handles large allocations (> 512 bytes) and any request requiring aggressive alignment (such as page-aligned buffers).
+The allocator has two modes:
+1. **Custom Object Caches**: Subsystems create dedicated caches (`slab_cache_t`) for fixed-size structs with optional constructors and destructors.
+2. **General Heap**: `kmalloc` uses geometric slab classes for small requests, and delegates directly to the PMM for large requests.
 
-All operations within the memory manager are secured by a global interrupt-safe spinlock (`mm_lock`), rendering the memory subsystem completely atomic and safe to use from any CPU or interrupt handler without triggering a race condition.
+Each slab cache tracks:
+- Full slabs: All slots in use.
+- Partial slabs: Some slots in use, free slots tracked via an intrusive free list.
+- Empty slabs: All slots free, eligible for freeing by `slab_cache_reap()`.
 
----
+## General Heap Allocation
 
-## 2. The Slab Allocator (Small Objects)
+`kmalloc` routes allocations through fixed size classes:
+- Sizes: 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, and 8192 bytes.
+- Requests are rounded up to the nearest class size.
+- Allocations over 8192 bytes bypass slab caches and allocate directly from the PMM via `pmm_alloc_order()` with `PAGE_FLAG_KMALLOC_LARGE`.
 
-For frequent, small data structures, the overhead of standard heap fragmentation is unacceptable. The Slab Allocator addresses this by pre-allocating blocks of identical size.
+### Alignment
 
-### Classes & Geometry
-There are 7 active slab classes defined by `slab_sizes[]`: `8, 16, 32, 64, 128, 256, 512` bytes. 
-Whenever an allocation requests a size within these bounds, it is rounded up to the nearest valid class.
+- Default minimum alignment is 16 bytes (`SLAB_MIN_ALIGN`).
+- `kmalloc_aligned()` supports power-of-two alignments such as 32-byte AVX (`SLAB_AVX_ALIGN`) and 4096-byte page alignment.
 
-Each active slab page maps precisely to one standard system `PAGE_SIZE` (4096 bytes). 
-- The page header (`SlabPage`) is embedded at the very top (byte offset 0).
-- The rest of the page is sliced seamlessly into perfectly sized object slots.
+## Custom Slab Caches
 
-### Intrusive LIFO Free-List
-To minimize metadata overhead, the Slab Allocator uses an *intrusive* LIFO (Last-In-First-Out) free-list to track empty object slots. The first 8 bytes of any unallocated slot act as a `next` pointer to the next free slot in that page. When a pointer is freed, it is immediately pushed back to the head of this list, making it the most likely candidate for the *next* allocation. This maximizes CPU cache locality.
+Subsystems can create dedicated caches:
 
-### Guardrails & Safety
-The Slab Allocator implements highly restrictive checks to guard against fatal kernel errors:
-- **Canonical Address Checks:** The allocator verifies that the freelist head remains in the higher-half address space (`0xFFFF000000000000` or above), proactively detecting structural corruption.
-- **Strict Pointer Admittance:** Before freeing a pointer to a slab, the allocator validates a dual magic-number footprint, limits the pointer's bounds to verify it belongs geographically to the page, and executes a linked-list walk. 
-- **Double-Free Detection:** When a slab is freed, the allocator walks the internal free-list. If the freed pointer is already in the free-list, the allocator intercepts the double-free attempt before the internal state can be damaged.
+### Cache API
 
----
+- `slab_cache_create(name, obj_size, align, flags)`: Creates a cache.
+- `slab_cache_create_with_ctor(name, obj_size, align, flags, ctor, dtor)`: Creates a cache with ctor/dtor callbacks.
+- `slab_cache_alloc(cache)`: Allocates an object from the cache.
+- `slab_cache_free(cache, obj)`: Returns an object to the cache.
+- `slab_cache_reap(cache)`: Frees empty slab pages back to the PMM.
+- `slab_cache_destroy(cache)`: Destroys the cache and frees its pages.
 
-## 3. The Block-List Allocator (Large Objects)
+### Flags
 
-If an allocation is larger than 512 bytes, the memory manager falls back to the Block-List allocator. 
+- `SLAB_FLAG_NONE`: Default.
+- `SLAB_FLAG_POISON`: Writes `0x5A` on allocation and `0xDE` on free to catch memory errors.
+- `SLAB_FLAG_ZERO`: Zeroes object memory on allocation.
+- `SLAB_FLAG_PER_CPU`: Uses per-CPU magazine caches.
+- `SLAB_FLAG_RCU`: Delays slab page freeing for RCU read grace periods.
 
-### First-Fit Search & Splitting
-The Block Allocator tracks all system memory chunks using an array of `MemBlock` structs ordered dynamically by address.
-- It iterates through the array utilizing a **First-Fit Search**. The first contiguous, unallocated block that satisfies the `size` requirement is immediately claimed.
-- If the requested alignment dictates it, the allocator splits the parent block. It yields up to three new fragments: `[head padding | exact requested allocation | tail remainder]`.
+## Heap API
 
-### Bootstrapping & Heap Migration
-To avoid infinite recursion when allocating memory to track new memory blocks, the block list is initially statically allocated in a `.bss` array (`_bootstrap_blocks`) with an initial capacity of 64 `MemBlocks`.
+| Function | Signature | Description |
+| :--- | :--- | :--- |
+| `kmalloc` | `void *kmalloc(size_t size)` | Allocates memory from slab class or PMM. |
+| `kzalloc` | `void *kzalloc(size_t size)` | Allocates zeroed memory. |
+| `kcalloc` | `void *kcalloc(size_t n, size_t size)` | Allocates zeroed array. |
+| `kmalloc_aligned` | `void *kmalloc_aligned(size_t size, size_t alignment)` | Allocates aligned memory. |
+| `krealloc` | `void *krealloc(void *ptr, size_t new_size)` | Resizes an allocated buffer. |
+| `kfree` | `void kfree(void *ptr)` | Frees memory allocated by `kmalloc`. |
+| `kfree_null` | `kfree_null(ptr)` | Frees `ptr` and clears the pointer. |
+| `mm_is_heap_address` | `bool mm_is_heap_address(void *ptr)` | Checks if an address belongs to the heap. |
 
-When the system runs out of capacity to track new blocks, the block list calls `grow_block_list()`, which reallocates the array space into the primary heap. It utilizes a `growing` lock-flag to prevent recursive faults while performing this relocation.
-
-### Coalescing
-Upon `kfree()`, the chunk is marked as unallocated. The allocator inspects its immediate left and right address neighbors. If they are also free, the adjacent blocks are merged (coalesced) into one continuous block to reduce overall memory fragmentation. 
-
----
-
-## 4. API Caveats & Contracts
-
-### Alignment guarantees
-`kmalloc` inherently returns a naturally aligned pointer (minimum 8-byte boundary) sufficient to satisfy scalar types natively on x86-64 without fetching faults. `kmalloc_aligned` can be utilized for strict power-of-two alignment boundaries (e.g., page directories that demand 4096 alignment).
-
-### Resizing limits
-`krealloc` accepts an existing allocated pointer and transforms it to meet a new size requirement. To prevent memory starvation over long lifetimes, `krealloc` employs aggressive optimization strategies depending on the allocator layer:
-- **Block Allocator (Shrink-in-Place):** Large blocks actively support shrink-in-place maneuvers. If the reduction saves at least 32 bytes, the unused trailing memory is sliced off, injected into the free pool, and physically coalesced with adjacent free neighbors. The original pointer remains identical.
-- **Slab Allocator (Down-Migration):** Since slab slots have rigid geometries, true shrink-in-place is impossible. However, if a pointer shrinks enough to cleanly fall into a smaller slab class, `krealloc` triggers an internal copy-migration. This instantly relinquishes the highly-contested larger slab slot back to the system.
-
----
-
-## 5. Telemetry & Metrics
-The `memory_get_stats()` API exports complete transparency over the current topological state of the system memory map. It calculates variables such as peak memory, overall fragmentation % (the ratio of stranded memory outside the largest single block), and explicit slab efficiency counters.
+All slab caches are synchronized with spinlocks.

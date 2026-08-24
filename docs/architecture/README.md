@@ -14,11 +14,12 @@ The documentation is split by area so you can go directly to the subsystem you w
 | Hardware | [`hardware/i2c.md`](hardware/i2c.md) | I2C bus management and controller drivers. |
 | System | [`ACPI/acpi_interface.md`](ACPI/acpi_interface.md) | Power management and ACPI hardware discovery. |
 | Input | [`input/keyboard.md`](input/keyboard.md) | Keyboard input handling and key mapping. |
-| Memory | [`memory/memory.md`](memory/memory.md) | Memory architecture, paging, and address space layout. |
-| Memory | [`memory/memory_manager.md`](memory/memory_manager.md) | Memory allocation and management systems. |
+| Memory | [`memory/memory.md`](memory/memory.md) | Physical memory (PMM), 4-level MMU, VMA tree, and VMM. |
+| Memory | [`memory/memory_manager.md`](memory/memory_manager.md) | Slab allocator and kernel heap (`kmalloc`/`kfree`). |
+| Memory | [`memory/pagecache.md`](memory/pagecache.md) | Page cache, radix tree indexing, and dirty writeback. |
 | Network | [`network/network_stack.md`](network/network_stack.md) | TCP/IP stack design, protocol flow, and packet handling. |
 | Network | [`network/network_drivers.md`](network/network_drivers.md) | Network driver architecture and interface support. |
-| Storage | [`storage/filesystem.md`](storage/filesystem.md) | File system structure and storage access. |
+| Storage | [`storage/filesystem.md`](storage/filesystem.md) | VFS, tmpfs, FAT32, ext4, and background sync. |
 | Storage | [`storage/ahci_drivers.md`](storage/ahci_drivers.md) | AHCI driver implementation and disk controller support. |
 | System | [`system/core.md`](system/core.md) | Core kernel architecture and main subsystems. |
 | System | [`system/tty.md`](system/tty.md) | Virtual terminals, virtual framebuffers, active TTY blitting, and keyboard/mouse multiplexing. |

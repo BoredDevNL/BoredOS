@@ -22,6 +22,8 @@
 #define VMA_FLAG_STACK      0x20
 #define VMA_FLAG_HEAP       0x40
 
+struct vmm_space;
+
 typedef struct vm_area {
     uintptr_t start;
     uintptr_t end;
@@ -29,6 +31,8 @@ typedef struct vm_area {
     uint32_t flags;
     void *backing_file;
     uint64_t file_offset;
+    struct vmm_space *space;
+    struct vm_area *i_mmap_next;
 
     struct vm_area *prev;
     struct vm_area *next;

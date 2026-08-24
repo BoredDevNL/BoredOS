@@ -120,55 +120,28 @@ static inline void slab_zero_fast(void *dest, size_t size) {
     if (!dest || size == 0) return;
 
     uint8_t *d = (uint8_t *)dest;
-    while (size && ((uintptr_t)d & 15)) {
+    while (size && ((uintptr_t)d & 7)) {
         *d++ = 0;
         size--;
     }
 
-    size_t vec_chunks = size / 64;
-    if (vec_chunks > 0) {
-        asm volatile(
-            "pxor %%xmm0, %%xmm0\n\t"
-            "1:\n\t"
-            "movdqa %%xmm0, 0(%0)\n\t"
-            "movdqa %%xmm0, 16(%0)\n\t"
-            "movdqa %%xmm0, 32(%0)\n\t"
-            "movdqa %%xmm0, 48(%0)\n\t"
-            "add $64, %0\n\t"
-            "dec %1\n\t"
-            "jnz 1b\n\t"
-            : "+r"(d), "+r"(vec_chunks)
-            :
-            : "xmm0", "memory", "cc"
-        );
-        size %= 64;
+    uint64_t *d64 = (uint64_t *)d;
+    while (size >= 64) {
+        d64[0] = 0; d64[1] = 0; d64[2] = 0; d64[3] = 0;
+        d64[4] = 0; d64[5] = 0; d64[6] = 0; d64[7] = 0;
+        d64 += 8;
+        size -= 64;
     }
 
-    size_t xmm_chunks = size / 16;
-    if (xmm_chunks > 0) {
-        asm volatile(
-            "pxor %%xmm0, %%xmm0\n\t"
-            "2:\n\t"
-            "movdqa %%xmm0, 0(%0)\n\t"
-            "add $16, %0\n\t"
-            "dec %1\n\t"
-            "jnz 2b\n\t"
-            : "+r"(d), "+r"(xmm_chunks)
-            :
-            : "xmm0", "memory", "cc"
-        );
-        size %= 16;
+    while (size >= 8) {
+        *d64++ = 0;
+        size -= 8;
     }
 
-    size_t qwords = size / 8;
-    for (size_t i = 0; i < qwords; i++) {
-        *(uint64_t *)d = 0;
-        d += 8;
-    }
-    size %= 8;
-
-    for (size_t i = 0; i < size; i++) {
+    d = (uint8_t *)d64;
+    while (size > 0) {
         *d++ = 0;
+        size--;
     }
 }
 
@@ -178,75 +151,31 @@ static inline void slab_copy_fast(void *dest, const void *src, size_t size) {
     uint8_t *d = (uint8_t *)dest;
     const uint8_t *s = (const uint8_t *)src;
 
-    if ((((uintptr_t)d & 15) == 0) && (((uintptr_t)s & 15) == 0)) {
-        size_t vec_chunks = size / 64;
-        if (vec_chunks > 0) {
-            asm volatile(
-                "1:\n\t"
-                "movdqa 0(%1), %%xmm0\n\t"
-                "movdqa 16(%1), %%xmm1\n\t"
-                "movdqa 32(%1), %%xmm2\n\t"
-                "movdqa 48(%1), %%xmm3\n\t"
-                "movdqa %%xmm0, 0(%0)\n\t"
-                "movdqa %%xmm1, 16(%0)\n\t"
-                "movdqa %%xmm2, 32(%0)\n\t"
-                "movdqa %%xmm3, 48(%0)\n\t"
-                "add $64, %0\n\t"
-                "add $64, %1\n\t"
-                "dec %2\n\t"
-                "jnz 1b\n\t"
-                : "+r"(d), "+r"(s), "+r"(vec_chunks)
-                :
-                : "xmm0", "xmm1", "xmm2", "xmm3", "memory", "cc"
-            );
-            size %= 64;
-        }
-
-        size_t xmm_chunks = size / 16;
-        if (xmm_chunks > 0) {
-            asm volatile(
-                "2:\n\t"
-                "movdqa 0(%1), %%xmm0\n\t"
-                "movdqa %%xmm0, 0(%0)\n\t"
-                "add $16, %0\n\t"
-                "add $16, %1\n\t"
-                "dec %2\n\t"
-                "jnz 2b\n\t"
-                : "+r"(d), "+r"(s), "+r"(xmm_chunks)
-                :
-                : "xmm0", "memory", "cc"
-            );
-            size %= 16;
-        }
-    } else {
-        size_t xmm_chunks = size / 16;
-        if (xmm_chunks > 0) {
-            asm volatile(
-                "3:\n\t"
-                "movdqu 0(%1), %%xmm0\n\t"
-                "movdqu %%xmm0, 0(%0)\n\t"
-                "add $16, %0\n\t"
-                "add $16, %1\n\t"
-                "dec %2\n\t"
-                "jnz 3b\n\t"
-                : "+r"(d), "+r"(s), "+r"(xmm_chunks)
-                :
-                : "xmm0", "memory", "cc"
-            );
-            size %= 16;
-        }
-    }
-
-    size_t qwords = size / 8;
-    for (size_t i = 0; i < qwords; i++) {
-        *(uint64_t *)d = *(const uint64_t *)s;
-        d += 8;
-        s += 8;
-    }
-    size %= 8;
-
-    for (size_t i = 0; i < size; i++) {
+    while (size && ((uintptr_t)d & 7)) {
         *d++ = *s++;
+        size--;
+    }
+
+    if (((uintptr_t)s & 7) == 0) {
+        uint64_t *d64 = (uint64_t *)d;
+        const uint64_t *s64 = (const uint64_t *)s;
+        while (size >= 64) {
+            d64[0] = s64[0]; d64[1] = s64[1]; d64[2] = s64[2]; d64[3] = s64[3];
+            d64[4] = s64[4]; d64[5] = s64[5]; d64[6] = s64[6]; d64[7] = s64[7];
+            d64 += 8; s64 += 8;
+            size -= 64;
+        }
+        while (size >= 8) {
+            *d64++ = *s64++;
+            size -= 8;
+        }
+        d = (uint8_t *)d64;
+        s = (const uint8_t *)s64;
+    }
+
+    while (size > 0) {
+        *d++ = *s++;
+        size--;
     }
 }
 
@@ -791,6 +720,7 @@ void *kzalloc(size_t size) {
 }
 
 void *kcalloc(size_t n, size_t size) {
+    if (n != 0 && size > SIZE_MAX / n) return NULL;
     size_t total = n * size;
     void *ptr = kmalloc(total);
     if (ptr) slab_zero_fast(ptr, total);

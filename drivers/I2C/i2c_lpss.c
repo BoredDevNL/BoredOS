@@ -13,7 +13,7 @@
 #include <string.h>
 
 extern void serial_write(const char *str);
-extern void serial_write_hex(uint32_t val);
+extern void serial_write_hex(uint64_t val);
 extern void serial_write_num(uint64_t num);
 
 #define MAX_LPSS_I2C_CONTROLLERS 8

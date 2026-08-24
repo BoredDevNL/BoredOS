@@ -6,7 +6,7 @@
 #include "kutils.h"
 
 extern void serial_write(const char *str);
-extern void serial_write_hex(uint32_t val);
+extern void serial_write_hex(uint64_t val);
 extern void serial_write_num(uint64_t num);
 
 int dwi2c_init(volatile uint8_t *base, i2c_speed_t speed_hz, uint32_t input_clock_hz) {

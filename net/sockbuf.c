@@ -8,8 +8,9 @@
 void sockbuf_init(sockbuf_t *sb, uint32_t hiwat) {
     if (!sb) return;
     sb->sb_cc = 0;
-    sb->sb_hiwat = hiwat ? hiwat : (64 * 1024); // Default 64KB
+    sb->sb_hiwat = hiwat ? hiwat : (512 * 1024); // Default 512KB
     sb->sb_lowat = 1;
+
     sb->sb_flags = 0;
     sb->lock = SPINLOCK_INIT;
     wait_queue_init(&sb->waitq);
@@ -21,43 +22,42 @@ void sockbuf_destroy(sockbuf_t *sb) {
     if (!sb) return;
     uint64_t flags = spinlock_acquire_irqsave(&sb->lock);
     sockbuf_entry_t *curr = sb->head;
-    while (curr) {
-        sockbuf_entry_t *next = curr->next;
-        if (curr->p) {
-            pbuf_free(curr->p);
-        }
-        kfree_null(curr);
-        curr = next;
-    }
     sb->head = NULL;
     sb->tail = NULL;
     sb->sb_cc = 0;
     spinlock_release_irqrestore(&sb->lock, flags);
+
+    while (curr) {
+        sockbuf_entry_t *next = curr->next;
+        if (curr->p) {
+            pbuf_free(curr->p);
+            curr->p = NULL;
+        }
+        kfree_null(curr);
+        curr = next;
+    }
 }
+
 
 int sockbuf_append(sockbuf_t *sb, struct pbuf *p, const ip_addr_t *src_ip, uint16_t src_port) {
     if (!sb || !p) return -1;
 
-    uint64_t flags = spinlock_acquire_irqsave(&sb->lock);
-
-    // Overflow check against high watermark
-    if (sb->sb_cc + p->tot_len > sb->sb_hiwat) {
-        spinlock_release_irqrestore(&sb->lock, flags);
-        return -1; // Buffer full
-    }
-
     sockbuf_entry_t *entry = (sockbuf_entry_t *)kmalloc(sizeof(sockbuf_entry_t));
-    if (!entry) {
-        spinlock_release_irqrestore(&sb->lock, flags);
-        return -1;
-    }
+    if (!entry) return -1;
 
-    pbuf_ref(p);
     entry->p = p;
     if (src_ip) entry->src_ip = *src_ip;
     else ip_addr_set_zero(&entry->src_ip);
     entry->src_port = src_port;
     entry->next = NULL;
+
+    uint64_t flags = spinlock_acquire_irqsave(&sb->lock);
+
+    if (sb->sb_cc + p->tot_len > sb->sb_hiwat) {
+        spinlock_release_irqrestore(&sb->lock, flags);
+        kfree_null(entry);
+        return -1;
+    }
 
     if (!sb->tail) {
         sb->head = entry;
@@ -81,6 +81,9 @@ int sockbuf_read(sockbuf_t *sb, void *buf, size_t max_len, ip_addr_t *out_ip, ui
 
     size_t total_copied = 0;
     uint8_t *dest = (uint8_t *)buf;
+    sockbuf_entry_t *to_free_list = NULL;
+    struct pbuf *p_to_free_header = NULL;
+    u16_t p_free_header_len = 0;
 
     while (sb->head && total_copied < max_len) {
         sockbuf_entry_t *entry = sb->head;
@@ -103,11 +106,10 @@ int sockbuf_read(sockbuf_t *sb, void *buf, size_t max_len, ip_addr_t *out_ip, ui
                 sb->head = entry->next;
                 if (!sb->head) sb->tail = NULL;
                 sb->sb_cc -= entry->p->tot_len;
-                pbuf_free(entry->p);
-                kfree_null(entry);
+                entry->next = to_free_list;
+                to_free_list = entry;
             } else {
-                struct pbuf *remainder = pbuf_free_header(entry->p, (u16_t)to_copy);
-                entry->p = remainder;
+                pbuf_remove_header(entry->p, (u16_t)to_copy);
                 sb->sb_cc -= to_copy;
                 break;
             }
@@ -117,6 +119,18 @@ int sockbuf_read(sockbuf_t *sb, void *buf, size_t max_len, ip_addr_t *out_ip, ui
     }
 
     spinlock_release_irqrestore(&sb->lock, flags);
+
+    // Free fully consumed pbufs and entries outside sb->lock
+    while (to_free_list) {
+        sockbuf_entry_t *next = to_free_list->next;
+        if (to_free_list->p) pbuf_free(to_free_list->p);
+        kfree_null(to_free_list);
+        to_free_list = next;
+    }
+
+    if (!peek && total_copied > 0) {
+        wait_queue_wake_all(&sb->waitq);
+    }
     return (int)total_copied;
 }
 
@@ -135,6 +149,14 @@ int sockbuf_readable(sockbuf_t *sb) {
     int readable = (sb->sb_cc >= threshold);
     spinlock_release_irqrestore(&sb->lock, flags);
     return readable;
+}
+
+int sockbuf_writable(sockbuf_t *sb) {
+    if (!sb) return 0;
+    uint64_t flags = spinlock_acquire_irqsave(&sb->lock);
+    int writable = (sb->sb_cc < sb->sb_hiwat);
+    spinlock_release_irqrestore(&sb->lock, flags);
+    return writable;
 }
 
 uint32_t sockbuf_get_cc(sockbuf_t *sb) {

@@ -23,7 +23,7 @@ typedef uint64_t  u64_t;
 typedef int64_t   s64_t;
 
 typedef uintptr_t mem_ptr_t;
-typedef uint32_t sys_prot_t;
+typedef uint64_t sys_prot_t;
 
 #define LWIP_ERR_T int
 

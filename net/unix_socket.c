@@ -189,7 +189,6 @@ int unix_socketpair(void *s1, void *s2, int type) {
 }
 
 int unix_socket_send(void *s, const void *data, size_t len, int nonblock, const int *pass_fds, int pass_fd_count, const char *dest_path) {
-    (void)nonblock;
     process_fd_socket_t *sock = (process_fd_socket_t *)s;
     if (!sock || !sock->unpcb) return -1;
 
@@ -251,7 +250,8 @@ int unix_socket_send(void *s, const void *data, size_t len, int nonblock, const 
     memcpy(p->payload, data, len);
 
     if (sockbuf_append(&peer_sock->rx_sb, p, NULL, 0) < 0) {
-        return -1;
+        pbuf_free(p);
+        return -2;
     }
     return (int)len;
 }
@@ -319,14 +319,15 @@ void unix_socket_close(void *s) {
 
     // Break peer connection
     if (unp->peer) {
-        uint64_t pflags = spinlock_acquire_irqsave(&unp->peer->lock);
-        unp->peer->peer = NULL;
-        spinlock_release_irqrestore(&unp->peer->lock, pflags);
-        if (unp->peer->sock) {
-            process_fd_socket_t *peer_sock = (process_fd_socket_t *)unp->peer->sock;
+        unpcb_t *saved_peer = unp->peer;
+        unp->peer = NULL;
+        uint64_t pflags = spinlock_acquire_irqsave(&saved_peer->lock);
+        saved_peer->peer = NULL;
+        process_fd_socket_t *peer_sock = saved_peer->sock ? (process_fd_socket_t *)saved_peer->sock : NULL;
+        spinlock_release_irqrestore(&saved_peer->lock, pflags);
+        if (peer_sock) {
             wait_queue_wake_all(&peer_sock->rx_sb.waitq);
         }
-        unp->peer = NULL;
     }
 
     wait_queue_wake_all(&sock->rx_sb.waitq);

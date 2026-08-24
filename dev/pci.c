@@ -119,7 +119,8 @@ uint64_t pci_get_bar(pci_device_t *dev, int bar_num) {
 void pci_enable_bus_mastering(pci_device_t *dev) {
     if (!dev) return;
     uint32_t cmd = pci_read_config(dev->bus, dev->device, dev->function, 0x04);
-    cmd |= (1 << 2); // Set Bus Master bit
+    cmd |= (1 << 2) | (1 << 0); // Set Bus Master bit (2) and I/O Space bit (0)
+    cmd &= ~(1 << 10);          // Clear Interrupt Disable bit (10)
     pci_write_config(dev->bus, dev->device, dev->function, 0x04, cmd);
 }
 

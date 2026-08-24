@@ -1,5 +1,5 @@
 #include "module_manager.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "kutils.h"
 
 #define MAX_MODULES 32

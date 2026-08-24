@@ -4,7 +4,8 @@
 #include "kernel_subsystem.h"
 #include "smp.h"
 #include "pci.h"
-#include "memory_manager.h"
+#include "slab.h"
+#include "pmm.h"
 #include "module_manager.h"
 #include "io.h"
 #include "kutils.h"
@@ -68,25 +69,26 @@ static int read_gfx_drm(char *buf, size_t size, size_t offset) {
 static int read_mem_tracking(char *buf, size_t size, size_t offset) {
     if (!buf && size > 0) return -1;
 
-    MemStats stats = memory_get_stats();
+    pmm_stats_t stats = pmm_get_stats();
 
     char out[1024];
     memset(out, 0, 1024);
 
-    strcpy(out, "--- Kernel Heap Tracking ---\n");
-    strcpy(out + strlen(out), "Allocated Blocks: ");
+    strcpy(out, "--- Physical Memory Tracking ---\n");
+    strcpy(out + strlen(out), "Total Pages: ");
 
     char s[32];
-
-    itoa(stats.allocated_blocks, s);
+    itoa(stats.total_pages, s);
     strcpy(out + strlen(out), s);
 
-    strcpy(out + strlen(out), "\nFragmentation: ");
-
-    itoa(stats.fragmentation_percent, s);
+    strcpy(out + strlen(out), "\nFree Pages: ");
+    itoa(stats.free_pages, s);
     strcpy(out + strlen(out), s);
 
-    strcpy(out + strlen(out), "%\n");
+    strcpy(out + strlen(out), "\nReserved Pages: ");
+    itoa(stats.reserved_pages, s);
+    strcpy(out + strlen(out), s);
+    strcpy(out + strlen(out), "\n");
 
     size_t len = strlen(out);
 
@@ -263,18 +265,18 @@ static int read_ticks_info(char *buf, size_t size, size_t offset) {
 static int read_mem_info(char *buf, size_t size, size_t offset) {
     if (!buf && size > 0) return -1;
 
-    MemStats stats = memory_get_stats();
+    pmm_stats_t stats = pmm_get_stats();
 
     char out[128];
     char temp[32];
 
     out[0] = 0;
 
-    utoa(stats.total_memory, temp);
+    utoa(stats.total_pages * 4096, temp);
     strcpy(out, temp);
     strcpy(out + strlen(out), "\n");
 
-    utoa(stats.used_memory, temp);
+    utoa(stats.reserved_pages * 4096, temp);
     strcpy(out + strlen(out), temp);
     strcpy(out + strlen(out), "\n");
 

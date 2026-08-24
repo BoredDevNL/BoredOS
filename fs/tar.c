@@ -3,7 +3,6 @@
 // This header needs to maintain in any file it is present in, as per the GPL license terms.
 #include "tar.h"
 #include "vfs.h"
-#include "bootfs.h"
 
 // The standard TAR header block is 512 bytes.
 struct tar_header {
@@ -109,11 +108,6 @@ void tar_parse(void *archive, uint64_t archive_size) {
             if (last_slash > 0) {
                 parent_path[last_slash] = '\0';
                 vfs_mkdir_recursive(parent_path);
-            }
-
-            if (full_path[0] == '/' && full_path[1] == 'b' && full_path[2] == 'o' &&
-                full_path[3] == 'o' && full_path[4] == 't' && full_path[5] == '/') {
-                bootfs_register_file(full_path + 6, ptr + 512, (uint32_t)file_size);
             }
             
             vfs_file_t *fh = vfs_open(full_path, "w");

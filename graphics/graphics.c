@@ -5,7 +5,7 @@
 #include "graphics.h"
 #include "font.h"
 #include "io.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "kutils.h"
 #include "spinlock.h"
 
@@ -29,10 +29,7 @@ extern uint32_t smp_this_cpu_id(void);
 void graphics_init(struct limine_framebuffer *fb) {
     g_fb = fb;
     g_dirty.active = false;
-    // Initialize back buffer to black
-    for (int i = 0; i < MAX_FB_WIDTH * MAX_FB_HEIGHT; i++) {
-        g_back_buffer[i] = 0;
-    }
+    memset(g_back_buffer, 0, sizeof(g_back_buffer));
 }
 
 
@@ -508,7 +505,7 @@ void graphics_present_framebuffer(void) {
             }
         } else {
             uint32_t *dst_row32 = (uint32_t *)((uint8_t *)fb_addr + (uint64_t)row * fb_pitch) + sx;
-            for (int x = 0; x < sw; x++) dst_row32[x] = src_row[x];
+            memcpy(dst_row32, src_row, (size_t)sw * 4);
         }
     }
     spinlock_release_irqrestore(&graphics_lock, flags);
@@ -537,16 +534,8 @@ void graphics_scroll_back_buffer(int lines) {
     int sw = (int)g_fb->width;
     int sh = (int)g_fb->height;
     
-    for (int y = 0; y < sh - lines; y++) {
-        uint32_t *dst = &g_back_buffer[y * sw];
-        uint32_t *src = &g_back_buffer[(y + lines) * sw];
-        for (int x = 0; x < sw; x++) dst[x] = src[x];
-    }
-    
-    for (int y = sh - lines; y < sh; y++) {
-        uint32_t *dst = &g_back_buffer[y * sw];
-        for (int x = 0; x < sw; x++) dst[x] = 0;
-    }
+    memcpy(g_back_buffer, &g_back_buffer[lines * sw], (size_t)(sh - lines) * sw * sizeof(uint32_t));
+    memset(&g_back_buffer[(sh - lines) * sw], 0, (size_t)lines * sw * sizeof(uint32_t));
     
     spinlock_release_irqrestore(&graphics_lock, rflags);
 }

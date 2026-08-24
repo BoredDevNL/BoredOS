@@ -76,6 +76,7 @@ typedef struct {
     uint32_t count;
     int readers;
     int writers;
+    spinlock_t lock;
     wait_queue_head_t read_queue;
     wait_queue_head_t write_queue;
 } process_fd_pipe_t;
@@ -160,6 +161,7 @@ typedef struct process {
     
     uint64_t heap_start;
     uint64_t heap_end;
+    struct vmm_space *vmm_space;
     
     void *fds[MAX_PROCESS_FDS];
     uint8_t fd_kind[MAX_PROCESS_FDS];
@@ -173,6 +175,7 @@ typedef struct process {
     bool kill_pending;       
 
     struct process *next;
+    struct process *pid_hash_next;
 
     bool fpu_initialized; 
     
@@ -220,6 +223,8 @@ typedef struct process {
 
     struct futex_waiter_entry {
         uint32_t *uaddr;
+        uint64_t pml4_phys;
+        uintptr_t phys_addr;
         struct process *proc;
         struct futex_waiter_entry *next;
     } futex_waiter;

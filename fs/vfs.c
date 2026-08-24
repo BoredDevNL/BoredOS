@@ -3,7 +3,7 @@
 // This header needs to maintain in any file it is present in, as per the GPL license terms.
 #include "vfs.h"
 #include "shm.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "spinlock.h"
 #include <stddef.h>
 #include "disk.h"
@@ -17,7 +17,7 @@ typedef framebuffer_info_t vfs_framebuffer_info_t;
 
 
 
-#define VFS_FILE_INVALID(f) (!(f) || !(f)->valid || !(f)->mount || !(f)->mount->active)
+#define VFS_FILE_INVALID(f) (!(f) || !(f)->valid || (!(f)->is_device && (!(f)->mount || !(f)->mount->active)))
 
 static vfs_mount_t mounts[VFS_MAX_MOUNTS];
 static int mount_count = 0;
@@ -110,7 +110,7 @@ static vfs_mount_t* vfs_resolve_mount(const char *path, const char **rel_path_ou
     vfs_mount_t *best = NULL;
     int best_len = -1;
 
-    for (int i = 0; i < mount_count; i++) {
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
         if (!mounts[i].active) continue;
 
         int mlen = mounts[i].path_len;
@@ -150,7 +150,7 @@ static vfs_file_t* vfs_alloc_file(void) {
             open_files[i].mount = NULL;
             open_files[i].position = 0;
             open_files[i].is_device = false;
-            open_files[i].device_type = DEVICE_TYPE_BLOCK; // Initialize to safe default
+            open_files[i].device_type = DEVICE_TYPE_BLOCK;
             return &open_files[i];
         }
     }
@@ -169,12 +169,8 @@ static void vfs_free_file(vfs_file_t *f) {
 }
 
 void vfs_init(void) {
-    for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
-        mounts[i].active = false;
-    }
-    for (int i = 0; i < VFS_MAX_OPEN_FILES; i++) {
-        open_files[i].valid = false;
-    }
+    memset(mounts, 0, sizeof(mounts));
+    memset(open_files, 0, sizeof(open_files));
     mount_count = 0;
 
     serial_write("[VFS] Ready\n");
@@ -188,13 +184,8 @@ bool vfs_mount(const char *mount_path, const char *device, const char *fs_type,
                vfs_fs_ops_t *ops, void *fs_private) {
     uint64_t flags = spinlock_acquire_irqsave(&vfs_lock);
 
-    if (mount_count >= VFS_MAX_MOUNTS) {
-        spinlock_release_irqrestore(&vfs_lock, flags);
-        serial_write("[VFS] ERROR: Mount table full\n");
-        return false;
-    }
-
-    for (int i = 0; i < mount_count; i++) {
+    int free_slot = -1;
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
         if (mounts[i].active && strcmp(mounts[i].path, mount_path) == 0) {
             spinlock_release_irqrestore(&vfs_lock, flags);
             serial_write("[VFS] ERROR: Mount point already in use: ");
@@ -202,9 +193,18 @@ bool vfs_mount(const char *mount_path, const char *device, const char *fs_type,
             serial_write("\n");
             return false;
         }
+        if (!mounts[i].active && free_slot == -1) {
+            free_slot = i;
+        }
     }
 
-    vfs_mount_t *m = &mounts[mount_count];
+    if (free_slot == -1) {
+        spinlock_release_irqrestore(&vfs_lock, flags);
+        serial_write("[VFS] ERROR: Mount table full\n");
+        return false;
+    }
+
+    vfs_mount_t *m = &mounts[free_slot];
     strcpy(m->path, mount_path);
     m->path_len = strlen(mount_path);
     m->ops = ops;
@@ -230,15 +230,21 @@ bool vfs_mount(const char *mount_path, const char *device, const char *fs_type,
 bool vfs_umount(const char *mount_path) {
     uint64_t flags = spinlock_acquire_irqsave(&vfs_lock);
 
-    for (int i = 0; i < mount_count; i++) {
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
         if (mounts[i].active && strcmp(mounts[i].path, mount_path) == 0) {
             for (int j = 0; j < VFS_MAX_OPEN_FILES; j++) {
                 if (open_files[j].valid && open_files[j].mount == &mounts[i]) {
-                    if (mounts[i].ops->close) {
+                    if (!open_files[j].is_device && mounts[i].ops && mounts[i].ops->close) {
                         mounts[i].ops->close(mounts[i].fs_private, open_files[j].fs_handle);
                     }
                     vfs_free_file(&open_files[j]);
                 }
+            }
+
+            if (mounts[i].ops && mounts[i].ops->unmount) {
+                mounts[i].ops->unmount(mounts[i].fs_private);
+            } else if (mounts[i].ops && mounts[i].ops->sync_fs) {
+                mounts[i].ops->sync_fs(mounts[i].fs_private);
             }
 
             serial_write("[VFS] Unmounted ");
@@ -246,12 +252,11 @@ bool vfs_umount(const char *mount_path) {
             serial_write("\n");
 
             mounts[i].active = false;
-
-            // Compact array
-            for (int k = i; k < mount_count - 1; k++) {
-                mounts[k] = mounts[k + 1];
-            }
-            mount_count--;
+            mounts[i].path[0] = '\0';
+            mounts[i].path_len = 0;
+            mounts[i].ops = NULL;
+            mounts[i].fs_private = NULL;
+            if (mount_count > 0) mount_count--;
 
             spinlock_release_irqrestore(&vfs_lock, flags);
             return true;
@@ -288,7 +293,7 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
             if (id >= 1 && id <= TTY_COUNT) {
                 vfs_file_t *vf = vfs_alloc_file();
                 if (vf) {
-                    vf->mount = &mounts[0];
+                    vf->mount = NULL;
                     vf->fs_handle = (void*)(uintptr_t)(id - 1);
                     vf->is_device = true;
                     vf->device_type = DEVICE_TYPE_TTY;
@@ -304,7 +309,7 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
             if (pty_id >= 0) {
                 vfs_file_t *vf = vfs_alloc_file();
                 if (vf) {
-                    vf->mount = &mounts[0];
+                    vf->mount = NULL;
                     vf->fs_handle = (void*)(uintptr_t)pty_id;
                     vf->is_device = true;
                     vf->device_type = DEVICE_TYPE_PTY_MASTER;
@@ -322,7 +327,7 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
             if (p) {
                 vfs_file_t *vf = vfs_alloc_file();
                 if (vf) {
-                    vf->mount = &mounts[0];
+                    vf->mount = NULL;
                     vf->fs_handle = (void*)(uintptr_t)pty_id;
                     vf->is_device = true;
                     vf->device_type = DEVICE_TYPE_PTY_SLAVE;
@@ -344,7 +349,7 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
             if (id >= 1 && id <= TTY_COUNT) {
                 vfs_file_t *vf = vfs_alloc_file();
                 if (vf) {
-                    vf->mount = &mounts[0];
+                    vf->mount = NULL;
                     vf->fs_handle = (void*)(uintptr_t)(id - 1);
                     vf->is_device = true;
                     vf->device_type = DEVICE_TYPE_KEYBOARD;
@@ -366,7 +371,7 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
             if (id >= 1 && id <= TTY_COUNT) {
                 vfs_file_t *vf = vfs_alloc_file();
                 if (vf) {
-                    vf->mount = &mounts[0];
+                    vf->mount = NULL;
                     vf->fs_handle = (void*)(uintptr_t)(id - 1);
                     vf->is_device = true;
                     vf->device_type = DEVICE_TYPE_MOUSE;
@@ -390,7 +395,7 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
             if (id >= 0 && id <= 0) { // Currently only support /dev/fb0
                 vfs_file_t *vf = vfs_alloc_file();
                 if (vf) {
-                    vf->mount = &mounts[0];
+                    vf->mount = NULL;
                     vf->fs_handle = (void*)(uintptr_t)id;
                     vf->is_device = true;
                     vf->device_type = DEVICE_TYPE_FRAMEBUFFER;
@@ -405,7 +410,7 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
         if (strcmp(devname, "pcsk") == 0) {
             vfs_file_t *vf = vfs_alloc_file();
             if (vf) {
-                vf->mount = &mounts[0];
+                vf->mount = NULL;
                 vf->fs_handle = (void*)0;
                 vf->is_device = true;
                 vf->device_type = DEVICE_TYPE_PCSPKR;
@@ -423,7 +428,7 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
             }
             vfs_file_t *vf = vfs_alloc_file();
             if (vf) {
-                vf->mount = &mounts[0];
+                vf->mount = NULL;
                 vf->fs_handle = ac97_open_client();
                 vf->is_device = true;
                 vf->device_type = DEVICE_TYPE_AUDIO;
@@ -441,7 +446,7 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
             }
             vfs_file_t *vf = vfs_alloc_file();
             if (vf) {
-                vf->mount = &mounts[0];
+                vf->mount = NULL;
                 vf->fs_handle = (void*)0;
                 vf->is_device = true;
                 vf->device_type = DEVICE_TYPE_MIXER;
@@ -455,7 +460,7 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
         if (strcmp(devname, "rtc") == 0) {
             vfs_file_t *vf = vfs_alloc_file();
             if (vf) {
-                vf->mount = &mounts[0];
+                vf->mount = NULL;
                 vf->fs_handle = (void*)0;
                 vf->is_device = true;
                 vf->device_type = DEVICE_TYPE_RTC;
@@ -472,7 +477,7 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
             if (th) {
                 vfs_file_t *vf = vfs_alloc_file();
                 if (vf) {
-                    vf->mount = &mounts[0];
+                    vf->mount = NULL;
                     vf->fs_handle = th;
                     vf->is_device = true;
                     vf->device_type = DEVICE_TYPE_TUN;
@@ -498,7 +503,7 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
                 if (seg) {
                     vfs_file_t *vf = vfs_alloc_file();
                     if (vf) {
-                        vf->mount = &mounts[0];
+                        vf->mount = NULL;
                         vf->fs_handle = (void*)seg;
                         vf->is_device = true;
                         vf->device_type = DEVICE_TYPE_SHM;
@@ -515,12 +520,13 @@ vfs_file_t* vfs_open(const char *path, const char *mode) {
 
         Disk *d = disk_get_by_name(devname);
 
-        if (d && (!mount || mount->path_len == 1)) {
+        if (d) {
             vfs_file_t *vf = vfs_alloc_file();
             if (vf) {
-                vf->mount = &mounts[0];
+                vf->mount = NULL;
                 vf->fs_handle = (void*)d; 
                 vf->is_device = true;
+                vf->device_type = DEVICE_TYPE_BLOCK;
                 vf->position = 0;
                 spinlock_release_irqrestore(&vfs_lock, flags);
                 return vf;
@@ -700,7 +706,34 @@ int vfs_write(vfs_file_t *file, const void *buf, size_t size) {
     if (VFS_FILE_INVALID(file)) return -1;
 
     if (file->is_device) {
-        if (file->device_type == DEVICE_TYPE_TTY) {
+        if (file->device_type == DEVICE_TYPE_BLOCK) {
+            Disk *d = (Disk*)file->fs_handle;
+            if (!d) return -1;
+
+            uint32_t total_written = 0;
+            uint32_t sector = (uint32_t)(file->position / 512);
+            uint32_t offset = (uint32_t)(file->position % 512);
+            uint8_t sector_buf[512];
+
+            while (total_written < (uint32_t)size) {
+                if (sector >= d->total_sectors) break;
+
+                uint32_t to_copy = 512 - offset;
+                if (to_copy > (uint32_t)size - total_written) to_copy = (uint32_t)size - total_written;
+
+                if (offset != 0 || to_copy < 512) {
+                    if (d->read_sector(d, sector, sector_buf) != 0) break;
+                }
+                memcpy(sector_buf + offset, (const uint8_t*)buf + total_written, to_copy);
+                if (d->write_sector(d, sector, sector_buf) != 0) break;
+
+                total_written += to_copy;
+                file->position += to_copy;
+                sector++;
+                offset = 0;
+            }
+            return (int)total_written;
+        } else if (file->device_type == DEVICE_TYPE_TTY) {
             tty_write((int)(uintptr_t)file->fs_handle, (const char*)buf, size);
             return size;
         } else if (file->device_type == DEVICE_TYPE_PTY_MASTER) {
@@ -983,23 +1016,26 @@ int vfs_ioctl(vfs_file_t *file, uint64_t request, void *arg) {
     return -1;
 }
 
-int vfs_seek(vfs_file_t *file, int offset, int whence) {
+int vfs_seek(vfs_file_t *file, int64_t offset, int whence) {
     if (VFS_FILE_INVALID(file)) return -1;
     
     if (file->is_device) {
         if (file->device_type == DEVICE_TYPE_FRAMEBUFFER) {
-            // Seek in framebuffer
             vfs_framebuffer_info_t fb = graphics_get_fb_backing_params();
-            
             if (!fb.address || fb.width == 0 || fb.height == 0) return -1;
-            
             uint64_t fb_size = (uint64_t)fb.width * fb.height * (fb.bpp / 8);
             uint64_t new_pos = file->position;
             
-            if (whence == 0) new_pos = (uint64_t)offset; // SEEK_SET
-            else if (whence == 1) new_pos += (uint64_t)offset; // SEEK_CUR
-            else if (whence == 2) new_pos = fb_size + (uint64_t)offset; // SEEK_END
-            else return -1;
+            if (whence == 0) {
+                if (offset < 0) return -1;
+                new_pos = (uint64_t)offset;
+            } else if (whence == 1) {
+                if ((int64_t)new_pos + offset < 0) return -1;
+                new_pos = (uint64_t)((int64_t)new_pos + offset);
+            } else if (whence == 2) {
+                if ((int64_t)fb_size + offset < 0) return -1;
+                new_pos = (uint64_t)((int64_t)fb_size + offset);
+            } else return -1;
             
             if (new_pos > fb_size) new_pos = fb_size;
             file->position = new_pos;
@@ -1009,10 +1045,16 @@ int vfs_seek(vfs_file_t *file, int offset, int whence) {
             shm_segment_t *seg = (shm_segment_t *)file->fs_handle;
             if (!seg) return -1;
             uint64_t new_pos = file->position;
-            if (whence == 0) new_pos = (uint64_t)offset; // SEEK_SET
-            else if (whence == 1) new_pos += (uint64_t)offset; // SEEK_CUR
-            else if (whence == 2) new_pos = (uint64_t)seg->size + (uint64_t)offset; // SEEK_END
-            else return -1;
+            if (whence == 0) {
+                if (offset < 0) return -1;
+                new_pos = (uint64_t)offset;
+            } else if (whence == 1) {
+                if ((int64_t)new_pos + offset < 0) return -1;
+                new_pos = (uint64_t)((int64_t)new_pos + offset);
+            } else if (whence == 2) {
+                if ((int64_t)seg->size + offset < 0) return -1;
+                new_pos = (uint64_t)((int64_t)seg->size + offset);
+            } else return -1;
             
             if (new_pos > seg->size) new_pos = seg->size;
             file->position = new_pos;
@@ -1020,23 +1062,30 @@ int vfs_seek(vfs_file_t *file, int offset, int whence) {
         } else if (file->device_type == DEVICE_TYPE_BLOCK) {
             Disk *d = (Disk*)file->fs_handle;
             if (!d) return -1;
+            uint64_t dev_size = (uint64_t)d->total_sectors * 512;
             uint64_t new_pos = file->position;
-            if (whence == 0) new_pos = (uint64_t)offset; // SET
-            else if (whence == 1) new_pos += (uint64_t)offset; // CUR
-            else if (whence == 2) new_pos = (uint64_t)(d->total_sectors * 512 + offset); // END
+            if (whence == 0) {
+                if (offset < 0) return -1;
+                new_pos = (uint64_t)offset;
+            } else if (whence == 1) {
+                if ((int64_t)new_pos + offset < 0) return -1;
+                new_pos = (uint64_t)((int64_t)new_pos + offset);
+            } else if (whence == 2) {
+                if ((int64_t)dev_size + offset < 0) return -1;
+                new_pos = (uint64_t)((int64_t)dev_size + offset);
+            } else return -1;
             
-            if (new_pos > (uint64_t)d->total_sectors * 512) new_pos = (uint64_t)d->total_sectors * 512;
+            if (new_pos > dev_size) new_pos = dev_size;
             file->position = new_pos;
             return 0;
         } else {
-            // Seek not supported on other device types (TTY, Keyboard, Mouse)
-            return -1;
+            return -29;
         }
     }
 
-    if (!file->mount->ops->seek) return -1;
-    int ret = file->mount->ops->seek(file->mount->fs_private, file->fs_handle, offset, whence);
-    if (ret == 0) {
+    if (!file->mount || !file->mount->ops || !file->mount->ops->seek) return -1;
+    int ret = file->mount->ops->seek(file->mount->fs_private, file->fs_handle, (int)offset, whence);
+    if (ret >= 0) {
         // Sync position back from driver if possible
         if (file->mount->ops->get_position) {
             file->position = file->mount->ops->get_position(file->fs_handle);
@@ -1050,7 +1099,7 @@ int vfs_seek(vfs_file_t *file, int offset, int whence) {
 }
 
 int vfs_poll(vfs_file_t *file, struct poll_table *pt) {
-    if (!file || !file->valid || !file->mount || !file->mount->active) return POLLNVAL;
+    if (VFS_FILE_INVALID(file)) return POLLNVAL;
     if (file->is_device) {
         if (file->device_type == DEVICE_TYPE_PTY_MASTER) {
             extern int pty_poll_master(int pty_id, struct poll_table *pt);
@@ -1090,30 +1139,30 @@ int vfs_poll(vfs_file_t *file, struct poll_table *pt) {
     return file->mount->ops->poll(file->mount->fs_private, file->fs_handle, pt);
 }
 
-uint32_t vfs_file_position(vfs_file_t *file) {
-    if (!file || !file->valid || !file->mount || !file->mount->active) return 0;
-    if (file->is_device) return (uint32_t)file->position;
+uint64_t vfs_file_position(vfs_file_t *file) {
+    if (VFS_FILE_INVALID(file)) return 0;
+    if (file->is_device) return file->position;
     if (!file->mount->ops->get_position) return 0;
-    return file->mount->ops->get_position(file->fs_handle);
+    return (uint64_t)file->mount->ops->get_position(file->fs_handle);
 }
 
-uint32_t vfs_file_size(vfs_file_t *file) {
-    if (!file || !file->valid || !file->mount || !file->mount->active) return 0;
+uint64_t vfs_file_size(vfs_file_t *file) {
+    if (VFS_FILE_INVALID(file)) return 0;
     if (file->is_device) {
         if (file->device_type == DEVICE_TYPE_FRAMEBUFFER) {
             vfs_framebuffer_info_t fb = graphics_get_fb_backing_params();
-            return (uint32_t)(fb.width * fb.height * (fb.bpp / 8));
+            return (uint64_t)fb.width * fb.height * (fb.bpp / 8);
         }
         if (file->device_type == DEVICE_TYPE_SHM) {
             typedef struct shm_segment shm_segment_t;
             shm_segment_t *seg = (shm_segment_t *)file->fs_handle;
-            return seg ? seg->size : 0;
+            return seg ? (uint64_t)seg->size : 0;
         }
         Disk *d = (Disk*)file->fs_handle;
-        return d ? d->total_sectors * 512 : 0;
+        return d ? ((uint64_t)d->total_sectors * 512) : 0;
     }
     if (!file->mount->ops->get_size) return 0;
-    return file->mount->ops->get_size(file->fs_handle);
+    return (uint64_t)file->mount->ops->get_size(file->fs_handle);
 }
 
 
@@ -1137,7 +1186,7 @@ int vfs_list_directory(const char *path, vfs_dirent_t *entries, int max, int off
 
     if (offset == 0) {
         uint64_t v_flags = spinlock_acquire_irqsave(&vfs_lock);
-        for (int i = 0; i < mount_count; i++) {
+        for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
             if (!mounts[i].active) continue;
             if (strcmp(mounts[i].path, normalized) == 0) continue; 
 
@@ -1415,7 +1464,7 @@ bool vfs_exists(const char *path) {
     if (normalized[0] == '/' && normalized[1] == '\0') return true;
 
     uint64_t flags_vfs = spinlock_acquire_irqsave(&vfs_lock);
-    for (int i = 0; i < mount_count; i++) {
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
         if (mounts[i].active && str_starts_with(mounts[i].path, normalized)) {
             spinlock_release_irqrestore(&vfs_lock, flags_vfs);
             return true;
@@ -1474,7 +1523,7 @@ bool vfs_is_directory(const char *path) {
     if (normalized[0] == '/' && normalized[1] == '\0') return true;
 
     uint64_t flags_vfs = spinlock_acquire_irqsave(&vfs_lock);
-    for (int i = 0; i < mount_count; i++) {
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
         if (mounts[i].active && vfs_path_is_parent(normalized, mounts[i].path)) {
             if (strcmp(mounts[i].path, normalized) == 0) {
                 spinlock_release_irqrestore(&vfs_lock, flags_vfs);
@@ -1565,7 +1614,7 @@ int vfs_get_info(const char *path, vfs_dirent_t *info) {
     }
 
     uint64_t flags_vfs = spinlock_acquire_irqsave(&vfs_lock);
-    for (int i = 0; i < mount_count; i++) {
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
         if (mounts[i].active && vfs_path_is_parent(normalized, mounts[i].path)) {
             if (strcmp(mounts[i].path, normalized) != 0) {
                 const char *p = normalized + strlen(normalized);
@@ -1635,7 +1684,7 @@ int vfs_get_info(const char *path, vfs_dirent_t *info) {
         Disk *d = disk_get_by_name(dev);
         if (d) {
             strcpy(info->name, d->devname);
-            info->size = d->total_sectors * 512;
+            info->size = (uint64_t)d->total_sectors * 512;
             info->is_directory = 0;
             info->start_cluster = 0;
             info->write_date = 0;
@@ -1663,13 +1712,24 @@ int vfs_get_info(const char *path, vfs_dirent_t *info) {
 }
 
 int vfs_get_mount_count(void) {
-    return mount_count;
+    return VFS_MAX_MOUNTS;
 }
 
 vfs_mount_t* vfs_get_mount(int index) {
-    if (index < 0 || index >= mount_count) return NULL;
+    if (index < 0 || index >= VFS_MAX_MOUNTS) return NULL;
     if (!mounts[index].active) return NULL;
     return &mounts[index];
+}
+
+int vfs_sync_all(void) {
+    uint64_t flags = spinlock_acquire_irqsave(&vfs_lock);
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
+        if (mounts[i].active && mounts[i].ops && mounts[i].ops->sync_fs) {
+            mounts[i].ops->sync_fs(mounts[i].fs_private);
+        }
+    }
+    spinlock_release_irqrestore(&vfs_lock, flags);
+    return 0;
 }
 
 void vfs_automount_partition(const char *devname) {

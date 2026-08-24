@@ -34,6 +34,7 @@ int  sockbuf_append(sockbuf_t *sb, struct pbuf *p, const ip_addr_t *src_ip, uint
 int  sockbuf_read(sockbuf_t *sb, void *buf, size_t max_len, ip_addr_t *out_ip, uint16_t *out_port, int peek);
 int  sockbuf_is_empty(sockbuf_t *sb);
 int  sockbuf_readable(sockbuf_t *sb);
+int  sockbuf_writable(sockbuf_t *sb);
 uint32_t sockbuf_get_cc(sockbuf_t *sb);
 
 #endif

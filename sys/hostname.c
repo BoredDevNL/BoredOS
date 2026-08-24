@@ -4,7 +4,7 @@
 #include "hostname.h"
 #include "spinlock.h"
 #include "vfs.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "kutils.h"
 #include <string.h>
 

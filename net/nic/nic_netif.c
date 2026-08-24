@@ -36,6 +36,9 @@ static err_t nic_low_level_output(struct netif *netif, struct pbuf *p) {
   return ERR_OK;
 }
 
+#define NIC_RX_BUDGET 256
+
+
 static int nic_low_level_input(struct netif *netif) {
   static u8_t buffer[2048];
   int len;
@@ -43,25 +46,24 @@ static int nic_low_level_input(struct netif *netif) {
   extern void raw_tap_broadcast(const void *data, size_t len);
   extern void e1000_flush_rx(void);
   
-  while ((len = nic_receive_packet(buffer, sizeof(buffer))) > 0) {
+  while (count < NIC_RX_BUDGET && (len = nic_receive_packet(buffer, sizeof(buffer))) > 0) {
     count++;
     raw_tap_broadcast(buffer, len);
     struct pbuf *p = pbuf_alloc(PBUF_RAW, len, PBUF_POOL);
     if (p != NULL) {
       pbuf_take(p, buffer, len);
-      err_t err = netif->input(p, netif);
-      if (err != ERR_OK) {
-        pbuf_free(p);
-      } else {
+      if (netif->input(p, netif) == ERR_OK) {
         LINK_STATS_INC(link.recv);
       }
     }
   }
+
   if (count > 0) {
     e1000_flush_rx();
   }
   return count;
 }
+
 
 err_t nic_netif_init(struct netif *netif) {
   nic_driver_t* dev = nic_get_driver();

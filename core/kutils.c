@@ -6,57 +6,109 @@
 
 #include "acpi.h"
 
+void page_zero_fast(void *page) {
+    if (!page) return;
+    uint8_t *p = (uint8_t *)page;
+    size_t chunks = 4096 / 64;
+    asm volatile(
+        "pxor %%xmm0, %%xmm0\n\t"
+        "1:\n\t"
+        "movdqa %%xmm0, 0(%0)\n\t"
+        "movdqa %%xmm0, 16(%0)\n\t"
+        "movdqa %%xmm0, 32(%0)\n\t"
+        "movdqa %%xmm0, 48(%0)\n\t"
+        "add $64, %0\n\t"
+        "dec %1\n\t"
+        "jnz 1b\n\t"
+        : "+r"(p), "+r"(chunks)
+        :
+        : "xmm0", "memory", "cc"
+    );
+}
+
+void page_copy_fast(void *dest, const void *src) {
+    if (!dest || !src) return;
+    uint8_t *d = (uint8_t *)dest;
+    const uint8_t *s = (const uint8_t *)src;
+    size_t chunks = 4096 / 64;
+    asm volatile(
+        "1:\n\t"
+        "movdqa 0(%1), %%xmm0\n\t"
+        "movdqa 16(%1), %%xmm1\n\t"
+        "movdqa 32(%1), %%xmm2\n\t"
+        "movdqa 48(%1), %%xmm3\n\t"
+        "movdqa %%xmm0, 0(%0)\n\t"
+        "movdqa %%xmm1, 16(%0)\n\t"
+        "movdqa %%xmm2, 32(%0)\n\t"
+        "movdqa %%xmm3, 48(%0)\n\t"
+        "add $64, %0\n\t"
+        "add $64, %1\n\t"
+        "dec %2\n\t"
+        "jnz 1b\n\t"
+        : "+r"(d), "+r"(s), "+r"(chunks)
+        :
+        : "xmm0", "xmm1", "xmm2", "xmm3", "memory", "cc"
+    );
+}
+
 void *memset(void *dest, int val, size_t len) {
-    uint64_t *d64 = (uint64_t *)dest;
-    uint64_t val8 = (unsigned char)val;
-    uint64_t val64 = val8 | (val8 << 8) | (val8 << 16) | (val8 << 24) |
-                     (val8 << 32) | (val8 << 40) | (val8 << 48) | (val8 << 56);
-                     
-    if (((uintptr_t)dest & 7) == 0) {
-        size_t words = len / 8;
-        for (size_t i = 0; i < words; i++) {
-            d64[i] = val64;
-        }
-        
-        unsigned char *d8 = (unsigned char *)(d64 + words);
-        size_t rem = len % 8;
-        for (size_t i = 0; i < rem; i++) {
-            d8[i] = (unsigned char)val;
-        }
-        return dest;
+    if (!dest || len == 0) return dest;
+
+    uint8_t *d = (uint8_t *)dest;
+    uint8_t val8 = (uint8_t)val;
+    uint64_t val64 = (uint64_t)val8 * 0x0101010101010101ULL;
+
+    size_t qwords = len / 8;
+    size_t bytes = len % 8;
+
+    if (qwords > 0) {
+        asm volatile(
+            "rep stosq"
+            : "+D"(d), "+c"(qwords)
+            : "a"(val64)
+            : "memory"
+        );
     }
-    
-    unsigned char *ptr = (unsigned char *)dest;
-    for (size_t i = 0; i < len; i++) {
-        ptr[i] = (unsigned char)val;
+
+    if (bytes > 0) {
+        asm volatile(
+            "rep stosb"
+            : "+D"(d), "+c"(bytes)
+            : "a"(val8)
+            : "memory"
+        );
     }
+
     return dest;
 }
 
 void *memcpy(void *dest, const void *src, size_t len) {
-    uint64_t *d64 = (uint64_t *)dest;
-    const uint64_t *s64 = (const uint64_t *)src;
-    
-    if (((uintptr_t)dest & 7) == 0 && ((uintptr_t)src & 7) == 0) {
-        size_t words = len / 8;
-        for (size_t i = 0; i < words; i++) {
-            d64[i] = s64[i];
-        }
-        
-        unsigned char *d8 = (unsigned char *)(d64 + words);
-        const unsigned char *s8 = (const unsigned char *)(s64 + words);
-        size_t rem = len % 8;
-        for (size_t i = 0; i < rem; i++) {
-            d8[i] = s8[i];
-        }
-        return dest;
+    if (!dest || !src || len == 0 || dest == src) return dest;
+
+    uint8_t *d = (uint8_t *)dest;
+    const uint8_t *s = (const uint8_t *)src;
+
+    size_t qwords = len / 8;
+    size_t bytes = len % 8;
+
+    if (qwords > 0) {
+        asm volatile(
+            "rep movsq"
+            : "+D"(d), "+S"(s), "+c"(qwords)
+            :
+            : "memory"
+        );
     }
-    
-    unsigned char *d = (unsigned char *)dest;
-    const unsigned char *s = (const unsigned char *)src;
-    for (size_t i = 0; i < len; i++) {
-        d[i] = s[i];
+
+    if (bytes > 0) {
+        asm volatile(
+            "rep movsb"
+            : "+D"(d), "+S"(s), "+c"(bytes)
+            :
+            : "memory"
+        );
     }
+
     return dest;
 }
 

@@ -46,4 +46,6 @@ cpu_state_t *smp_get_cpu(uint32_t cpu_id);
 
 uint32_t smp_get_lapic_id(uint32_t cpu_id);
 
+void smp_wake_idle_cpus(void);
+
 #endif

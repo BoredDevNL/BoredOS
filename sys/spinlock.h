@@ -24,8 +24,24 @@ static inline void spinlock_acquire(spinlock_t *lock) {
                      : "memory");
         if (prev == 0) return; // We got the lock
         // Spin with pause (reduces power and bus traffic)
+        uint32_t spin_count = 0;
         while (*lock) {
             asm volatile("pause" ::: "memory");
+            if (++spin_count >= 50000000) {
+                extern void serial_write(const char *s);
+                extern void serial_write_hex(uint64_t val);
+                extern uint32_t smp_this_cpu_id(void);
+                serial_write("[SPINLOCK WARN] CPU ");
+                serial_write_hex(smp_this_cpu_id());
+                serial_write(" spinning for lock 0x");
+                serial_write_hex((uint64_t)lock);
+                serial_write(" caller: 0x");
+                serial_write_hex((uint64_t)__builtin_return_address(0));
+                serial_write(" (val: 0x");
+                serial_write_hex(*lock);
+                serial_write(")\n");
+                spin_count = 0;
+            }
         }
     }
 }

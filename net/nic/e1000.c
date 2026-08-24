@@ -159,10 +159,20 @@ int e1000_send_packet(const void* data, size_t length) {
     uint16_t tail = e1000_dev.tx_tail;
     uint16_t next_tail = (tail + 1) % E1000_TX_RING_SIZE;
     
+    uint32_t tdh = e1000_read_reg(mmio, E1000_REG_TDH);
+    if (next_tail == tdh) {
+        return -1;
+    }
+
     if (e1000_dev.tx_descriptors[tail].cmd != 0) {
-        for(int i=0; i<1000000; i++) {
-            if (e1000_dev.tx_descriptors[tail].status & 0x01) break;
-            __asm__ __volatile__("pause");
+        if (!(e1000_dev.tx_descriptors[tail].status & 0x01)) {
+            for(int i = 0; i < 1000; i++) {
+                if (e1000_dev.tx_descriptors[tail].status & 0x01) break;
+                __asm__ __volatile__("pause");
+            }
+            if (!(e1000_dev.tx_descriptors[tail].status & 0x01)) {
+                return -1;
+            }
         }
     }
 
@@ -176,6 +186,7 @@ int e1000_send_packet(const void* data, size_t length) {
     
     return 0;
 }
+
 
 int e1000_receive_packet(void* buffer, size_t buffer_size) {
     if (!e1000_initialized || !e1000_dev.initialized) return 0;
@@ -205,7 +216,7 @@ void e1000_flush_rx(void) {
 
 static uint64_t e1000_irq_handler(struct registers_t *regs) {
     (void)regs;
-    if (!e1000_initialized) goto eoi;
+    if (!e1000_initialized) return (uint64_t)regs;
 
     uint32_t icr = e1000_read_reg(e1000_dev.mmio_base, E1000_REG_ICR);
     if (icr & E1000_ICR_RXT0) {
@@ -214,8 +225,6 @@ static uint64_t e1000_irq_handler(struct registers_t *regs) {
         }
     }
 
-eoi:
-    extern void lapic_eoi(void);
-    lapic_eoi();
     return (uint64_t)regs;
 }
+

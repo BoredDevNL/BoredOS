@@ -6,7 +6,7 @@
 #include "spinlock.h"
 #include "wait_queue.h"
 #include "font.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "graphics.h"
 #include "kutils.h"
 #include "process.h"
@@ -419,8 +419,15 @@ void tty_write(int id, const char *data, size_t len) {
                 if (t->esc_num_params < 7) t->esc_num_params++;
             } else {
                 // Final command character
-                if (c == 'K') { // Erase to end of line
-                    tty_draw_rect(t, t->cursor_x, t->cursor_y, t->width - t->cursor_x, font_h, t->bg_color);
+                if (c == 'K') { // Erase line
+                    int mode = t->esc_params[0];
+                    if (mode == 2) {
+                        tty_draw_rect(t, 0, t->cursor_y, t->width, font_h, t->bg_color);
+                    } else if (mode == 1) {
+                        tty_draw_rect(t, 0, t->cursor_y, t->cursor_x + font_w, font_h, t->bg_color);
+                    } else {
+                        tty_draw_rect(t, t->cursor_x, t->cursor_y, t->width - t->cursor_x, font_h, t->bg_color);
+                    }
                 } else if (c == 'J') { // Erase in Display
                     int mode = t->esc_params[0];
                     if (mode == 2) { // Entire screen
@@ -628,8 +635,13 @@ void tty_push_char(int id, uint8_t c) {
                 target->sleep_until = 0;
             }
             t->fg_pid = -1;
+            process_put(target);
             return;
         }
+        if (target) {
+            process_put(target);
+        }
+
     }
 
     tty_queue_push(&t->char_queue, c);

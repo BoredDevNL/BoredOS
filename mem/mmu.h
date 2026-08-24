@@ -40,9 +40,13 @@ int mmu_unmap_page(mmu_context_t *ctx, uintptr_t virt);
 int mmu_unmap_pages(mmu_context_t *ctx, uintptr_t virt, size_t count);
 int mmu_protect_page(mmu_context_t *ctx, uintptr_t virt, uint32_t flags);
 uintptr_t mmu_virt_to_phys(mmu_context_t *ctx, uintptr_t virt);
+uint64_t *mmu_get_pte_ptr(mmu_context_t *ctx, uintptr_t virt);
+int mmu_clone_user_cow(mmu_context_t *parent_ctx, mmu_context_t *child_ctx);
 
 void mmu_tlb_flush_page(uintptr_t virt);
 void mmu_tlb_flush_all(void);
 void mmu_tlb_shootdown(uintptr_t virt, size_t count);
+void mmu_tlb_shootdown_target(uint64_t target_cpus, uintptr_t virt, size_t count);
+void mmu_tlb_ipi_handler(void);
 
 #endif // BOREDOS_MMU_H

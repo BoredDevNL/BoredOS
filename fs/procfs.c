@@ -311,9 +311,15 @@ int procfs_read(void *fs_private, void *handle, void *buf, size_t size) {
 
             strcpy(out + strlen(out), pid_s);
 
-            strcpy(out + strlen(out), "\nState: RUNNING\nMemory: ");
+            const char *state_str = "RUNNING";
+            if (proc->state == PROC_STATE_BLOCKED) state_str = "BLOCKED";
+            else if (proc->state == PROC_STATE_ZOMBIE) state_str = "ZOMBIE";
+            strcpy(out + strlen(out), "\nState: ");
+            strcpy(out + strlen(out), state_str);
+            strcpy(out + strlen(out), "\nMemory: ");
 
             uint64_t mem_val = proc->used_memory;
+
 
             if (h->pid == 0) {
                 mem_val = pmm_get_stats().reserved_pages * 4096;

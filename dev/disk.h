@@ -72,11 +72,9 @@ const char* disk_get_next_dev_name(DiskType type);   // Returns "sda"/"hda", etc
 Disk* disk_get_by_letter(char letter);
 char disk_get_next_free_letter(void);
 
-int disk_write_gpt(Disk *disk, disk_partition_spec_t *parts, int count);
-int disk_write_mbr(Disk *disk, disk_partition_spec_t *parts, int count);
-
 int disk_sync(Disk *disk);
 
 int disk_rescan(Disk *disk);
 
 #endif
+

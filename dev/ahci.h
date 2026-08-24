@@ -163,9 +163,10 @@ typedef struct {
 // ATA Commands
 // ============================================================================
 
-#define ATA_CMD_READ_DMA_EX  0x25
-#define ATA_CMD_WRITE_DMA_EX 0x35
-#define ATA_CMD_IDENTIFY     0xEC
+#define ATA_CMD_READ_DMA_EX     0x25
+#define ATA_CMD_WRITE_DMA_EX    0x35
+#define ATA_CMD_FLUSH_CACHE_EXT 0xEA
+#define ATA_CMD_IDENTIFY        0xEC
 
 // ============================================================================
 // Public API
@@ -174,6 +175,7 @@ typedef struct {
 void ahci_init(void);
 int ahci_read_sectors(int port_num, uint64_t lba, uint32_t count, uint8_t *buffer);
 int ahci_write_sectors(int port_num, uint64_t lba, uint32_t count, const uint8_t *buffer);
+int ahci_flush_cache(int port_num);
 int ahci_get_port_count(void);
 bool ahci_port_is_active(int port_num);
 

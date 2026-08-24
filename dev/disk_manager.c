@@ -398,57 +398,13 @@ void disk_register_partition(Disk *parent, uint32_t lba_offset, uint32_t sector_
     if (is_esp) serial_write(", ESP=yes");
     serial_write(")\n");
 
-    if (is_fat32) {
-        // Try to initialize and mount FAT32 volume to VFS
-        void *vol = fat32_mount_volume(part);
-        if (vol) {
-            char mount_path[32];
-            mount_path[0] = '/';
-            mount_path[1] = 'd'; mount_path[2] = 'e'; mount_path[3] = 'v'; mount_path[4] = '/';
-            strcpy(mount_path + 5, part->devname);
-
-            if (vfs_mount(mount_path, part->devname, "fat32", fat32_get_realfs_ops(), vol)) {
-                char ok_msg[64];
-                strcpy(ok_msg, "Mounted ");
-                strcpy(ok_msg + 8, mount_path);
-                log_ok(ok_msg);
-            } else {
-                char fail_msg[64];
-                strcpy(fail_msg, "Failed to mount ");
-                strcpy(fail_msg + 16, mount_path);
-                log_fail(fail_msg);
-            }
-        }
-    } else {
-        uint8_t *sb_buf = (uint8_t *)kmalloc(1024);
-        if (sb_buf) {
-            if (part->read_sector(part, 2, sb_buf) == 0 &&
-                part->read_sector(part, 3, sb_buf + 512) == 0) {
-                uint16_t magic = *(uint16_t *)(sb_buf + 56);
-                if (magic == EXT4_SUPERBLOCK_MAGIC) {
-                    void *vol = ext4fs_mount_volume(part);
-                    if (vol) {
-                        char mount_path[32] = "/dev/";
-                        strcpy(mount_path + 5, part->devname);
-                        if (vfs_mount(mount_path, part->devname, "ext4",
-                                      ext4fs_get_ops(), vol)) {
-                            char ok_msg[64];
-                            strcpy(ok_msg, "Mounted ext4 ");
-                            strcpy(ok_msg + 13, mount_path);
-                            log_ok(ok_msg);
-                        }
-                    }
-                }
-            }
-            kfree_null(sb_buf);
-        }
-    }
 }
 
 // === Lookup ===
 
 Disk* disk_get_by_name(const char *devname) {
     if (!devname) return NULL;
+    if (strncmp(devname, "/dev/", 5) == 0) devname += 5;
     for (int i = 0; i < disk_count; i++) {
         if (strcmp(disks[i]->devname, devname) == 0) {
             return disks[i];
@@ -464,35 +420,6 @@ int disk_get_count(void) {
 Disk* disk_get_by_index(int index) {
     if (index < 0 || index >= disk_count) return NULL;
     return disks[index];
-}
-
-// === Backward Compat (deprecated) ===
-
-char disk_get_next_free_letter(void) {
-    char letter = 'B' + next_drive_letter_idx++;
-    if (letter > 'Z') return 0;
-    return letter;
-}
-
-Disk* disk_get_by_letter(char letter) {
-    // Maps old letter scheme: A=ramfs (not a block device), B+=first real disk, etc.
-    if (letter >= 'a' && letter <= 'z') letter -= 32;
-
-    // A: was the ramdisk — return NULL since ramfs is now VFS-managed
-    if (letter == 'A') return NULL;
-
-    // B-Z map to disk indices 0, 1, 2...
-    // Find real disks (non-RAM, non-partition-parent)
-    int real_idx = 0;
-    for (int i = 0; i < disk_count; i++) {
-        if (disks[i]->is_partition && disks[i]->is_fat32) {
-            if (real_idx == (letter - 'B')) {
-                return disks[i];
-            }
-            real_idx++;
-        }
-    }
-    return NULL;
 }
 
 // === MBR Partition Table ===
@@ -525,6 +452,18 @@ static bool is_fat32_bpb(const uint8_t *sector) {
     }
 
     return false;
+}
+
+static bool disk_probe_ext4(Disk *disk, uint32_t lba) {
+    uint8_t *pbuf = (uint8_t*)kmalloc(512);
+    if (!pbuf) return false;
+    bool ext4 = false;
+    if (disk->read_sector(disk, lba + 2, pbuf) == 0) {
+        uint16_t magic = *(uint16_t*)(pbuf + 56);
+        if (magic == EXT4_SUPERBLOCK_MAGIC) ext4 = true;
+    }
+    kfree_null(pbuf);
+    return ext4;
 }
 
 static bool disk_probe_fat32(Disk *disk, uint32_t lba) {
@@ -727,185 +666,6 @@ static void gpt_make_pseudo_guid(uint8_t *guid, const char *label, uint32_t tota
     guid[6] = (guid[6] & 0x0F) | 0x40;
 }
 
-int disk_write_gpt(Disk *disk, disk_partition_spec_t *parts, int count) {
-    if (!disk || !parts || count <= 0 || count > GPT_PART_ENTRY_COUNT)
-        return -1;
-
-    uint32_t first_usable = 2048;
-    uint32_t last_usable  = disk->total_sectors - 34;
-
-    for (int i = 0; i < count; i++) {
-        if (parts[i].sector_count == 0) {
-            serial_write("[GPT] Error: zero-sized partition\n");
-            return -1;
-        }
-        uint32_t start = parts[i].lba_start;
-        uint32_t end   = start + parts[i].sector_count - 1;
-
-        if (start % 2048 != 0) {
-            start = ((start + 2047) / 2048) * 2048;
-            parts[i].lba_start = start;
-            end = start + parts[i].sector_count - 1;
-            serial_write("[GPT] Warning: start rounded up to 2048 boundary\n");
-        }
-        if (start < first_usable || end > last_usable) {
-            serial_write("[GPT] Error: partition out of usable range\n");
-            return -1;
-        }
-        for (int j = 0; j < i; j++) {
-            uint32_t js = parts[j].lba_start;
-            uint32_t je = js + parts[j].sector_count - 1;
-            if (start <= je && end >= js) {
-                serial_write("[GPT] Error: overlapping partitions\n");
-                return -1;
-            }
-        }
-    }
-
-    uint8_t *entry_buf = (uint8_t *)kmalloc(GPT_PART_ENTRY_COUNT * GPT_PART_ENTRY_SIZE);
-    if (!entry_buf) return -1;
-    for (int i = 0; i < GPT_PART_ENTRY_COUNT * GPT_PART_ENTRY_SIZE; i++) entry_buf[i] = 0;
-
-    for (int i = 0; i < count; i++) {
-        GPT_Entry *e = (GPT_Entry *)(entry_buf + i * GPT_PART_ENTRY_SIZE);
-        if (parts[i].flags & PART_FLAG_ESP)
-            for (int b = 0; b < 16; b++) e->type_guid[b] = GPT_GUID_ESP[b];
-        else
-            for (int b = 0; b < 16; b++) e->type_guid[b] = GPT_GUID_BASIC_DATA[b];
-
-        gpt_make_pseudo_guid(e->partition_guid, parts[i].label, disk->total_sectors);
-        e->start_lba = parts[i].lba_start;
-        e->end_lba   = parts[i].lba_start + parts[i].sector_count - 1;
-        e->attributes = (parts[i].flags & PART_FLAG_ESP) ? 0x01 : 0x00;
-        /* UTF-16LE name */
-        for (int c = 0; c < 36 && parts[i].label[c]; c++)
-            e->name[c] = (uint16_t)(unsigned char)parts[i].label[c];
-    }
-
-    uint32_t entry_crc = crc32_compute(entry_buf, GPT_PART_ENTRY_COUNT * GPT_PART_ENTRY_SIZE);
-
-    uint8_t *hdr_buf = (uint8_t *)kmalloc(512);
-    if (!hdr_buf) { kfree_null(entry_buf); return -1; }
-    for (int i = 0; i < 512; i++) hdr_buf[i] = 0;
-
-    GPT_Header *hdr = (GPT_Header *)hdr_buf;
-    hdr->signature              = 0x5452415020494645ULL; 
-    hdr->revision               = 0x00010000;
-    hdr->header_size            = 92;
-    hdr->crc32                  = 0;
-    hdr->reserved               = 0;
-    hdr->my_lba                 = 1;
-    hdr->alternate_lba          = disk->total_sectors - 1;
-    hdr->first_usable_lba       = first_usable;
-    hdr->last_usable_lba        = last_usable;
-    gpt_make_pseudo_guid(hdr->disk_guid, disk->devname, disk->total_sectors);
-    hdr->partition_entry_lba    = 2;
-    hdr->num_partition_entries  = GPT_PART_ENTRY_COUNT;
-    hdr->size_of_partition_entry = GPT_PART_ENTRY_SIZE;
-    hdr->partition_entry_array_crc32 = entry_crc;
-
-    hdr->crc32 = 0;
-    hdr->crc32 = crc32_compute(hdr_buf, hdr->header_size);
-
-    uint8_t *mbr_buf = (uint8_t *)kmalloc(512);
-    if (!mbr_buf) { kfree_null(entry_buf); kfree_null(hdr_buf); return -1; }
-    for (int i = 0; i < 512; i++) mbr_buf[i] = 0;
-    mbr_buf[446] = 0x00;           /* Status: Non-bootable */
-    mbr_buf[447] = 0x00; mbr_buf[448] = 0x02; mbr_buf[449] = 0x00; /* CHS Start: 0x000200 */
-    mbr_buf[450] = 0xEE;           /* Type: GPT Protective */
-    mbr_buf[451] = 0xFF; mbr_buf[452] = 0xFF; mbr_buf[453] = 0xFF; /* CHS End: 0xFFFFFF */
-    mbr_buf[454] = 0x01; mbr_buf[455] = 0x00; mbr_buf[456] = 0x00; mbr_buf[457] = 0x00; /* LBA Start: 1 */
-    uint32_t pmbr_size = disk->total_sectors - 1;
-    mbr_buf[458] = (uint8_t)(pmbr_size);
-    mbr_buf[459] = (uint8_t)(pmbr_size >> 8);
-    mbr_buf[460] = (uint8_t)(pmbr_size >> 16);
-    mbr_buf[461] = (uint8_t)(pmbr_size >> 24);
-    mbr_buf[510] = 0x55;
-    mbr_buf[511] = 0xAA;
-    disk->write_sector(disk, 0, mbr_buf);
-    kfree_null(mbr_buf);
-
-    if (disk->write_sector(disk, 1, hdr_buf) != 0) {
-        serial_write("[GPT] Error: failed to write header\n");
-        kfree_null(entry_buf); kfree_null(hdr_buf); return -1;
-    }
-
-    for (int s = 0; s < 32; s++) {
-        if (disk->write_sector(disk, 2 + s, entry_buf + s * 512) != 0) {
-            serial_write("[GPT] Error: failed to write partition entries\n");
-            kfree_null(entry_buf); kfree_null(hdr_buf); return -1;
-        }
-    }
-
-    GPT_Header *bhdr = (GPT_Header *)hdr_buf;
-    for (int i = 0; i < 512; i++) hdr_buf[i] = 0;
-    bhdr->signature              = 0x5452415020494645ULL;
-    bhdr->revision               = 0x00010000;
-    bhdr->header_size            = 92;
-    bhdr->my_lba                 = disk->total_sectors - 1;
-    bhdr->alternate_lba          = 1;
-    bhdr->first_usable_lba       = first_usable;
-    bhdr->last_usable_lba        = last_usable;
-    gpt_make_pseudo_guid(bhdr->disk_guid, disk->devname, disk->total_sectors);
-    bhdr->partition_entry_lba    = disk->total_sectors - 33;
-    bhdr->num_partition_entries  = GPT_PART_ENTRY_COUNT;
-    bhdr->size_of_partition_entry = GPT_PART_ENTRY_SIZE;
-    bhdr->partition_entry_array_crc32 = entry_crc;
-    bhdr->crc32 = 0;
-    bhdr->crc32 = crc32_compute(hdr_buf, bhdr->header_size);
-
-    for (int s = 0; s < 32; s++) {
-        disk->write_sector(disk, disk->total_sectors - 33 + s, entry_buf + s * 512);
-    }
-    disk->write_sector(disk, disk->total_sectors - 1, hdr_buf);
-
-    kfree_null(entry_buf);
-    kfree_null(hdr_buf);
-
-    serial_write("[DISK] GPT written to /dev/");
-    serial_write(disk->devname);
-    serial_write("\n");
-    return 0;
-}
-
-
-int disk_write_mbr(Disk *disk, disk_partition_spec_t *parts, int count) {
-    if (!disk || !parts || count <= 0 || count > 4) return -1;
-
-    uint8_t *buf = (uint8_t *)kmalloc(512);
-    if (!buf) return -1;
-    for (int i = 0; i < 512; i++) buf[i] = 0;
-
-    for (int i = 0; i < count; i++) {
-        if (parts[i].sector_count == 0) { kfree_null(buf); return -1; }
-        uint8_t *entry = buf + 446 + i * 16;
-        entry[0] = 0x80; 
-        entry[4] = 0x0C;
-        uint32_t lba_start = parts[i].lba_start;
-        uint32_t sec_count = parts[i].sector_count;
-        entry[8]  = (uint8_t)(lba_start);
-        entry[9]  = (uint8_t)(lba_start >> 8);
-        entry[10] = (uint8_t)(lba_start >> 16);
-        entry[11] = (uint8_t)(lba_start >> 24);
-        entry[12] = (uint8_t)(sec_count);
-        entry[13] = (uint8_t)(sec_count >> 8);
-        entry[14] = (uint8_t)(sec_count >> 16);
-        entry[15] = (uint8_t)(sec_count >> 24);
-    }
-    buf[510] = 0x55;
-    buf[511] = 0xAA;
-
-    int ret = disk->write_sector(disk, 0, buf);
-    kfree_null(buf);
-    if (ret == 0) {
-        serial_write("[DISK] MBR written to /dev/");
-        serial_write(disk->devname);
-        serial_write("\n");
-    }
-    return ret;
-}
-
-
 int disk_sync(Disk *disk) {
     if (!disk) return -1;
     Disk *target = disk->parent ? disk->parent : disk;
@@ -1009,7 +769,8 @@ static void parse_gpt_partitions(Disk *disk) {
         bool is_esp = true;
         for (int j = 0; j < 16; j++) if (entry->type_guid[j] != esp_guid[j]) { is_esp = false; break; }
 
-        bool fat32 = is_esp || disk_probe_fat32(disk, start);
+        bool is_ext4 = disk_probe_ext4(disk, start);
+        bool fat32 = !is_ext4 && (is_esp || disk_probe_fat32(disk, start));
 
         disk_register_partition(disk, start, size, fat32, is_esp, part_num++);
         part_count++;

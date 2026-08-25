@@ -9,7 +9,6 @@
 #include "graphics.h"
 #include "gdt.h"
 #include "idt.h"
-#include "paging.h"
 #include "syscall.h"
 #include "process.h"
 #include "ps2.h"
@@ -360,9 +359,6 @@ static void init_cpu_state(void) {
 
     idt_init();
     idt_register_interrupts();
-
-    paging_init();
-    log_ok("Paging ready");
 
     syscall_init();
     log_ok("Syscalls ready");

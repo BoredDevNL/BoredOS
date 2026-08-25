@@ -7,7 +7,7 @@
 #include "gdt.h"
 #include "idt.h"
 #include "platform.h"
-#include "paging.h"
+#include "mmu.h"
 #include "process.h"
 #include "work_queue.h"
 #include "kutils.h"
@@ -73,7 +73,7 @@ static void ap_entry(struct limine_smp_info *info) {
     asm volatile("mov %0, %%cr4" : : "r"(cr4));
     asm volatile("fninit");
 
-    pat_enable_wc();
+    pat_init();
 
     extern struct gdt_ptr gdtr;
     extern void gdt_flush(uint64_t);
@@ -87,7 +87,7 @@ static void ap_entry(struct limine_smp_info *info) {
     extern void syscall_init(void);
     syscall_init();
 
-    uint64_t kernel_cr3 = paging_get_kernel_pml4_phys();
+    uint64_t kernel_cr3 = mmu_get_kernel_context()->pml4_phys;
     asm volatile("mov %0, %%cr3" : : "r"(kernel_cr3));
 
     extern void lapic_enable(void);

@@ -7,6 +7,7 @@
 #include "platform.h"
 #include "slab.h"
 #include "io.h"
+#include "graphics.h"
 #include <string.h>
 
 #define EINVAL 22
@@ -52,7 +53,7 @@ static inline page_table_t *p2table(uint64_t entry) {
     return (page_table_t *)p2v(entry & PT_ADDR_MASK);
 }
 
-static void pat_init(void) {
+void pat_init(void) {
     uint64_t pat = rdmsr(0x277);
     pat &= ~(0xFFULL << 32);
     pat |=  (0x01ULL << 32);
@@ -115,6 +116,18 @@ void mmu_init(void) {
     kernel_context.pml4_phys = read_cr3() & PT_ADDR_MASK;
     kernel_context.lock = SPINLOCK_INIT;
     active_context = &kernel_context;
+
+    uintptr_t fb_base = (uintptr_t)graphics_get_fb_addr();
+    if (fb_base) {
+        size_t fb_size = (size_t)get_screen_height() * (size_t)graphics_get_fb_pitch();
+        uintptr_t fb_end = fb_base + fb_size;
+        uintptr_t fb_map_base = fb_base & ~(HUGE_PAGE_2M - 1);
+        uintptr_t fb_map_end = (fb_end + HUGE_PAGE_2M - 1) & ~(HUGE_PAGE_2M - 1);
+        for (uintptr_t p = fb_map_base; p < fb_map_end; p += HUGE_PAGE_2M) {
+            mmu_map_page(&kernel_context, (uintptr_t)p2v(p), p,
+                         MMU_PROT_READ | MMU_PROT_WRITE | MMU_FLAG_WC | MMU_FLAG_GLOBAL | MMU_FLAG_HUGE_2M);
+        }
+    }
 }
 
 mmu_context_t *mmu_get_kernel_context(void) {

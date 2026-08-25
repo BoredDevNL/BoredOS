@@ -5,7 +5,7 @@
 #include "pci.h"
 #include "disk.h"
 #include "slab.h"
-#include "paging.h"
+#include "mmu.h"
 #include "io.h"
 #include <stddef.h>
 #include "spinlock.h"
@@ -166,8 +166,7 @@ static int ahci_identify(int port_num, uint32_t *sectors, char *model) {
     HBA_CMD_TBL *cmd_tbl = ps->cmd_tbl;
     memset(cmd_tbl, 0, sizeof(HBA_CMD_TBL) + sizeof(HBA_PRDT_ENTRY));
 
-    uint64_t pml4 = paging_get_pml4_phys();
-    uint64_t phys = paging_virt2phys(pml4, (uint64_t)buf);
+    uint64_t phys = mmu_virt_to_phys(mmu_get_current_context(), (uintptr_t)buf);
     if (!phys) {
         kfree_null(buf);
         spinlock_release_irqrestore(&ps->lock, rflags);
@@ -228,13 +227,13 @@ static int ahci_identify(int port_num, uint32_t *sectors, char *model) {
 
 static int ahci_fill_prdt(HBA_CMD_TBL *cmd_tbl, const void *buffer,
                           uint32_t byte_count) {
-    uint64_t pml4 = paging_get_pml4_phys();
+    mmu_context_t *ctx = mmu_get_current_context();
     uint64_t buf_addr = (uint64_t)buffer;
     uint32_t remaining = byte_count;
     int prd_idx = 0;
 
     while (remaining > 0 && prd_idx < AHCI_MAX_PRDT) {
-        uint64_t phys = paging_virt2phys(pml4, buf_addr);
+        uint64_t phys = mmu_virt_to_phys(ctx, buf_addr);
         if (!phys)
             return -1;
 
@@ -554,9 +553,9 @@ void ahci_init(void) {
 
     uint64_t abar_virt = p2v(abar_phys);
     for (uint64_t offset = 0; offset < 0x2000; offset += 4096) {
-        if (!paging_map_page(paging_get_pml4_phys(), abar_virt + offset,
-                        abar_phys + offset,
-                        PT_PRESENT | PT_RW | PT_CACHE_DISABLE))
+        if (mmu_map_page(mmu_get_kernel_context(), abar_virt + offset,
+                         abar_phys + offset,
+                         MMU_PROT_READ | MMU_PROT_WRITE | MMU_FLAG_NOCACHE) != 0)
             return;
     }
 

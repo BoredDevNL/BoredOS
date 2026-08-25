@@ -27,6 +27,7 @@ typedef struct mmu_context {
 } mmu_context_t;
 
 void mmu_init(void);
+void pat_init(void);
 
 mmu_context_t *mmu_create_context(void);
 void mmu_destroy_context(mmu_context_t *ctx);

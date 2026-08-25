@@ -5,7 +5,6 @@
 #include "tmpfs.h"
 #include "slab.h"
 #include "pmm.h"
-#include "paging.h"
 #include "platform.h"
 #include "kutils.h"
 #include "spinlock.h"

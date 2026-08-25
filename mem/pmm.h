@@ -111,4 +111,10 @@ void *pmm_page_to_vaddr(const page_t *page);
 
 pmm_stats_t pmm_get_stats(void);
 
+static inline uint8_t pages_to_order(size_t count) {
+    if (count <= 1) return 0;
+    if (count > (1UL << (PMM_MAX_ORDER - 1))) return PMM_MAX_ORDER;
+    return (uint8_t)(64 - __builtin_clzll(count - 1));
+}
+
 #endif // BOREDOS_PMM_H

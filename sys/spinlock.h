@@ -61,18 +61,27 @@ static inline int spinlock_try(spinlock_t *lock) {
     return (prev == 0);
 }
 
+static inline uint64_t irq_save(void) {
+    uint64_t flags;
+    asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
+    return flags;
+}
+
+static inline void irq_restore(uint64_t flags) {
+    asm volatile("push %0; popfq" : : "r"(flags) : "memory");
+}
+
 // IRQ-safe spinlock: saves flags, disables interrupts, then acquires.
 // Use when the lock may be contended from interrupt context.
 static inline uint64_t spinlock_acquire_irqsave(spinlock_t *lock) {
-    uint64_t flags;
-    asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
+    uint64_t flags = irq_save();
     spinlock_acquire(lock);
     return flags;
 }
 
 static inline void spinlock_release_irqrestore(spinlock_t *lock, uint64_t flags) {
     spinlock_release(lock);
-    asm volatile("push %0; popfq" : : "r"(flags) : "memory");
+    irq_restore(flags);
 }
 
 #endif

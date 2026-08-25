@@ -95,22 +95,6 @@ static const size_t kmalloc_sizes[] = {16, 32, 64, 128, 192, 256, 512, 1024, 204
 #define KMALLOC_CACHE_COUNT (sizeof(kmalloc_sizes) / sizeof(kmalloc_sizes[0]))
 static slab_cache_t *kmalloc_caches[KMALLOC_CACHE_COUNT];
 
-static inline uint64_t irq_save(void) {
-    uint64_t flags;
-    asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
-    return flags;
-}
-
-static inline void irq_restore(uint64_t flags) {
-    asm volatile("push %0; popfq" : : "r"(flags) : "memory");
-}
-
-static inline uint8_t pages_to_order(size_t count) {
-    if (count <= 1) return 0;
-    if (count > (1UL << (PMM_MAX_ORDER - 1))) return PMM_MAX_ORDER;
-    return (uint8_t)(64 - __builtin_clzll(count - 1));
-}
-
 static inline size_t align_up(size_t val, size_t align) {
     if (align <= 1) return val;
     return (val + align - 1) & ~(align - 1);

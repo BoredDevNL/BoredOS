@@ -7,27 +7,15 @@
 #include "vmm.h"
 #include "platform.h"
 #include "kutils.h"
+#include "io.h"
 
 #include "../graphics/graphics.h"
-#include "../core/msrs.h"
 #include <stddef.h>
 
 #define MSR_WC  0x277
 
 static uint64_t current_pml4_phys = 0;
 static uint64_t kernel_pml4_phys = 0;
-
-// Get current CR3 value
-static uint64_t read_cr3(void) {
-    uint64_t cr3;
-    asm volatile("mov %%cr3, %0" : "=r"(cr3));
-    return cr3;
-}
-
-// Set CR3 value
-static void write_cr3(uint64_t cr3) {
-    asm volatile("mov %0, %%cr3" : : "r"(cr3));
-}
 
 static void free_table_frame(uint64_t phys) {
     if (!phys) return;

@@ -38,16 +38,6 @@ static size_t total_page_count = 0;
 static size_t usable_page_count = 0;
 static uintptr_t pmm_direct_map_base = 0;
 
-static inline uint64_t irq_save(void) {
-    uint64_t flags;
-    asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
-    return flags;
-}
-
-static inline void irq_restore(uint64_t flags) {
-    asm volatile("push %0; popfq" : : "r"(flags) : "memory");
-}
-
 static inline uintptr_t page_to_pfn(const page_t *page) {
     return (uintptr_t)(page - pages_array);
 }
@@ -55,12 +45,6 @@ static inline uintptr_t page_to_pfn(const page_t *page) {
 static inline page_t *pfn_to_page(uintptr_t pfn) {
     if (pfn >= total_page_count || !pages_array) return NULL;
     return &pages_array[pfn];
-}
-
-static inline uint8_t pages_to_order(size_t count) {
-    if (count <= 1) return 0;
-    if (count > (1UL << (PMM_MAX_ORDER - 1))) return PMM_MAX_ORDER;
-    return (uint8_t)(64 - __builtin_clzll(count - 1));
 }
 
 static inline void list_add_head(page_t **head, page_t *page) {

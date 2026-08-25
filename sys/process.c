@@ -4,7 +4,7 @@
 #include "process.h"
 #include "gdt.h"
 #include "idt.h"
-#include "paging.h"
+#include "mmu.h"
 #include "io.h"
 #include "platform.h"
 #include "slab.h"
@@ -118,11 +118,11 @@ void process_put(process_t *proc) {
         }
         if (proc->user_stack_alloc) {
             if (proc->pml4_phys) {
-                extern void paging_unmap_page(uint64_t pml4_phys, uint64_t virtual_addr);
                 uint64_t stack_top = 0x800000;
                 uint64_t stack_size = 262144;
                 for (uint64_t off = 0; off < stack_size; off += 4096) {
-                    paging_unmap_page(proc->pml4_phys, stack_top - stack_size + off);
+                    mmu_context_t ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
+                    mmu_unmap_page(&ctx, stack_top - stack_size + off);
                 }
             }
             kfree_null(proc->user_stack_alloc);
@@ -133,8 +133,8 @@ void process_put(process_t *proc) {
             proc->vmm_space = NULL;
             proc->pml4_phys = 0;
         } else if (proc->pml4_phys && should_destroy_pml4) {
-            extern void paging_destroy_user_pml4_phys(uint64_t pml4_phys, bool free_mapped);
-            paging_destroy_user_pml4_phys(proc->pml4_phys, true);
+            mmu_context_t ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
+            mmu_destroy_context(&ctx);
             proc->pml4_phys = 0;
         }
         process_free_struct(proc);
@@ -308,7 +308,7 @@ void process_init(void) {
     kernel_proc->tty_id = -1;
     kernel_proc->kill_pending = false;
 
-    kernel_proc->pml4_phys = paging_get_kernel_pml4_phys();
+    kernel_proc->pml4_phys = mmu_get_kernel_context()->pml4_phys;
     void *kstack = kmalloc_aligned(KERNEL_STACK_SIZE, KERNEL_STACK_ALIGNMENT);
     if (kstack) {
         memset(kstack, 0, KERNEL_STACK_SIZE);
@@ -400,11 +400,12 @@ process_t* process_create(void (*entry_point)(void), bool is_user) {
     
     // 1. Setup Page Table
     if (is_user) {
-        new_proc->pml4_phys = paging_create_user_pml4_phys();
+        mmu_context_t *ctx = mmu_create_context();
+        new_proc->pml4_phys = ctx ? ctx->pml4_phys : 0;
         new_proc->pml4_refcount = (int *)kmalloc(sizeof(int));
         if (new_proc->pml4_refcount) *new_proc->pml4_refcount = 1;
     } else {
-        new_proc->pml4_phys = paging_get_kernel_pml4_phys();
+        new_proc->pml4_phys = mmu_get_kernel_context()->pml4_phys;
         new_proc->pml4_refcount = NULL;
     }
     
@@ -426,7 +427,8 @@ process_t* process_create(void (*entry_point)(void), bool is_user) {
     
     if (is_user) {
         for (int i = 0; i < 32; i++) {
-            if (!paging_map_page(new_proc->pml4_phys, 0x800000 + i*4096, v2p((uint64_t)user_stack + i*4096), PT_PRESENT | PT_RW | PT_USER)) {
+            mmu_context_t ctx = { .pml4_phys = new_proc->pml4_phys, .lock = SPINLOCK_INIT };
+            if (mmu_map_page(&ctx, 0x800000 + i*4096, v2p((uint64_t)user_stack + i*4096), MMU_PROT_READ | MMU_PROT_WRITE | MMU_PROT_USER) != 0)
                 kfree_null(user_stack);
                 kfree_null(kernel_stack);
                 process_put(new_proc);
@@ -444,7 +446,8 @@ process_t* process_create(void (*entry_point)(void), bool is_user) {
         }
         for(int i=0; i<128; i++) ((uint8_t*)code)[i] = ((uint8_t*)entry_point)[i];
 
-        if (!paging_map_page(new_proc->pml4_phys, 0x400000, v2p((uint64_t)code), PT_PRESENT | PT_RW | PT_USER)) {
+        mmu_context_t ctx = { .pml4_phys = new_proc->pml4_phys, .lock = SPINLOCK_INIT };
+        if (mmu_map_page(&ctx, 0x400000, v2p((uint64_t)code), MMU_PROT_READ | MMU_PROT_WRITE | MMU_PROT_USER) != 0)
             kfree_null(code);
             kfree_null(user_stack);
             kfree_null(kernel_stack);
@@ -555,7 +558,8 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
     if (new_proc->vmm_space) {
         new_proc->pml4_phys = new_proc->vmm_space->mmu_ctx->pml4_phys;
     } else {
-        new_proc->pml4_phys = paging_create_user_pml4_phys();
+        mmu_context_t *ctx = mmu_create_context();
+        new_proc->pml4_phys = ctx ? ctx->pml4_phys : 0;
     }
     if (!new_proc->pml4_phys) {
         process_put(new_proc);
@@ -705,7 +709,8 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
     
     // Map User stack to 0x800000
     for (uint64_t i = 0; i < (user_stack_size / 4096); i++) {
-        if (!paging_map_page(new_proc->pml4_phys, 0x800000 - user_stack_size + (i * 4096), v2p((uint64_t)stack + (i * 4096)), PT_PRESENT | PT_RW | PT_USER)) {
+        mmu_context_t ctx = { .pml4_phys = new_proc->pml4_phys, .lock = SPINLOCK_INIT };
+        if (mmu_map_page(&ctx, 0x800000 - user_stack_size + (i * 4096), v2p((uint64_t)stack + (i * 4096)), MMU_PROT_READ | MMU_PROT_WRITE | MMU_PROT_USER) != 0)
             kfree_null(stack);
             kfree_null(kernel_stack);
             return NULL;
@@ -1000,7 +1005,7 @@ uint64_t process_schedule(uint64_t current_rsp) {
             __atomic_fetch_or(&chosen->vmm_space->active_cpus, (1ULL << my_cpu), __ATOMIC_SEQ_CST);
         }
         asm volatile("mfence" ::: "memory");
-        paging_switch_directory(chosen->pml4_phys);
+        write_cr3(chosen->pml4_phys);
         asm volatile("mfence" ::: "memory");
         if (cur && cur->vmm_space) {
             __atomic_fetch_and(&cur->vmm_space->active_cpus, ~(1ULL << my_cpu), __ATOMIC_SEQ_CST);
@@ -1057,8 +1062,8 @@ static void process_release_shm(process_t *proc) {
                 uint64_t addr = proc->shm_mappings[i].addr;
                 uint64_t len = proc->shm_mappings[i].length;
                 for (uint64_t off = 0; off < len; off += 4096) {
-                    extern void paging_unmap_page(uint64_t pml4_phys, uint64_t virtual_addr);
-                    paging_unmap_page(proc->pml4_phys, addr + off);
+                    mmu_context_t ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
+                    mmu_unmap_page(&ctx, addr + off);
                 }
             }
             shm_unref((shm_segment_t *)proc->shm_mappings[i].seg);
@@ -1082,8 +1087,8 @@ static void process_cleanup_inner(process_t *proc) {
             if (proc->elf_segments[i].ptr) {
                 if (proc->pml4_phys) {
                     for (uint64_t off = 0; off < proc->elf_segments[i].size; off += 4096) {
-                        extern void paging_unmap_page(uint64_t pml4_phys, uint64_t virtual_addr);
-                        paging_unmap_page(proc->pml4_phys, proc->elf_segments[i].vaddr + off);
+                        mmu_context_t ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
+                        mmu_unmap_page(&ctx, proc->elf_segments[i].vaddr + off);
                     }
                 }
                 kfree_null(proc->elf_segments[i].ptr);
@@ -1288,7 +1293,7 @@ uint64_t process_terminate_current_with_status(int status, uint64_t current_rsp)
         __atomic_fetch_or(&next_proc->vmm_space->active_cpus, (1ULL << my_cpu), __ATOMIC_SEQ_CST);
     }
     asm volatile("mfence" ::: "memory");
-    paging_switch_directory(next_proc->pml4_phys);
+    write_cr3(next_proc->pml4_phys);
     asm volatile("mfence" ::: "memory");
     if (cur && cur->vmm_space) {
         __atomic_fetch_and(&cur->vmm_space->active_cpus, ~(1ULL << my_cpu), __ATOMIC_SEQ_CST);
@@ -1432,7 +1437,8 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
     if (!proc || !proc->is_user || !regs || !filepath) return -1;
 
     vmm_space_t *new_space = vmm_create_space();
-    uint64_t new_pml4 = new_space ? new_space->mmu_ctx->pml4_phys : paging_create_user_pml4_phys();
+    mmu_context_t *fallback_new_ctx = new_space ? NULL : mmu_create_context();
+    uint64_t new_pml4 = new_space ? new_space->mmu_ctx->pml4_phys : (fallback_new_ctx ? fallback_new_ctx->pml4_phys : 0);
     if (!new_pml4) {
         if (new_space) {
             vmm_destroy_space(new_space);
@@ -1444,8 +1450,8 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
         if (proc->elf_segments[i].ptr) {
             if (proc->pml4_phys) {
                 for (uint64_t off = 0; off < proc->elf_segments[i].size; off += 4096) {
-                    extern void paging_unmap_page(uint64_t pml4_phys, uint64_t virtual_addr);
-                    paging_unmap_page(proc->pml4_phys, proc->elf_segments[i].vaddr + off);
+                        mmu_context_t ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
+                        mmu_unmap_page(&ctx, proc->elf_segments[i].vaddr + off);
                 }
             }
             kfree_null(proc->elf_segments[i].ptr);
@@ -1466,8 +1472,8 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
         if (new_space) {
             vmm_destroy_space(new_space);
         } else {
-            extern void paging_destroy_user_pml4_phys(uint64_t pml4_phys, bool free_mapped);
-            paging_destroy_user_pml4_phys(new_pml4, true);
+            mmu_context_t ctx = { .pml4_phys = new_pml4, .lock = SPINLOCK_INIT };
+            mmu_destroy_context(&ctx);
         }
         return -1;
     }
@@ -1479,21 +1485,22 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
         if (new_space) {
             vmm_destroy_space(new_space);
         } else {
-            extern void paging_destroy_user_pml4_phys(uint64_t pml4_phys, bool free_mapped);
-            paging_destroy_user_pml4_phys(new_pml4, true);
+            mmu_context_t ctx = { .pml4_phys = new_pml4, .lock = SPINLOCK_INIT };
+            mmu_destroy_context(&ctx);
         }
         return -1;
     }
 
     for (uint64_t i = 0; i < (user_stack_size / 4096); i++) {
-        if (!paging_map_page(new_pml4, 0x800000 - user_stack_size + (i * 4096), v2p((uint64_t)stack + (i * 4096)), PT_PRESENT | PT_RW | PT_USER)) {
+        mmu_context_t stack_ctx = { .pml4_phys = new_pml4, .lock = SPINLOCK_INIT };
+        if (mmu_map_page(&stack_ctx, 0x800000 - user_stack_size + (i * 4096), v2p((uint64_t)stack + (i * 4096)), MMU_PROT_READ | MMU_PROT_WRITE | MMU_PROT_USER) != 0)
             kfree_null(stack);
             proc->vmm_space = saved_space;
             if (new_space) {
                 vmm_destroy_space(new_space);
             } else {
-                extern void paging_destroy_user_pml4_phys(uint64_t pml4_phys, bool free_mapped);
-                paging_destroy_user_pml4_phys(new_pml4, true);
+            mmu_context_t ctx = { .pml4_phys = new_pml4, .lock = SPINLOCK_INIT };
+            mmu_destroy_context(&ctx);
             }
             return -1;
         }
@@ -1607,7 +1614,7 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
         }
     }
 
-    paging_switch_directory(new_pml4);
+    write_cr3(new_pml4);
 
     bool destroy_old = true;
     if (old_refcount) {
@@ -1622,10 +1629,10 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
 
     if (old_stack) {
         if (old_pml4) {
-            extern void paging_unmap_page(uint64_t pml4_phys, uint64_t virtual_addr);
             uint64_t stack_top = 0x800000;
             for (uint64_t off = 0; off < user_stack_size; off += 4096) {
-                paging_unmap_page(old_pml4, stack_top - user_stack_size + off);
+                mmu_context_t ctx = { .pml4_phys = old_pml4, .lock = SPINLOCK_INIT };
+                mmu_unmap_page(&ctx, stack_top - user_stack_size + off);
             }
         }
         kfree_null(old_stack);
@@ -1633,8 +1640,8 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
     if (old_space && destroy_old) {
         vmm_destroy_space(old_space);
     } else if (old_pml4 && destroy_old) {
-        extern void paging_destroy_user_pml4_phys(uint64_t pml4_phys, bool free_mapped);
-        paging_destroy_user_pml4_phys(old_pml4, true);
+        mmu_context_t ctx = { .pml4_phys = old_pml4, .lock = SPINLOCK_INIT };
+        mmu_destroy_context(&ctx);
     }
 
     proc->fs_base = 0;
@@ -1760,8 +1767,12 @@ process_t* process_duplicate(registers_t *parent_regs) {
             child->pml4_phys = child->vmm_space->mmu_ctx->pml4_phys;
         }
     } else {
-        extern uint64_t paging_clone_user_pml4(uint64_t parent_pml4_phys);
-        child->pml4_phys = paging_clone_user_pml4(parent->pml4_phys);
+        mmu_context_t *child_ctx = mmu_create_context();
+        if (child_ctx) {
+            mmu_context_t parent_ctx = { .pml4_phys = parent->pml4_phys, .lock = SPINLOCK_INIT };
+            mmu_clone_user_cow(&parent_ctx, child_ctx);
+            child->pml4_phys = child_ctx->pml4_phys;
+        }
     }
     if (!child->pml4_phys) {
         process_put(child);

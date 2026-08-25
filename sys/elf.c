@@ -6,7 +6,7 @@
 #include "slab.h"
 #include "kutils.h"
 
-#include "paging.h"
+#include "mmu.h"
 #include "platform.h"
 
 extern void serial_print(const char *s);
@@ -108,7 +108,8 @@ uint64_t elf_load(const char *path, uint64_t user_pml4, size_t *out_load_size, s
             for (uint64_t p = 0; p < num_pages; p++) {
                 uint64_t vaddr = start_page + (p * 4096);
                 uint64_t phys_addr = v2p((uint64_t)bulk_phys + (p * 4096));
-                if (!paging_map_page(user_pml4, vaddr, phys_addr, 0x07))
+                mmu_context_t ctx = { .pml4_phys = user_pml4, .lock = SPINLOCK_INIT };
+                if (mmu_map_page(&ctx, vaddr, phys_addr, MMU_PROT_READ | MMU_PROT_WRITE | MMU_PROT_USER | MMU_PROT_EXEC) != 0)
                     return 0;
             }
             

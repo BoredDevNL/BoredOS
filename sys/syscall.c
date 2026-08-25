@@ -25,7 +25,7 @@
 #include "kutils.h"
 #include "network.h"
 #include "pagecache.h"
-#include "paging.h"
+#include "mmu.h"
 #include "pci.h"
 #include "platform.h"
 #include "smp.h"
@@ -61,7 +61,7 @@ static bool is_valid_user_ptr(const void *ptr, size_t size) {
 
   if (proc->vmm_space) {
     for (uint64_t p = page_start; p <= page_end; p += 4096) {
-      if (paging_virt2phys(proc->pml4_phys, p) == 0) {
+      if (mmu_virt_to_phys(proc->vmm_space ? proc->vmm_space->mmu_ctx : &(mmu_context_t){ .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT }, p) == 0) {
         if (!vma_find(&proc->vmm_space->vma_tree, p)) {
           return false;
         }
@@ -74,7 +74,7 @@ static bool is_valid_user_ptr(const void *ptr, size_t size) {
   if (!proc->pml4_phys) return false;
 
   for (uint64_t p = page_start; p <= page_end; p += 4096) {
-    if (paging_virt2phys(proc->pml4_phys, p) == 0) {
+    if (mmu_virt_to_phys(proc->vmm_space ? proc->vmm_space->mmu_ctx : &(mmu_context_t){ .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT }, p) == 0) {
       return false;
     }
     if (p == page_end) break;
@@ -97,7 +97,7 @@ static bool is_valid_user_string(const char *str, size_t max_len) {
     if (cur_addr >= 0xFFFF800000000000ULL) return false;
     if ((cur_addr & 0xFFF) == 0 || i == 0) {
       uint64_t p = cur_addr & ~0xFFFULL;
-      if (paging_virt2phys(proc->pml4_phys, p) == 0) {
+      if (mmu_virt_to_phys(proc->vmm_space ? proc->vmm_space->mmu_ctx : &(mmu_context_t){ .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT }, p) == 0) {
         if (!proc->vmm_space || !vma_find(&proc->vmm_space->vma_tree, p)) {
           return false;
         }
@@ -1887,7 +1887,9 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
         return (uint64_t)MAP_FAILED;
       memset(phys_page, 0, 4096);
 
-      if (!paging_map_page(proc->pml4_phys, virt_addr + off, v2p((uint64_t)phys_page),
+      mmu_context_t fallback_ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
+      mmu_context_t *proc_ctx = (proc->vmm_space && proc->vmm_space->mmu_ctx) ? proc->vmm_space->mmu_ctx : &fallback_ctx;
+      if (mmu_map_page(proc_ctx, virt_addr + off, v2p((uint64_t)phys_page), MMU_PROT_READ | MMU_PROT_WRITE | MMU_PROT_USER) != 0) {
                       pt_flags)) {
         kfree_null(phys_page);
         return (uint64_t)MAP_FAILED;
@@ -1927,7 +1929,9 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
 
     uint64_t fb_flags = pt_flags | PT_WRITE_THROUGH;
     for (uint64_t off = 0; off < aligned_len; off += 4096) {
-      if (!paging_map_page(proc->pml4_phys, virt_addr + off, phys_addr + off,
+      mmu_context_t fallback_ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
+      mmu_context_t *proc_ctx = (proc->vmm_space && proc->vmm_space->mmu_ctx) ? proc->vmm_space->mmu_ctx : &fallback_ctx;
+      if (mmu_map_page(proc_ctx, virt_addr + off, phys_addr + off, MMU_PROT_READ | MMU_PROT_WRITE | MMU_PROT_USER | MMU_FLAG_WC) != 0)
                       fb_flags))
         return (uint64_t)MAP_FAILED;
     }
@@ -1990,7 +1994,9 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
     // Map pages covering the requested length
     uint32_t pages_to_map = aligned_len / 4096;
     for (uint32_t i = 0; i < pages_to_map; i++) {
-      if (!paging_map_page(proc->pml4_phys, virt_addr + i * 4096, seg->phys_pages[i],
+      mmu_context_t fallback_ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
+      mmu_context_t *proc_ctx = (proc->vmm_space && proc->vmm_space->mmu_ctx) ? proc->vmm_space->mmu_ctx : &fallback_ctx;
+      if (mmu_map_page(proc_ctx, virt_addr + i * 4096, seg->phys_pages[i], MMU_PROT_READ | MMU_PROT_WRITE | MMU_PROT_USER) != 0)
                       pt_flags))
         return (uint64_t)MAP_FAILED;
     }
@@ -2032,7 +2038,8 @@ static uint64_t handle_sys_munmap(const syscall_args_t *args) {
 
   for (uint64_t off = 0; off < aligned_len; off += 4096) {
     uint64_t vaddr = addr + off;
-    uint64_t phys = paging_virt2phys(proc->pml4_phys, vaddr);
+    mmu_context_t fallback_ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
+    uint64_t phys = mmu_virt_to_phys(&fallback_ctx, vaddr);
     if (phys) {
       bool is_shm = false;
       for (uint32_t i = 0; i < proc->shm_mapping_count; i++) {
@@ -2051,7 +2058,8 @@ static uint64_t handle_sys_munmap(const syscall_args_t *args) {
         }
       }
     }
-    paging_unmap_page(proc->pml4_phys, vaddr);
+    mmu_context_t fallback_ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
+    mmu_unmap_page(&fallback_ctx, vaddr);
   }
 
   // Find and release the SHM mapping
@@ -3233,7 +3241,9 @@ static uint64_t syscall_maybe_deliver_signal(registers_t *regs) {
    * and write to the underlying physical frame via p2v(). This avoids
    * accidentally writing into kernel memory if regs->rsp was corrupted
    * or pointed at an unmapped address. */
-  uint64_t phys = paging_virt2phys(proc->pml4_phys, new_rsp);
+  mmu_context_t fallback_ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
+  mmu_context_t *uctx = (proc->vmm_space && proc->vmm_space->mmu_ctx) ? proc->vmm_space->mmu_ctx : &fallback_ctx;
+  uint64_t phys = mmu_virt_to_phys(uctx, new_rsp);
   if (!phys) {
     return process_terminate_current_with_status(128 + 11, (uint64_t)regs);
   }

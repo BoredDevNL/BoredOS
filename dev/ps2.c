@@ -242,8 +242,11 @@ void mouse_init(void) {
     mouse_write(0xF2);
     mouse_read();
     uint8_t id = mouse_read();
-    (void)id;
-    mouse_has_wheel = true;
+    if (id == 3 || id == 4) {
+        mouse_has_wheel = true;
+    } else {
+        mouse_has_wheel = false;
+    }
 
     // Enable Streaming
     mouse_write(0xF4);
@@ -261,8 +264,9 @@ uint64_t mouse_handler(registers_t *regs) {
     uint8_t b = inb(0x60);
 
     if (mouse_cycle == 0) {
-        if ((b & 0xC8) != 0x08) {
+        if ((b & 0x08) == 0 || (b & 0xC0) != 0) {
             // Out of sync
+            mouse_cycle = 0;
         } else {
             mouse_byte[0] = b;
             mouse_cycle++;

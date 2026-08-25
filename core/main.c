@@ -270,6 +270,7 @@ static bool cmdline_read_value(const char *cmdline, const char *key, char *out, 
 
 static uint8_t g_boot_flags = 0;
 static char g_boot_root_device[32] = {0};
+static bool g_root_switched_to_disk = false;
 
 static void boot_parse_cmdline(const char *cmdline, uint32_t media_type) {
     g_boot_flags = 0;
@@ -293,6 +294,9 @@ static void boot_parse_cmdline(const char *cmdline, uint32_t media_type) {
     if (g_boot_flags & BOOT_FLAG_ROOT_SET) {
         g_boot_flags |= BOOT_FLAG_DISK;
     } else if (media_type == LIMINE_MEDIA_TYPE_OPTICAL || media_type == LIMINE_MEDIA_TYPE_TFTP) {
+        g_boot_flags |= BOOT_FLAG_LIVE;
+    } else if (module_request.response != NULL && module_request.response->module_count > 0) {
+        // USB live boot: initrd module is present and no root= was specified
         g_boot_flags |= BOOT_FLAG_LIVE;
     } else {
         g_boot_flags |= BOOT_FLAG_DISK;
@@ -545,6 +549,7 @@ static void init_rootfs(void) {
             if (strcmp(fs_type, "fat32") == 0) {
                 fat32_set_root_volume(vol);
             }
+            g_root_switched_to_disk = true;
             serial_write("[INIT] Switched root to /dev/");
             serial_write(d->devname);
             serial_write(" (");
@@ -585,7 +590,7 @@ static void init_rootfs(void) {
 static void init_modules(void) {
     if (module_request.response == NULL) {
         log_fail("Limine module response NULL");
-    } else if (!(g_boot_flags & BOOT_FLAG_DISK)) {
+    } else if (!g_root_switched_to_disk) {
         log_ok("Limine modules loaded");
         for (uint64_t i = 0; i < module_request.response->module_count; i++) {
             struct limine_file *mod = module_request.response->modules[i];

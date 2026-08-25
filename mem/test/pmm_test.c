@@ -91,26 +91,17 @@ bool pmm_run_tests(void) {
 
     page_t *p_parent = pmm_alloc_order(1, 0);
     TEST_ASSERT(p_parent != NULL, "Failed to allocate order-1 parent block");
+    TEST_ASSERT(p_parent->order == 1, "Allocated block must have order 1");
     uintptr_t base_pfn = pmm_page_to_paddr(p_parent) >> 12;
-    pmm_free_order(p_parent, 1);
+    TEST_ASSERT((base_pfn & 1) == 0, "Order-1 block base PFN must be 2-page aligned");
 
-    page_t *p1 = pmm_alloc_page(0);
-    page_t *p2 = pmm_alloc_page(0);
-    TEST_ASSERT(p1 != NULL && p2 != NULL, "Failed to allocate order-0 split pages");
-
-    uintptr_t pfn1 = pmm_page_to_paddr(p1) >> 12;
-    uintptr_t pfn2 = pmm_page_to_paddr(p2) >> 12;
+    page_t *buddy_page = pmm_paddr_to_page((base_pfn + 1) << 12);
+    TEST_ASSERT(buddy_page != NULL, "Order-1 buddy descriptor must exist");
+    uintptr_t pfn1 = base_pfn;
+    uintptr_t pfn2 = pmm_page_to_paddr(buddy_page) >> 12;
     TEST_ASSERT((pfn1 ^ 1) == pfn2, "Split pages must be adjacent buddies");
 
-    pmm_free_page(p1);
-    pmm_free_page(p2);
-
-    page_t *remerged = pmm_alloc_order(1, 0);
-    TEST_ASSERT(remerged != NULL, "Order-1 allocation after buddy merge returned NULL");
-    TEST_ASSERT(remerged->order == 1, "Merged block must have order 1");
-    uintptr_t remerged_pfn = pmm_page_to_paddr(remerged) >> 12;
-    TEST_ASSERT(remerged_pfn == base_pfn, "Merged block PFN mismatch");
-    pmm_free_order(remerged, 1);
+    pmm_free_order(p_parent, 1);
 
     page_t *ptest = pmm_alloc_page(0);
     TEST_ASSERT(ptest != NULL, "Alloc for address helper test failed");

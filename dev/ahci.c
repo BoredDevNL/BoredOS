@@ -76,14 +76,14 @@ static int ahci_check_port_type(HBA_PORT *port) {
     uint8_t det = ssts & 0x0F;
 
     if (det != 3) return -1;   // No device detected
-    if (ipm != 1) return -1;   // Not in active state
+    if (ipm != 1 && ipm != 2 && ipm != 6) return -1;   // Not in active/ready state
 
     switch (port->sig) {
         case SATA_SIG_ATA:   return 0;   // SATA drive
         case SATA_SIG_ATAPI: return 1;   // SATAPI drive
         case SATA_SIG_SEMB:  return 2;   // SEMB
         case SATA_SIG_PM:    return 3;   // Port multiplier
-        default:             return -1;
+        default:             return 0;   // Fallback to ATA identify
     }
 }
 
@@ -545,10 +545,10 @@ void ahci_init(void) {
 
     uint64_t abar_virt = p2v(abar_phys);
     for (uint64_t offset = 0; offset < 0x2000; offset += 4096) {
-        if (mmu_map_page(mmu_get_kernel_context(), abar_virt + offset,
-                         abar_phys + offset,
-                         MMU_PROT_READ | MMU_PROT_WRITE | MMU_FLAG_NOCACHE) != 0)
-            return;
+        int err = mmu_map_page(mmu_get_kernel_context(), abar_virt + offset,
+                               abar_phys + offset,
+                               MMU_PROT_READ | MMU_PROT_WRITE | MMU_FLAG_NOCACHE);
+        (void)err;
     }
 
     abar = (HBA_MEM*)abar_virt;

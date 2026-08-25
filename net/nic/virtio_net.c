@@ -206,12 +206,18 @@ int virtio_net_receive_packet(void* buffer, size_t buffer_size) {
 
     uint16_t u_idx = rx_vq.last_used_idx % rx_vq.q_size;
     uint32_t d_idx = used->ring[u_idx].id;
+    if (d_idx >= rx_vq.q_size) {
+        rx_vq.last_used_idx++;
+        return 0;
+    }
     uint32_t len = used->ring[u_idx].len;
 
     uint16_t net_len = 0;
     if (len > sizeof(struct virtio_net_hdr)) {
         net_len = len - sizeof(struct virtio_net_hdr);
         if (net_len > buffer_size) net_len = buffer_size;
+        if (net_len > sizeof(rx_buffers[0]) - sizeof(struct virtio_net_hdr))
+            net_len = sizeof(rx_buffers[0]) - sizeof(struct virtio_net_hdr);
         
         uint8_t* pkt = rx_buffers[d_idx] + sizeof(struct virtio_net_hdr);
         uint8_t* dest = (uint8_t*)buffer;

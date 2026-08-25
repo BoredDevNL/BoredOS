@@ -195,7 +195,7 @@ build/sdk: usr-fetch
 			--cross-file tools/cross_file.txt \
 			--prefix=$(abspath build/sdk) \
 			--libdir=lib \
-			-Ddefault_library=static \
+			-Ddefault_library=both \
 			-Dheaders_only=false \
 			-Dposix_option=enabled \
 			-Dlinux_option=disabled \
@@ -206,7 +206,7 @@ build/sdk: usr-fetch
 	@SYSROOT=$$(x86_64-boredos-gcc -print-sysroot 2>/dev/null); \
 	if [ -n "$$SYSROOT" ] && [ -d "$$SYSROOT" ]; then \
 		printf "$(GREEN)[SDK]$(RESET) Installing mlibc SDK to toolchain sysroot: $$SYSROOT\n"; \
-		mkdir -p "$$SYSROOT/usr/include" "$$SYSROOT/usr/lib"; \
+		mkdir -p "$$SYSROOT/usr/include" "$$SYSROOT/usr/lib" "$$SYSROOT/lib"; \
 		cp -R build/sdk/include/. "$$SYSROOT/usr/include/"; \
 		cp -R build/sdk/lib/. "$$SYSROOT/usr/lib/"; \
 		cp -R build/sdk/lib/. "$$SYSROOT/lib/"; \
@@ -274,19 +274,12 @@ $(BUILD_DIR)/initrd.tar: $(KERNEL_ELF) userland packages
 	@printf "$(YELLOW)[PACKAGES]$(RESET) Generating exclusions list...\n"
 	@bash tools/gen_excludes.sh $(abspath $(BUILD_DIR)/initrd)
 
-	@printf "$(YELLOW)[COPY]$(RESET) Staging SDK development environment files in initrd...\n"
-	@cp build/sdk/lib/libc.a $(BUILD_DIR)/initrd/usr/lib/
-	@if [ -f build/sdk/lib/libm.a ]; then \
-		cp build/sdk/lib/libm.a $(BUILD_DIR)/initrd/usr/lib/; \
-	else \
-		cp build/sdk/lib/libc.a $(BUILD_DIR)/initrd/usr/lib/libm.a; \
-	fi
-	@$(STRIP) -S $(BUILD_DIR)/initrd/usr/lib/libc.a
-	@$(STRIP) -S $(BUILD_DIR)/initrd/usr/lib/libm.a
-	@cp build/sdk/lib/crt0.o $(BUILD_DIR)/initrd/usr/lib/crt0.o
-	@cp build/sdk/lib/crt1.o $(BUILD_DIR)/initrd/usr/lib/crt1.o
-	@cp build/sdk/lib/crti.o $(BUILD_DIR)/initrd/usr/lib/crti.o
-	@cp build/sdk/lib/crtn.o $(BUILD_DIR)/initrd/usr/lib/crtn.o
+	@printf "$(YELLOW)[COPY]$(RESET) Staging SDK development environment & shared runtime libraries in initrd...\n"
+	@mkdir -p $(BUILD_DIR)/initrd/usr/lib $(BUILD_DIR)/initrd/lib $(BUILD_DIR)/initrd/usr/include
+	@cp -R build/sdk/lib/. $(BUILD_DIR)/initrd/usr/lib/ 2>/dev/null || true
+	@cp -R build/sdk/lib/. $(BUILD_DIR)/initrd/lib/ 2>/dev/null || true
+	@if [ -f $(BUILD_DIR)/initrd/usr/lib/ld.so ]; then chmod +x $(BUILD_DIR)/initrd/usr/lib/ld.so; fi
+	@if [ -f $(BUILD_DIR)/initrd/lib/ld.so ]; then chmod +x $(BUILD_DIR)/initrd/lib/ld.so; fi
 	@cp -r build/sdk/include/. $(BUILD_DIR)/initrd/usr/include/
 
 	@printf "$(YELLOW)[COPY]$(RESET) Documentation...\n"

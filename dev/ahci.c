@@ -227,13 +227,13 @@ static int ahci_identify(int port_num, uint32_t *sectors, char *model) {
 
 static int ahci_fill_prdt(HBA_CMD_TBL *cmd_tbl, const void *buffer,
                           uint32_t byte_count) {
-    uint64_t pml4 = paging_get_pml4_phys();
+    mmu_context_t *ctx = mmu_get_current_context();
     uint64_t buf_addr = (uint64_t)buffer;
     uint32_t remaining = byte_count;
     int prd_idx = 0;
 
     while (remaining > 0 && prd_idx < AHCI_MAX_PRDT) {
-        uint64_t phys = paging_virt2phys(pml4, buf_addr);
+        uint64_t phys = mmu_virt_to_phys(ctx, buf_addr);
         if (!phys)
             return -1;
 
@@ -576,6 +576,7 @@ void ahci_init(void) {
 
     for (int i = 0; i < 32; i++) {
         ports[i].active = false;
+        if (!(pi & (1 << i))) continue;
 
         HBA_PORT *port = &abar->ports[i];
         ports[i].lock = SPINLOCK_INIT;

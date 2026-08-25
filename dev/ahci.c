@@ -5,6 +5,7 @@
 #include "pci.h"
 #include "disk.h"
 #include "slab.h"
+#include "pmm.h"
 #include "mmu.h"
 #include "io.h"
 #include <stddef.h>
@@ -93,30 +94,27 @@ static void ahci_port_rebase(ahci_port_state_t *ps) {
 
     ahci_stop_cmd(port);
 
-    // Allocate command list (1KB, 1024-byte aligned)
-    ps->cmd_list = (HBA_CMD_HEADER*)kmalloc_aligned(1024, 1024);
-    if (!ps->cmd_list) return;
-    memset(ps->cmd_list, 0, 1024);
+    page_t *cl_page = pmm_alloc_page(PAGE_FLAG_DMA32 | PAGE_FLAG_KERNEL | PAGE_FLAG_ZERO);
+    if (!cl_page) return;
+    ps->cmd_list = (HBA_CMD_HEADER*)p2v(pmm_page_to_paddr(cl_page));
 
-    uint64_t clb_phys = v2p((uint64_t)ps->cmd_list);
+    uint64_t clb_phys = pmm_page_to_paddr(cl_page);
     port->clb = (uint32_t)(clb_phys & 0xFFFFFFFF);
     port->clbu = (uint32_t)(clb_phys >> 32);
 
-    // Allocate FIS receive area (256 bytes, 256-byte aligned)
-    ps->fis_base = kmalloc_aligned(256, 256);
-    if (!ps->fis_base) return;
-    memset(ps->fis_base, 0, 256);
+    page_t *fb_page = pmm_alloc_page(PAGE_FLAG_DMA32 | PAGE_FLAG_KERNEL | PAGE_FLAG_ZERO);
+    if (!fb_page) return;
+    ps->fis_base = (void*)p2v(pmm_page_to_paddr(fb_page));
 
-    uint64_t fb_phys = v2p((uint64_t)ps->fis_base);
+    uint64_t fb_phys = pmm_page_to_paddr(fb_page);
     port->fb = (uint32_t)(fb_phys & 0xFFFFFFFF);
     port->fbu = (uint32_t)(fb_phys >> 32);
 
-    int cmd_tbl_size = sizeof(HBA_CMD_TBL) + AHCI_MAX_PRDT * sizeof(HBA_PRDT_ENTRY);
-    ps->cmd_tbl = (HBA_CMD_TBL*)kmalloc_aligned(cmd_tbl_size, 256);
-    if (!ps->cmd_tbl) return;
-    memset(ps->cmd_tbl, 0, cmd_tbl_size);
+    page_t *ct_page = pmm_alloc_order(1, PAGE_FLAG_DMA32 | PAGE_FLAG_KERNEL | PAGE_FLAG_ZERO);
+    if (!ct_page) return;
+    ps->cmd_tbl = (HBA_CMD_TBL*)p2v(pmm_page_to_paddr(ct_page));
 
-    uint64_t ctba_phys = v2p((uint64_t)ps->cmd_tbl);
+    uint64_t ctba_phys = pmm_page_to_paddr(ct_page);
     for (int i = 0; i < 32; i++) {
         ps->cmd_list[i].ctba = (uint32_t)(ctba_phys & 0xFFFFFFFF);
         ps->cmd_list[i].ctbau = (uint32_t)(ctba_phys >> 32);
@@ -156,23 +154,17 @@ static int ahci_identify(int port_num, uint32_t *sectors, char *model) {
     cmd_hdr->w = 0;
     cmd_hdr->prdtl = 1;
 
-    uint8_t *buf = (uint8_t*)kmalloc_aligned(512, 512);
-    if (!buf) {
+    page_t *buf_page = pmm_alloc_page(PAGE_FLAG_DMA32 | PAGE_FLAG_KERNEL | PAGE_FLAG_ZERO);
+    if (!buf_page) {
         spinlock_release_irqrestore(&ps->lock, rflags);
         return -1;
     }
-    memset(buf, 0, 512);
+    uint8_t *buf = (uint8_t*)p2v(pmm_page_to_paddr(buf_page));
 
     HBA_CMD_TBL *cmd_tbl = ps->cmd_tbl;
     memset(cmd_tbl, 0, sizeof(HBA_CMD_TBL) + sizeof(HBA_PRDT_ENTRY));
 
-    uint64_t phys = mmu_virt_to_phys(mmu_get_current_context(), (uintptr_t)buf);
-    if (!phys) {
-        kfree_null(buf);
-        spinlock_release_irqrestore(&ps->lock, rflags);
-        return -1;
-    }
-
+    uint64_t phys = pmm_page_to_paddr(buf_page);
     cmd_tbl->prdt[0].dba = (uint32_t)(phys & 0xFFFFFFFF);
     cmd_tbl->prdt[0].dbau = (uint32_t)(phys >> 32);
     cmd_tbl->prdt[0].dbc = 512 - 1;
@@ -189,14 +181,14 @@ static int ahci_identify(int port_num, uint32_t *sectors, char *model) {
     while (timeout-- > 0) {
         if (!(port->ci & (1 << slot))) break;
         if (port->is & (1 << 30)) {
-            kfree_null(buf);
+            pmm_free_page(buf_page);
             spinlock_release_irqrestore(&ps->lock, rflags);
             return -1;
         }
     }
 
     if (timeout <= 0) {
-        kfree_null(buf);
+        pmm_free_page(buf_page);
         spinlock_release_irqrestore(&ps->lock, rflags);
         return -1;
     }
@@ -220,7 +212,7 @@ static int ahci_identify(int port_num, uint32_t *sectors, char *model) {
         model[i+1] = tmp;
     }
 
-    kfree_null(buf);
+    pmm_free_page(buf_page);
     spinlock_release_irqrestore(&ps->lock, rflags);
     return 0;
 }
@@ -668,14 +660,13 @@ int ahci_flush_cache(int port_num) {
     int slot = ahci_find_free_slot(port);
     if (slot == -1) { spinlock_release_irqrestore(&ps->lock, rflags); return -1; }
 
-    HBA_CMD_HEADER *cmd_header = (HBA_CMD_HEADER*)p2v(port->clb);
-    cmd_header += slot;
+    HBA_CMD_HEADER *cmd_header = &ps->cmd_list[slot];
     cmd_header->cfl = sizeof(FIS_REG_H2D) / 4;
     cmd_header->w = 0;
     cmd_header->prdtl = 0;
 
-    HBA_CMD_TBL *cmd_tbl = (HBA_CMD_TBL*)p2v(cmd_header->ctba);
-    for (int i = 0; i < 256; i++) ((uint8_t*)cmd_tbl)[i] = 0;
+    HBA_CMD_TBL *cmd_tbl = ps->cmd_tbl;
+    memset(cmd_tbl, 0, 256);
 
     FIS_REG_H2D *fis = (FIS_REG_H2D*)(&cmd_tbl->cfis);
     fis->fis_type = FIS_TYPE_REG_H2D;

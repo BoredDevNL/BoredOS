@@ -409,6 +409,8 @@ static void init_memory(void) {
             log_fail("SLAB Allocator unit tests failed");
         }
 
+        graphics_alloc_backing_buffer();
+
         extern void mmu_init(void);
         extern bool mmu_run_tests(void);
         mmu_init();
@@ -537,6 +539,8 @@ static void init_rootfs(void) {
 
         if (d && vol && fs_type && ops) {
             vfs_umount("/");
+            extern void tmpfs_destroy_all(void);
+            tmpfs_destroy_all();
             vfs_mount("/", d->devname, fs_type, ops, vol);
             if (strcmp(fs_type, "fat32") == 0) {
                 fat32_set_root_volume(vol);
@@ -563,6 +567,7 @@ static void init_rootfs(void) {
 
             // Ensure runtime directories and /tmp tmpfs exist on the new root
             vfs_mkdir("/tmp");
+            tmpfs_init();
             vfs_mount("/tmp", "tmpfs", "tmpfs", tmpfs_get_ops(), NULL);
             vfs_mkdir("/var");
             vfs_mkdir("/var/run");
@@ -701,12 +706,8 @@ static void init_tty(void) {
      * says something about the devs that came up with it, hm?*/
     process_create_elf("/bin/job_applications.elf", "", false, -1);
 
-    // Spawn shells for all 10 TTYs
-    for (int i = 0; i < TTY_COUNT; i++) {
-        char args[32];
-        itoa(i + 1, args);
-        process_create_elf("/bin/bsh.elf", args, true, i);
-    }
+    // Spawn shell on active TTY 0 on boot (secondary TTYs spawned on demand)
+    process_create_elf("/bin/bsh.elf", "1", true, 0);
 }
 
 void kmain(void) {

@@ -490,7 +490,31 @@ static vfs_fs_ops_t tmpfs_ops = {
 };
 
 void tmpfs_init(void) {
-    tmpfs_root = tmpfs_alloc_inode("", true);
+    if (!tmpfs_root) {
+        tmpfs_root = tmpfs_alloc_inode("", true);
+    }
+}
+
+static void tmpfs_free_tree(tmpfs_inode_t *node) {
+    if (!node) return;
+    tmpfs_inode_t *child = node->children;
+    while (child) {
+        tmpfs_inode_t *next = child->next;
+        tmpfs_free_tree(child);
+        child = next;
+    }
+    pagecache_truncate_range(&node->i_mapping, 0);
+    address_space_destroy(&node->i_mapping);
+    kfree(node);
+}
+
+void tmpfs_destroy_all(void) {
+    uint64_t flags = spinlock_acquire_irqsave(&tmpfs_lock);
+    if (tmpfs_root) {
+        tmpfs_free_tree(tmpfs_root);
+        tmpfs_root = NULL;
+    }
+    spinlock_release_irqrestore(&tmpfs_lock, flags);
 }
 
 vfs_fs_ops_t *tmpfs_get_ops(void) {

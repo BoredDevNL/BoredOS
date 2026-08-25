@@ -20,24 +20,33 @@ static DirtyRect g_dirty = {0, 0, 0, 0, false};
 extern void serial_write(const char *str);
 
 static int g_color_mode = 0;
-#define MAX_FB_WIDTH 2048
-#define MAX_FB_HEIGHT 2048
-static uint32_t g_back_buffer[MAX_FB_WIDTH * MAX_FB_HEIGHT] __attribute__((aligned(4096)));
+static uint32_t *g_back_buffer = NULL;
+static size_t g_back_buffer_size = 0;
 
 extern uint32_t smp_this_cpu_id(void);
 
 void graphics_init(struct limine_framebuffer *fb) {
     g_fb = fb;
     g_dirty.active = false;
-    memset(g_back_buffer, 0, sizeof(g_back_buffer));
+    if (fb && fb->width > 0 && fb->height > 0) {
+        g_back_buffer_size = (size_t)fb->width * (size_t)fb->height * sizeof(uint32_t);
+        g_back_buffer_size = (g_back_buffer_size + 4095) & ~4095ULL;
+    }
 }
 
+void graphics_alloc_backing_buffer(void) {
+    if (g_fb && !g_back_buffer && g_back_buffer_size > 0) {
+        g_back_buffer = (uint32_t *)kmalloc_aligned(g_back_buffer_size, 4096);
+        if (g_back_buffer) {
+            memset(g_back_buffer, 0, g_back_buffer_size);
+        }
+    }
+}
 
 void graphics_update_resolution(int width, int height, int bpp, void* fb_addr, int color_mode) {
     if (!g_fb) return;
     
-    uint64_t rflags;
-    asm volatile("pushfq; pop %0; cli" : "=r"(rflags));
+    uint64_t rflags = irq_save();
     
     g_fb->width = width;
     g_fb->height = height;
@@ -46,15 +55,21 @@ void graphics_update_resolution(int width, int height, int bpp, void* fb_addr, i
     g_fb->address = fb_addr;
     g_color_mode = color_mode;
     
-    // Clear back buffer
-    for (int i = 0; i < MAX_FB_WIDTH * MAX_FB_HEIGHT; i++) {
-        g_back_buffer[i] = 0;
+    if (g_back_buffer) {
+        kfree(g_back_buffer);
+        g_back_buffer = NULL;
+    }
+    g_back_buffer_size = (size_t)width * (size_t)height * sizeof(uint32_t);
+    g_back_buffer_size = (g_back_buffer_size + 4095) & ~4095ULL;
+    g_back_buffer = (uint32_t *)kmalloc_aligned(g_back_buffer_size, 4096);
+    if (g_back_buffer) {
+        memset(g_back_buffer, 0, g_back_buffer_size);
     }
     
     // Clear dirty rect
     g_dirty.active = false;
     
-    asm volatile("push %0; popfq" : : "r"(rflags));
+    irq_restore(rflags);
 }
 
 
@@ -103,7 +118,7 @@ framebuffer_info_t graphics_get_fb_params(void) {
 framebuffer_info_t graphics_get_fb_backing_params(void) {
     framebuffer_info_t info = {0};
     if (g_fb) {
-        info.address = g_back_buffer;
+        info.address = g_back_buffer ? (void*)g_back_buffer : g_fb->address;
         info.width = g_fb->width;
         info.height = g_fb->height;
         info.pitch = g_fb->pitch;
@@ -207,14 +222,18 @@ void graphics_clear_dirty_no_lock(void) {
 void put_pixel(int x, int y, uint32_t color) {
     if (!g_fb) return;
     if (x < 0 || x >= (int)g_fb->width || y < 0 || y >= (int)g_fb->height) return;
+    uint32_t *bb = g_back_buffer ? g_back_buffer : (uint32_t *)g_fb->address;
+    if (!bb) return;
     uint32_t pixel_offset = y * g_fb->width + x;
-    g_back_buffer[pixel_offset] = color;
+    bb[pixel_offset] = color;
 }
 
 uint32_t graphics_get_pixel(int x, int y) {
     if (!g_fb) return 0;
     if (x < 0 || x >= (int)g_fb->width || y < 0 || y >= (int)g_fb->height) return 0;
-    return g_back_buffer[y * g_fb->width + x];
+    uint32_t *bb = g_back_buffer ? g_back_buffer : (uint32_t *)g_fb->address;
+    if (!bb) return 0;
+    return bb[y * g_fb->width + x];
 }
 
 void draw_rect(int x, int y, int w, int h, uint32_t color) {
@@ -229,8 +248,11 @@ void draw_rect(int x, int y, int w, int h, uint32_t color) {
 
     if (x1 >= x2 || y1 >= y2) return;
 
+    uint32_t *bb = g_back_buffer ? g_back_buffer : (uint32_t *)g_fb->address;
+    if (!bb) return;
+
     for (int i = y1; i < y2; i++) {
-        uint32_t *row = &g_back_buffer[i * g_fb->width + x1];
+        uint32_t *row = &bb[i * g_fb->width + x1];
         int len = x2 - x1;
         for (int j = 0; j < len; j++) {
             row[j] = color;
@@ -275,7 +297,8 @@ void draw_string(int x, int y, const char *s, uint32_t color) {
 // Double buffering functions
 void graphics_clear_back_buffer(uint32_t color) {
     if (!g_fb) return;
-    uint32_t *buf = g_back_buffer;
+    uint32_t *buf = g_back_buffer ? g_back_buffer : (uint32_t *)g_fb->address;
+    if (!buf) return;
     for (int i = 0; i < (int)g_fb->width * (int)g_fb->height; i++) {
         *buf++ = color;
     }
@@ -288,7 +311,8 @@ void graphics_flip_buffer(void) {
     if (!g_in_panic && !tty_get_blit_enabled()) return;
 
     uint64_t flags = spinlock_acquire_irqsave(&graphics_lock);
-    if (!g_dirty.active) {
+    if (!g_dirty.active || !g_back_buffer) {
+        g_dirty.active = false;
         spinlock_release_irqrestore(&graphics_lock, flags);
         return;
     }
@@ -376,10 +400,15 @@ void graphics_copy_screenbuffer(uint32_t *dest) {
 
     int sw = (int)g_fb->width;
     int sh = (int)g_fb->height;
+    uint32_t *src_buf = g_back_buffer ? g_back_buffer : (uint32_t *)g_fb->address;
+    if (!src_buf) {
+        spinlock_release_irqrestore(&graphics_lock, rflags);
+        return;
+    }
     
     // Copy from the composition back buffer, applying color mode transformations if necessary
     for (int y = 0; y < sh; y++) {
-        uint32_t *src_row = &g_back_buffer[y * sw];
+        uint32_t *src_row = &src_buf[y * sw];
         for (int x = 0; x < sw; x++) {
             uint32_t px = src_row[x];
             
@@ -416,7 +445,7 @@ void graphics_copy_screenbuffer(uint32_t *dest) {
 }
 
 void graphics_present_framebuffer(void) {
-    if (!g_fb) return;
+    if (!g_fb || !g_back_buffer) return;
     uint64_t flags = spinlock_acquire_irqsave(&graphics_lock);
     DirtyRect dr = g_dirty;
     if (g_dirty.active) {
@@ -430,7 +459,7 @@ void graphics_present_framebuffer(void) {
         sw = dr.w;
         sh = dr.h;
         if (sx < 0) { sw += sx; sx = 0; }
-        if (sy < 0) { sh += sy; sy = 0; }
+        if (sy < 0) { sy += sy; sy = 0; }
         if (sx + sw > (int)g_fb->width) sw = g_fb->width - sx;
         if (sy + sh > (int)g_fb->height) sh = g_fb->height - sy;
         if (sw <= 0 || sh <= 0) {
@@ -533,9 +562,11 @@ void graphics_scroll_back_buffer(int lines) {
 
     int sw = (int)g_fb->width;
     int sh = (int)g_fb->height;
-    
-    memcpy(g_back_buffer, &g_back_buffer[lines * sw], (size_t)(sh - lines) * sw * sizeof(uint32_t));
-    memset(&g_back_buffer[(sh - lines) * sw], 0, (size_t)lines * sw * sizeof(uint32_t));
+    uint32_t *bb = g_back_buffer ? g_back_buffer : (uint32_t *)g_fb->address;
+    if (bb) {
+        memcpy(bb, &bb[lines * sw], (size_t)(sh - lines) * sw * sizeof(uint32_t));
+        memset(&bb[(sh - lines) * sw], 0, (size_t)lines * sw * sizeof(uint32_t));
+    }
     
     spinlock_release_irqrestore(&graphics_lock, rflags);
 }

@@ -26,6 +26,7 @@ typedef struct tmpfs_file_handle {
 } tmpfs_file_handle_t;
 
 void tmpfs_init(void);
+void tmpfs_destroy_all(void);
 vfs_fs_ops_t *tmpfs_get_ops(void);
 
 #endif // BOREDOS_TMPFS_H

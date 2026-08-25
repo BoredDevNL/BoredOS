@@ -64,7 +64,7 @@ void tty_init(void) {
         g_ttys[i].used = true;
         g_ttys[i].width = w;
         g_ttys[i].height = h;
-        g_ttys[i].grid = (tty_cell_t *)kmalloc(cols * rows * sizeof(tty_cell_t));
+        g_ttys[i].grid = (i == 0) ? (tty_cell_t *)kmalloc(cols * rows * sizeof(tty_cell_t)) : NULL;
         g_ttys[i].dirty = true;
         g_ttys[i].cursor_x = 0;
         g_ttys[i].cursor_y = 0;
@@ -81,10 +81,12 @@ void tty_init(void) {
         g_ttys[i].utf8_codepoint = 0;
         g_ttys[i].lock = SPINLOCK_INIT;
         
-        for (int j = 0; j < cols * rows; j++) {
-            g_ttys[i].grid[j].codepoint = ' ';
-            g_ttys[i].grid[j].fg = 0xFFFFFFFF;
-            g_ttys[i].grid[j].bg = 0xFF000000;
+        if (g_ttys[i].grid) {
+            for (int j = 0; j < cols * rows; j++) {
+                g_ttys[i].grid[j].codepoint = ' ';
+                g_ttys[i].grid[j].fg = 0xFFFFFFFF;
+                g_ttys[i].grid[j].bg = 0xFF000000;
+            }
         }
         tty_queue_init(&g_ttys[i].key_queue);
         tty_queue_init(&g_ttys[i].mouse_queue);
@@ -95,17 +97,41 @@ void tty_init(void) {
     g_active_tty = 0;
 }
 
+static void ensure_tty_grid(tty_t *t) {
+    if (!t || t->grid) return;
+    int cols = t->width / 8;
+    int rows = t->height / 8;
+    t->grid = (tty_cell_t *)kmalloc(cols * rows * sizeof(tty_cell_t));
+    if (t->grid) {
+        for (int j = 0; j < cols * rows; j++) {
+            t->grid[j].codepoint = ' ';
+            t->grid[j].fg = t->fg_color ? t->fg_color : 0xFFFFFFFF;
+            t->grid[j].bg = t->bg_color ? t->bg_color : 0xFF000000;
+        }
+        t->dirty = true;
+    }
+}
+
 tty_t* tty_get(int id) {
     if (id < 0 || id >= TTY_COUNT) return NULL;
+    ensure_tty_grid(&g_ttys[id]);
     return &g_ttys[id];
 }
 
 void tty_switch(int id) {
     if (id < 0 || id >= TTY_COUNT) return;
+    ensure_tty_grid(&g_ttys[id]);
     uint64_t flags = spinlock_acquire_irqsave(&g_tty_global_lock);
     g_active_tty = id;
     g_ttys[id].dirty = true;
+    int fg_pid = g_ttys[id].fg_pid;
     spinlock_release_irqrestore(&g_tty_global_lock, flags);
+
+    if (fg_pid <= 0) {
+        char args[32];
+        itoa(id + 1, args);
+        process_create_elf("/bin/bsh.elf", args, true, id);
+    }
 }
 
 int tty_get_active_id(void) {

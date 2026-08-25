@@ -86,21 +86,14 @@ static page_table_t *alloc_table_frame(uintptr_t *out_phys) {
         if (out_phys) *out_phys = phys;
         return table;
     }
-
-    extern void *kmalloc_aligned(size_t size, size_t alignment);
-    void *ptr = kmalloc_aligned(PAGE_SIZE, PAGE_SIZE);
-    if (!ptr) return NULL;
-    memset(ptr, 0, PAGE_SIZE);
-    if (out_phys) *out_phys = v2p((uintptr_t)ptr);
-    return (page_table_t *)ptr;
+    return NULL;
 }
 
 static void free_table_frame(uintptr_t phys) {
+    if (!phys) return;
     page_t *p = pmm_paddr_to_page(phys);
-    if (p && !(p->flags & (PAGE_FLAG_SLAB | PAGE_FLAG_KMALLOC_LARGE))) {
+    if (p && !(p->flags & (PAGE_FLAG_FREE | PAGE_FLAG_RESERVED))) {
         pmm_free_page(p);
-    } else {
-        kfree((void *)p2v(phys));
     }
 }
 
@@ -160,38 +153,15 @@ mmu_context_t *mmu_create_context(void) {
 }
 
 static void destroy_pt(uintptr_t pt_phys) {
-    page_table_t *pt = (page_table_t *)p2v(pt_phys);
-    extern page_t *vmm_get_zero_page(void);
-    page_t *zero_pg = vmm_get_zero_page();
-    for (int i = 0; i < 512; i++) {
-        uint64_t pte = pt->entries[i];
-        if (pte & PT_PRESENT) {
-            uintptr_t paddr = pte & PT_ADDR_MASK;
-            page_t *p = pmm_paddr_to_page(paddr);
-            if (p && p != zero_pg && !(p->flags & (PAGE_FLAG_FREE | PAGE_FLAG_RESERVED | PAGE_FLAG_SLAB | PAGE_FLAG_KMALLOC_LARGE))) {
-                pmm_free_page(p);
-            }
-        }
-    }
     free_table_frame(pt_phys);
 }
 
 static void destroy_pd(uintptr_t pd_phys) {
     page_table_t *pd = (page_table_t *)p2v(pd_phys);
-    extern page_t *vmm_get_zero_page(void);
-    page_t *zero_pg = vmm_get_zero_page();
     for (int i = 0; i < 512; i++) {
         uint64_t pde = pd->entries[i];
-        if (pde & PT_PRESENT) {
-            if (pde & PT_HUGE) {
-                uintptr_t paddr = pde & PT_ADDR_MASK;
-                page_t *p = pmm_paddr_to_page(paddr);
-                if (p && p != zero_pg && !(p->flags & (PAGE_FLAG_FREE | PAGE_FLAG_RESERVED | PAGE_FLAG_SLAB | PAGE_FLAG_KMALLOC_LARGE))) {
-                    pmm_free_pages(p, 512);
-                }
-            } else {
-                destroy_pt(pde & PT_ADDR_MASK);
-            }
+        if ((pde & PT_PRESENT) && !(pde & PT_HUGE)) {
+            destroy_pt(pde & PT_ADDR_MASK);
         }
     }
     free_table_frame(pd_phys);
@@ -199,20 +169,10 @@ static void destroy_pd(uintptr_t pd_phys) {
 
 static void destroy_pdpt(uintptr_t pdpt_phys) {
     page_table_t *pdpt = (page_table_t *)p2v(pdpt_phys);
-    extern page_t *vmm_get_zero_page(void);
-    page_t *zero_pg = vmm_get_zero_page();
     for (int i = 0; i < 512; i++) {
         uint64_t pdpte = pdpt->entries[i];
-        if (pdpte & PT_PRESENT) {
-            if (pdpte & PT_HUGE) {
-                uintptr_t paddr = pdpte & PT_ADDR_MASK;
-                page_t *p = pmm_paddr_to_page(paddr);
-                if (p && p != zero_pg && !(p->flags & (PAGE_FLAG_FREE | PAGE_FLAG_RESERVED | PAGE_FLAG_SLAB | PAGE_FLAG_KMALLOC_LARGE))) {
-                    pmm_free_pages(p, 512 * 512);
-                }
-            } else {
-                destroy_pd(pdpte & PT_ADDR_MASK);
-            }
+        if ((pdpte & PT_PRESENT) && !(pdpte & PT_HUGE)) {
+            destroy_pd(pdpte & PT_ADDR_MASK);
         }
     }
     free_table_frame(pdpt_phys);

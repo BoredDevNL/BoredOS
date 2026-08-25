@@ -171,6 +171,19 @@ void vmm_destroy_space(vmm_space_t *space) {
     vm_area_t *curr = space->vma_head;
     while (curr) {
         vm_area_t *next = curr->next;
+        if (curr->type == VMA_TYPE_ANON && !(curr->flags & VMA_FLAG_SHARED)) {
+            size_t page_count = (curr->end - curr->start) >> 12;
+            for (size_t i = 0; i < page_count; i++) {
+                uintptr_t v = curr->start + (i << 12);
+                uintptr_t p = mmu_virt_to_phys(space->mmu_ctx, v);
+                if (p) {
+                    page_t *pg = pmm_paddr_to_page(p);
+                    if (pg && pg != zero_page_desc && !(pg->flags & (PAGE_FLAG_FREE | PAGE_FLAG_SLAB | PAGE_FLAG_KMALLOC_LARGE))) {
+                        pmm_free_page(pg);
+                    }
+                }
+            }
+        }
         vma_destroy(curr);
         curr = next;
     }
@@ -230,9 +243,14 @@ void *vmm_map(vmm_space_t *space, uintptr_t hint, size_t length, uint32_t prot, 
 
     vmm_down_write(&space->mmap_sem);
 
-    if (start == 0 || (start < space->mmap_base) || (start + aligned_len > space->mmap_end)) {
+    if (start == 0) {
         start = vma_find_unmapped_area(&space->vma_tree, space->mmap_base, space->mmap_end, aligned_len, PAGE_SIZE);
         if (start == 0) {
+            vmm_up_write(&space->mmap_sem);
+            return NULL;
+        }
+    } else {
+        if (start < 0x10000 || start + aligned_len > space->mmap_end) {
             vmm_up_write(&space->mmap_sem);
             return NULL;
         }
@@ -243,8 +261,9 @@ void *vmm_map(vmm_space_t *space, uintptr_t hint, size_t length, uint32_t prot, 
     if (prot & MMU_PROT_WRITE) vma_flags |= VMA_FLAG_WRITE;
     if (prot & MMU_PROT_EXEC)  vma_flags |= VMA_FLAG_EXEC;
     if (flags & MMU_FLAG_COW)  vma_flags |= VMA_FLAG_COW;
+    if (flags & VMA_FLAG_SHARED) vma_flags |= VMA_FLAG_SHARED;
 
-    uint32_t vma_type = file ? VMA_TYPE_FILE : VMA_TYPE_ANON;
+    uint32_t vma_type = file ? ((flags & VMA_FLAG_SHARED) ? VMA_TYPE_SHM : VMA_TYPE_FILE) : VMA_TYPE_ANON;
     vm_area_t *vma = vma_create(start, start + aligned_len, vma_type, vma_flags);
     if (!vma) {
         vmm_up_write(&space->mmap_sem);
@@ -280,6 +299,24 @@ int vmm_unmap(vmm_space_t *space, uintptr_t addr, size_t length) {
             continue;
         }
 
+        bool is_private_anon = (curr->type == VMA_TYPE_ANON) && !(curr->flags & VMA_FLAG_SHARED);
+        uintptr_t unmap_start = (curr->start > addr) ? curr->start : addr;
+        uintptr_t unmap_end = (curr->end < end) ? curr->end : end;
+
+        if (is_private_anon) {
+            size_t pages = (unmap_end - unmap_start) >> 12;
+            for (size_t i = 0; i < pages; i++) {
+                uintptr_t v = unmap_start + (i << 12);
+                uintptr_t p = mmu_virt_to_phys(space->mmu_ctx, v);
+                if (p) {
+                    page_t *pg = pmm_paddr_to_page(p);
+                    if (pg && pg != zero_page_desc && !(pg->flags & (PAGE_FLAG_FREE | PAGE_FLAG_SLAB | PAGE_FLAG_KMALLOC_LARGE))) {
+                        pmm_free_page(pg);
+                    }
+                }
+            }
+        }
+
         if (curr->start >= addr && curr->end <= end) {
             vma_remove(&space->vma_head, &space->vma_tree, curr);
             vma_destroy(curr);
@@ -311,17 +348,6 @@ int vmm_unmap(vmm_space_t *space, uintptr_t addr, size_t length) {
     }
 
     size_t page_count = aligned_len >> 12;
-    for (size_t i = 0; i < page_count; i++) {
-        uintptr_t v = addr + (i << 12);
-        uintptr_t p = mmu_virt_to_phys(space->mmu_ctx, v);
-        if (p) {
-            page_t *pg = pmm_paddr_to_page(p);
-            if (pg && pg != zero_page_desc && !(pg->flags & (PAGE_FLAG_SLAB | PAGE_FLAG_KMALLOC_LARGE))) {
-                pmm_free_page(pg);
-            }
-        }
-    }
-
     mmu_unmap_pages(space->mmu_ctx, addr, page_count);
     mmu_tlb_shootdown_target(__atomic_load_n(&space->active_cpus, __ATOMIC_SEQ_CST), addr, page_count);
 

@@ -11,6 +11,7 @@
 #include "errno.h"
 
 #include "mmu.h"
+#include "pmm.h"
 #include "vmm.h"
 #include "vma.h"
 
@@ -61,7 +62,7 @@ static bool is_valid_user_ptr(const void *ptr, size_t size) {
 
   if (proc->vmm_space) {
     for (uint64_t p = page_start; p <= page_end; p += 4096) {
-      if (mmu_virt_to_phys(proc->vmm_space ? proc->vmm_space->mmu_ctx : &(mmu_context_t){ .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT }, p) == 0) {
+      if (mmu_virt_to_phys(proc->vmm_space->mmu_ctx, p) == 0) {
         if (!vma_find(&proc->vmm_space->vma_tree, p)) {
           return false;
         }
@@ -73,8 +74,9 @@ static bool is_valid_user_ptr(const void *ptr, size_t size) {
 
   if (!proc->pml4_phys) return false;
 
+  mmu_context_t ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
   for (uint64_t p = page_start; p <= page_end; p += 4096) {
-    if (mmu_virt_to_phys(proc->vmm_space ? proc->vmm_space->mmu_ctx : &(mmu_context_t){ .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT }, p) == 0) {
+    if (mmu_virt_to_phys(&ctx, p) == 0) {
       return false;
     }
     if (p == page_end) break;
@@ -92,12 +94,15 @@ static bool is_valid_user_string(const char *str, size_t max_len) {
   if (!proc->is_user) return true;
   if (!proc->pml4_phys) return false;
 
+  mmu_context_t ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
+  mmu_context_t *uctx = (proc->vmm_space && proc->vmm_space->mmu_ctx) ? proc->vmm_space->mmu_ctx : &ctx;
+
   for (size_t i = 0; i < max_len; i++) {
     uint64_t cur_addr = addr + i;
     if (cur_addr >= 0xFFFF800000000000ULL) return false;
     if ((cur_addr & 0xFFF) == 0 || i == 0) {
       uint64_t p = cur_addr & ~0xFFFULL;
-      if (mmu_virt_to_phys(proc->vmm_space ? proc->vmm_space->mmu_ctx : &(mmu_context_t){ .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT }, p) == 0) {
+      if (mmu_virt_to_phys(uctx, p) == 0) {
         if (!proc->vmm_space || !vma_find(&proc->vmm_space->vma_tree, p)) {
           return false;
         }
@@ -1837,9 +1842,77 @@ static uint64_t handle_sys_brk(const syscall_args_t *args) {
 #define MAP_SHARED 0x01
 #define MAP_PRIVATE 0x02
 #define MAP_FIXED 0x10
+#define MAP_FIXED 0x10
 #define MAP_ANONYMOUS 0x20
 #define MAP_FAILED ((void *)-1)
 
+
+typedef struct vfs_page_cache_node {
+    void *mount_or_fs;
+    void *fs_handle;
+    uint64_t offset;
+    uintptr_t phys_addr;
+    struct vfs_page_cache_node *next;
+} vfs_page_cache_node_t;
+
+#define VFS_PAGE_CACHE_BUCKETS 512
+static vfs_page_cache_node_t *vfs_page_cache_table[VFS_PAGE_CACHE_BUCKETS] = {NULL};
+static spinlock_t vfs_page_cache_lock = SPINLOCK_INIT;
+
+static uintptr_t vfs_get_cached_page(vfs_file_t *file, uint64_t offset, uint64_t file_size) {
+    if (!file || !file->fs_handle) return 0;
+    uint32_t bucket = (((uintptr_t)file->fs_handle >> 4) ^ (offset >> 12)) % VFS_PAGE_CACHE_BUCKETS;
+
+    uint64_t flags = spinlock_acquire_irqsave(&vfs_page_cache_lock);
+    vfs_page_cache_node_t *node = vfs_page_cache_table[bucket];
+    while (node) {
+        if (node->mount_or_fs == file->mount && node->fs_handle == file->fs_handle && node->offset == offset) {
+            uintptr_t paddr = node->phys_addr;
+            spinlock_release_irqrestore(&vfs_page_cache_lock, flags);
+            return paddr;
+        }
+        node = node->next;
+    }
+    spinlock_release_irqrestore(&vfs_page_cache_lock, flags);
+
+    page_t *pg = pmm_alloc_page(PAGE_FLAG_ZERO);
+    if (!pg) return 0;
+    uintptr_t phys = pmm_page_to_paddr(pg);
+    extern uint64_t p2v(uint64_t phys);
+    void *kptr = (void *)p2v(phys);
+    memset(kptr, 0, 4096);
+
+    if (offset < file_size) {
+        size_t to_read = (file_size - offset > 4096) ? 4096 : (size_t)(file_size - offset);
+        vfs_seek(file, (int64_t)offset, 0);
+        vfs_read(file, kptr, to_read);
+    }
+
+    flags = spinlock_acquire_irqsave(&vfs_page_cache_lock);
+    node = vfs_page_cache_table[bucket];
+    while (node) {
+        if (node->mount_or_fs == file->mount && node->fs_handle == file->fs_handle && node->offset == offset) {
+            uintptr_t paddr = node->phys_addr;
+            spinlock_release_irqrestore(&vfs_page_cache_lock, flags);
+            pmm_free_page(pg);
+            return paddr;
+        }
+        node = node->next;
+    }
+
+    vfs_page_cache_node_t *new_node = (vfs_page_cache_node_t *)kmalloc(sizeof(vfs_page_cache_node_t));
+    if (new_node) {
+        new_node->mount_or_fs = file->mount;
+        new_node->fs_handle = file->fs_handle;
+        new_node->offset = offset;
+        new_node->phys_addr = phys;
+        new_node->next = vfs_page_cache_table[bucket];
+        vfs_page_cache_table[bucket] = new_node;
+    }
+    spinlock_release_irqrestore(&vfs_page_cache_lock, flags);
+
+    return phys;
+}
 
 static uint64_t handle_sys_mmap(const syscall_args_t *args) {
   process_t *proc = process_get_current();
@@ -1852,11 +1925,18 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
   int flags = (int)args->arg4;
   int fd = (int)args->arg5;
   uint64_t offset = args->arg6;
-  (void)offset;
 
   if (length == 0)
     return (uint64_t)MAP_FAILED;
   uint64_t aligned_len = (length + 4095) & ~4095ULL;
+
+  if (flags & MAP_FIXED) {
+    if (addr < 0x10000 || addr + aligned_len > 0x00007FFFFFF00000ULL)
+      return (uint64_t)MAP_FAILED;
+    if (proc->vmm_space) {
+      vmm_unmap(proc->vmm_space, addr, aligned_len);
+    }
+  }
 
   if (flags & MAP_ANONYMOUS) {
     if (proc->vmm_space) {
@@ -1876,9 +1956,14 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
     proc->mmap_current += aligned_len;
   }
 
-  uint64_t pt_flags = PT_PRESENT | PT_USER;
+  uint32_t map_prot = MMU_PROT_READ | MMU_PROT_USER;
   if (prot & PROT_WRITE)
-    pt_flags |= PT_RW;
+    map_prot |= MMU_PROT_WRITE;
+  if (prot & 0x4)
+    map_prot |= MMU_PROT_EXEC;
+
+  mmu_context_t fallback_ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
+  mmu_context_t *proc_ctx = (proc->vmm_space && proc->vmm_space->mmu_ctx) ? proc->vmm_space->mmu_ctx : &fallback_ctx;
 
   if (flags & MAP_ANONYMOUS) {
     for (uint64_t off = 0; off < aligned_len; off += 4096) {
@@ -1887,10 +1972,7 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
         return (uint64_t)MAP_FAILED;
       memset(phys_page, 0, 4096);
 
-      mmu_context_t fallback_ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
-      mmu_context_t *proc_ctx = (proc->vmm_space && proc->vmm_space->mmu_ctx) ? proc->vmm_space->mmu_ctx : &fallback_ctx;
-      if (mmu_map_page(proc_ctx, virt_addr + off, v2p((uint64_t)phys_page), MMU_PROT_READ | MMU_PROT_WRITE | MMU_PROT_USER) != 0) {
-                      pt_flags)) {
+      if (mmu_map_page(proc_ctx, virt_addr + off, v2p((uint64_t)phys_page), map_prot) != 0) {
         kfree_null(phys_page);
         return (uint64_t)MAP_FAILED;
       }
@@ -1918,7 +2000,7 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
     if (proc->vmm_space) {
       uint32_t mmu_prot = MMU_PROT_READ | MMU_PROT_USER;
       if (prot & PROT_WRITE) mmu_prot |= MMU_PROT_WRITE;
-      void *res = vmm_map(proc->vmm_space, addr, aligned_len, mmu_prot, 0, NULL, 0);
+      void *res = vmm_map(proc->vmm_space, addr, aligned_len, mmu_prot, VMA_FLAG_SHARED, (void *)1, 0);
       if (!res) return (uint64_t)MAP_FAILED;
       virt_addr = (uint64_t)res;
       for (uint64_t off = 0; off < aligned_len; off += 4096) {
@@ -1927,12 +2009,8 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
       return virt_addr;
     }
 
-    uint64_t fb_flags = pt_flags | PT_WRITE_THROUGH;
     for (uint64_t off = 0; off < aligned_len; off += 4096) {
-      mmu_context_t fallback_ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
-      mmu_context_t *proc_ctx = (proc->vmm_space && proc->vmm_space->mmu_ctx) ? proc->vmm_space->mmu_ctx : &fallback_ctx;
-      if (mmu_map_page(proc_ctx, virt_addr + off, phys_addr + off, MMU_PROT_READ | MMU_PROT_WRITE | MMU_PROT_USER | MMU_FLAG_WC) != 0)
-                      fb_flags))
+      if (mmu_map_page(proc_ctx, virt_addr + off, phys_addr + off, map_prot | MMU_FLAG_WC) != 0)
         return (uint64_t)MAP_FAILED;
     }
     return virt_addr;
@@ -1960,7 +2038,7 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
       uint32_t mmu_prot = MMU_PROT_READ | MMU_PROT_USER;
       if (prot & PROT_WRITE) mmu_prot |= MMU_PROT_WRITE;
       if (prot & 0x4)        mmu_prot |= MMU_PROT_EXEC;
-      void *res = vmm_map(proc->vmm_space, addr, aligned_len, mmu_prot, 0, NULL, 0);
+      void *res = vmm_map(proc->vmm_space, addr, aligned_len, mmu_prot, VMA_FLAG_SHARED, (void *)seg, 0);
       if (!res) {
         shm_unref(seg);
         return (uint64_t)MAP_FAILED;
@@ -1994,11 +2072,59 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
     // Map pages covering the requested length
     uint32_t pages_to_map = aligned_len / 4096;
     for (uint32_t i = 0; i < pages_to_map; i++) {
-      mmu_context_t fallback_ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
-      mmu_context_t *proc_ctx = (proc->vmm_space && proc->vmm_space->mmu_ctx) ? proc->vmm_space->mmu_ctx : &fallback_ctx;
-      if (mmu_map_page(proc_ctx, virt_addr + i * 4096, seg->phys_pages[i], MMU_PROT_READ | MMU_PROT_WRITE | MMU_PROT_USER) != 0)
-                      pt_flags))
+      if (mmu_map_page(proc_ctx, virt_addr + i * 4096, seg->phys_pages[i], map_prot) != 0)
         return (uint64_t)MAP_FAILED;
+    }
+    return virt_addr;
+  }
+
+  if (!file->is_device && file->fs_handle) {
+    uint64_t file_size = 0;
+    if (file->mount && file->mount->ops && file->mount->ops->get_size) {
+      file_size = file->mount->ops->get_size(file->fs_handle);
+    }
+
+    if (proc->vmm_space) {
+      uint32_t mmu_prot = MMU_PROT_READ | MMU_PROT_USER;
+      if (prot & PROT_WRITE) mmu_prot |= MMU_PROT_WRITE;
+      if (prot & 0x4)        mmu_prot |= MMU_PROT_EXEC;
+
+      uint32_t vma_flags = VMA_FLAG_READ;
+      if (prot & PROT_WRITE) vma_flags |= VMA_FLAG_WRITE;
+      if (prot & 0x4)        vma_flags |= VMA_FLAG_EXEC;
+      if (flags & MAP_SHARED) vma_flags |= VMA_FLAG_SHARED;
+      else if (!(prot & PROT_WRITE)) vma_flags |= VMA_FLAG_SHARED;
+
+      void *res = vmm_map(proc->vmm_space, addr, aligned_len, mmu_prot, vma_flags, (void *)1, 0);
+      if (!res) return (uint64_t)MAP_FAILED;
+      virt_addr = (uint64_t)res;
+
+      uint32_t pages_to_map = aligned_len / 4096;
+      for (uint32_t i = 0; i < pages_to_map; i++) {
+        uint64_t curr_off = offset + (uint64_t)i * 4096;
+        uintptr_t phys_page = vfs_get_cached_page(file, curr_off, file_size);
+        if (!phys_page) {
+          page_t *p = pmm_alloc_page(PAGE_FLAG_ZERO);
+          if (p) phys_page = pmm_page_to_paddr(p);
+        }
+        if (phys_page) {
+          mmu_map_page(proc->vmm_space->mmu_ctx, virt_addr + (uint64_t)i * 4096, phys_page, mmu_prot);
+        }
+      }
+      return virt_addr;
+    }
+
+    uint32_t pages_to_map = aligned_len / 4096;
+    for (uint32_t i = 0; i < pages_to_map; i++) {
+      uint64_t curr_off = offset + (uint64_t)i * 4096;
+      uintptr_t phys_page = vfs_get_cached_page(file, curr_off, file_size);
+      if (!phys_page) {
+        page_t *p = pmm_alloc_page(PAGE_FLAG_ZERO);
+        if (p) phys_page = pmm_page_to_paddr(p);
+      }
+      if (phys_page) {
+        mmu_map_page(proc_ctx, virt_addr + (uint64_t)i * 4096, phys_page, map_prot);
+      }
     }
     return virt_addr;
   }
@@ -2035,10 +2161,9 @@ static uint64_t handle_sys_munmap(const syscall_args_t *args) {
     return (uint64_t)vmm_unmap(proc->vmm_space, addr, aligned_len);
   }
 
-
+  mmu_context_t fallback_ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
   for (uint64_t off = 0; off < aligned_len; off += 4096) {
     uint64_t vaddr = addr + off;
-    mmu_context_t fallback_ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
     uint64_t phys = mmu_virt_to_phys(&fallback_ctx, vaddr);
     if (phys) {
       bool is_shm = false;
@@ -2058,7 +2183,6 @@ static uint64_t handle_sys_munmap(const syscall_args_t *args) {
         }
       }
     }
-    mmu_context_t fallback_ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
     mmu_unmap_page(&fallback_ctx, vaddr);
   }
 

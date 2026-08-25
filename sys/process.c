@@ -118,10 +118,10 @@ void process_put(process_t *proc) {
         }
         if (proc->user_stack_alloc) {
             if (proc->pml4_phys) {
+                mmu_context_t ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
                 uint64_t stack_top = 0x800000;
                 uint64_t stack_size = 262144;
                 for (uint64_t off = 0; off < stack_size; off += 4096) {
-                    mmu_context_t ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
                     mmu_unmap_page(&ctx, stack_top - stack_size + off);
                 }
             }
@@ -426,9 +426,9 @@ process_t* process_create(void (*entry_point)(void), bool is_user) {
     memset(kernel_stack, 0, 32768);
     
     if (is_user) {
+        mmu_context_t ctx = { .pml4_phys = new_proc->pml4_phys, .lock = SPINLOCK_INIT };
         for (int i = 0; i < 32; i++) {
-            mmu_context_t ctx = { .pml4_phys = new_proc->pml4_phys, .lock = SPINLOCK_INIT };
-            if (mmu_map_page(&ctx, 0x800000 + i*4096, v2p((uint64_t)user_stack + i*4096), MMU_PROT_READ | MMU_PROT_WRITE | MMU_PROT_USER) != 0)
+            if (mmu_map_page(&ctx, 0x800000 + i*4096, v2p((uint64_t)user_stack + i*4096), MMU_PROT_READ | MMU_PROT_WRITE | MMU_PROT_USER) != 0) {
                 kfree_null(user_stack);
                 kfree_null(kernel_stack);
                 process_put(new_proc);
@@ -446,8 +446,7 @@ process_t* process_create(void (*entry_point)(void), bool is_user) {
         }
         for(int i=0; i<128; i++) ((uint8_t*)code)[i] = ((uint8_t*)entry_point)[i];
 
-        mmu_context_t ctx = { .pml4_phys = new_proc->pml4_phys, .lock = SPINLOCK_INIT };
-        if (mmu_map_page(&ctx, 0x400000, v2p((uint64_t)code), MMU_PROT_READ | MMU_PROT_WRITE | MMU_PROT_USER) != 0)
+        if (mmu_map_page(&ctx, 0x400000, v2p((uint64_t)code), MMU_PROT_READ | MMU_PROT_WRITE | MMU_PROT_USER) != 0) {
             kfree_null(code);
             kfree_null(user_stack);
             kfree_null(kernel_stack);
@@ -672,10 +671,8 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
     }
 
     // 2. Load ELF executable
-    size_t elf_load_size = 0;
-    uint64_t phdr_vaddr = 0, phdr_num = 0;
-    uint64_t entry_point = elf_load(filepath, new_proc->pml4_phys, &elf_load_size, new_proc, &phdr_vaddr, &phdr_num);
-    if (entry_point == 0) {
+    elf_load_result_t elf_res;
+    if (!elf_load(filepath, new_proc->pml4_phys, new_proc, &elf_res)) {
         serial_write("[PROC] Failed to load ELF: ");
         serial_write(filepath);
         serial_write("\n");
@@ -694,27 +691,25 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
     new_proc->name[ni] = 0;
     new_proc->ticks = 0;
 
-    // 3. Allocate generic User stack and Kernel stack for interrupts
-    // Increase to 256KB to prevent stack smashing on heavy networking
+    // 3. Allocate generic User stack (initial top 4KB page, rest demand-paged) and Kernel stack for interrupts
     const size_t user_stack_size = 262144;
-    void* stack = kmalloc_aligned(user_stack_size, 4096);
+    void* stack = kmalloc_aligned(4096, 4096);
     void* kernel_stack = kmalloc_aligned(KERNEL_STACK_SIZE, KERNEL_STACK_ALIGNMENT); 
     if (!stack || !kernel_stack) {
         kfree_null(stack);
         kfree_null(kernel_stack);
         return NULL;
     }
-    memset(stack, 0, user_stack_size);
+    memset(stack, 0, 4096);
     memset(kernel_stack, 0, KERNEL_STACK_SIZE); 
     
-    // Map User stack to 0x800000
-    for (uint64_t i = 0; i < (user_stack_size / 4096); i++) {
-        mmu_context_t ctx = { .pml4_phys = new_proc->pml4_phys, .lock = SPINLOCK_INIT };
-        if (mmu_map_page(&ctx, 0x800000 - user_stack_size + (i * 4096), v2p((uint64_t)stack + (i * 4096)), MMU_PROT_READ | MMU_PROT_WRITE | MMU_PROT_USER) != 0)
-            kfree_null(stack);
-            kfree_null(kernel_stack);
-            return NULL;
-        }
+    // Map initial top page of User stack to [0x800000 - 4096 .. 0x800000]
+    mmu_context_t fallback_ctx = { .pml4_phys = new_proc->pml4_phys, .lock = SPINLOCK_INIT };
+    mmu_context_t *proc_ctx = (new_proc->vmm_space && new_proc->vmm_space->mmu_ctx) ? new_proc->vmm_space->mmu_ctx : &fallback_ctx;
+    if (mmu_map_page(proc_ctx, 0x800000 - 4096, v2p((uint64_t)stack), MMU_PROT_READ | MMU_PROT_WRITE | MMU_PROT_USER) != 0) {
+        kfree_null(stack);
+        kfree_null(kernel_stack);
+        return NULL;
     }
 
     if (new_proc->vmm_space) {
@@ -734,7 +729,7 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
     }
 
     int argc = 1;
-    char *args_buf = (char *)stack + user_stack_size;
+    char *args_buf = (char *)stack + 4096;
     uint64_t user_args_buf = 0x800000;
 
     // Copy filepath as argv[0]
@@ -788,28 +783,31 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
     //        [argv[0] ... argv[argc-1]]
     //        [NULL]
     //        [envp[0] = NULL]
-    //        [auxv[0] key = AT_NULL]
-    //        [auxv[0] val = 0]
+    //        [auxv pairs...]
+    //        [auxv terminator: AT_NULL = 0, 0]
     
-    int total_elements = 1 + (argc + 1) + 1 + 14; 
+    int total_elements = 1 + (argc + 1) + 1 + 20; 
     int total_size = total_elements * (int)sizeof(uint64_t);
 
     uint64_t target_sp = (user_args_buf - total_size) & ~15ULL;
     uint64_t current_user_sp = target_sp + total_size;
     
-    args_buf = (char *)((uint64_t)stack + (current_user_sp - (0x800000 - user_stack_size)));
+    args_buf = (char *)((uint64_t)stack + (current_user_sp - (0x800000 - 4096)));
 
     // 1. Push AUXV (mlibc standard entries + AT_NULL terminator)
-    args_buf -= 14 * sizeof(uint64_t);
-    current_user_sp -= 14 * sizeof(uint64_t);
+    args_buf -= 20 * sizeof(uint64_t);
+    current_user_sp -= 20 * sizeof(uint64_t);
     uint64_t *user_auxv = (uint64_t *)args_buf;
-    user_auxv[0] = 9;   user_auxv[1] = entry_point;    // AT_ENTRY
-    user_auxv[2] = 6;   user_auxv[3] = 4096;           // AT_PAGESZ
-    user_auxv[4] = 3;   user_auxv[5] = phdr_vaddr;     // AT_PHDR
-    user_auxv[6] = 4;   user_auxv[7] = 56;             // AT_PHENT (sizeof(Elf64_Phdr))
-    user_auxv[8] = 5;   user_auxv[9] = phdr_num;       // AT_PHNUM
-    user_auxv[10] = 25; user_auxv[11] = user_args_buf; // AT_RANDOM
-    user_auxv[12] = 0;  user_auxv[13] = 0;             // AT_NULL
+    user_auxv[0]  = AT_ENTRY;    user_auxv[1]  = elf_res.exec_entry;
+    user_auxv[2]  = AT_PAGESZ;   user_auxv[3]  = 4096;
+    user_auxv[4]  = AT_PHDR;     user_auxv[5]  = elf_res.phdr_vaddr;
+    user_auxv[6]  = AT_PHENT;    user_auxv[7]  = sizeof(Elf64_Phdr); // 56
+    user_auxv[8]  = AT_PHNUM;    user_auxv[9]  = elf_res.phdr_num;
+    user_auxv[10] = AT_BASE;     user_auxv[11] = elf_res.interp_base;
+    user_auxv[12] = AT_RANDOM;   user_auxv[13] = user_args_buf; // stack entropy
+    user_auxv[14] = AT_EXECFN;   user_auxv[15] = user_args_buf; // filepath on stack
+    user_auxv[16] = AT_SECURE;   user_auxv[17] = 0;
+    user_auxv[18] = AT_NULL;     user_auxv[19] = 0;
 
     // 2. Push ENVP (empty)
     args_buf -= 1 * sizeof(uint64_t);
@@ -835,13 +833,13 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
 
     // 4. Build Stack Frame for context switch via IRETQ
     uint64_t* stack_ptr = (uint64_t*)((uint64_t)kernel_stack + KERNEL_STACK_SIZE);
-    *(--stack_ptr) = 0x1B;            // SS (User Mode Data)
-    *(--stack_ptr) = current_user_sp; // RSP (Updated user stack pointer)
-    *(--stack_ptr) = 0x202;           // RFLAGS (Interrupts Enabled)
-    *(--stack_ptr) = 0x23;            // CS (User Mode Code)
-    *(--stack_ptr) = entry_point;     // RIP
-    *(--stack_ptr) = 0;               // err_code
-    *(--stack_ptr) = 0;               // int_no
+    *(--stack_ptr) = 0x1B;                // SS (User Mode Data)
+    *(--stack_ptr) = current_user_sp;     // RSP (Updated user stack pointer)
+    *(--stack_ptr) = 0x202;               // RFLAGS (Interrupts Enabled)
+    *(--stack_ptr) = 0x23;                // CS (User Mode Code)
+    *(--stack_ptr) = elf_res.entry_point; // RIP (Interpreter entry if dynamic, or binary entry if static)
+    *(--stack_ptr) = 0;                   // err_code
+    *(--stack_ptr) = 0;                   // int_no
     // 15 General purpose registers
     *(--stack_ptr) = 0;                // RAX
     *(--stack_ptr) = 0;                // RBX
@@ -868,7 +866,7 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
     new_proc->kernel_stack_alloc = kernel_stack;
     new_proc->user_stack_alloc = stack;
     new_proc->rsp = (uint64_t)stack_ptr;
-    new_proc->used_memory = elf_load_size + user_stack_size + KERNEL_STACK_SIZE;
+    new_proc->used_memory = elf_res.load_size + user_stack_size + KERNEL_STACK_SIZE;
 
     new_proc->fpu_initialized = true;
 
@@ -1058,11 +1056,13 @@ static void reparent_cb(process_t *proc, void *arg) {
 static void process_release_shm(process_t *proc) {
     for (uint32_t i = 0; i < proc->shm_mapping_count; i++) {
         if (proc->shm_mappings[i].seg) {
-            if (proc->pml4_phys) {
-                uint64_t addr = proc->shm_mappings[i].addr;
-                uint64_t len = proc->shm_mappings[i].length;
+            uint64_t addr = proc->shm_mappings[i].addr;
+            uint64_t len = proc->shm_mappings[i].length;
+            if (proc->vmm_space && proc->vmm_space->mmu_ctx) {
+                mmu_unmap_pages(proc->vmm_space->mmu_ctx, addr, len >> 12);
+            } else if (proc->pml4_phys) {
+                mmu_context_t ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
                 for (uint64_t off = 0; off < len; off += 4096) {
-                    mmu_context_t ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
                     mmu_unmap_page(&ctx, addr + off);
                 }
             }
@@ -1086,8 +1086,8 @@ static void process_cleanup_inner(process_t *proc) {
         for (uint32_t i = 0; i < proc->elf_segment_count; i++) {
             if (proc->elf_segments[i].ptr) {
                 if (proc->pml4_phys) {
+                    mmu_context_t ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
                     for (uint64_t off = 0; off < proc->elf_segments[i].size; off += 4096) {
-                        mmu_context_t ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
                         mmu_unmap_page(&ctx, proc->elf_segments[i].vaddr + off);
                     }
                 }
@@ -1096,7 +1096,6 @@ static void process_cleanup_inner(process_t *proc) {
             }
         }
         proc->elf_segment_count = 0;
-
     }
 
     poll_cleanup(proc);
@@ -1449,9 +1448,9 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
     for (uint32_t i = 0; i < proc->elf_segment_count; i++) {
         if (proc->elf_segments[i].ptr) {
             if (proc->pml4_phys) {
+                mmu_context_t ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
                 for (uint64_t off = 0; off < proc->elf_segments[i].size; off += 4096) {
-                        mmu_context_t ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
-                        mmu_unmap_page(&ctx, proc->elf_segments[i].vaddr + off);
+                    mmu_unmap_page(&ctx, proc->elf_segments[i].vaddr + off);
                 }
             }
             kfree_null(proc->elf_segments[i].ptr);
@@ -1464,51 +1463,45 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
     vmm_space_t *saved_space = proc->vmm_space;
     proc->vmm_space = new_space;
 
-    size_t elf_load_size = 0;
-    uint64_t phdr_vaddr = 0, phdr_num = 0;
-    uint64_t entry_point = elf_load(filepath, new_pml4, &elf_load_size, proc, &phdr_vaddr, &phdr_num);
-    if (entry_point == 0) {
+    elf_load_result_t elf_res;
+    if (!elf_load(filepath, new_pml4, proc, &elf_res)) {
         proc->vmm_space = saved_space;
         if (new_space) {
             vmm_destroy_space(new_space);
-        } else {
-            mmu_context_t ctx = { .pml4_phys = new_pml4, .lock = SPINLOCK_INIT };
-            mmu_destroy_context(&ctx);
+        } else if (fallback_new_ctx) {
+            mmu_destroy_context(fallback_new_ctx);
         }
         return -1;
     }
 
     size_t user_stack_size = 262144;
-    void* stack = kmalloc_aligned(user_stack_size, 4096);
+    void* stack = kmalloc_aligned(4096, 4096);
     if (!stack) {
         proc->vmm_space = saved_space;
         if (new_space) {
             vmm_destroy_space(new_space);
-        } else {
-            mmu_context_t ctx = { .pml4_phys = new_pml4, .lock = SPINLOCK_INIT };
-            mmu_destroy_context(&ctx);
+        } else if (fallback_new_ctx) {
+            mmu_destroy_context(fallback_new_ctx);
         }
         return -1;
     }
+    memset(stack, 0, 4096);
 
-    for (uint64_t i = 0; i < (user_stack_size / 4096); i++) {
-        mmu_context_t stack_ctx = { .pml4_phys = new_pml4, .lock = SPINLOCK_INIT };
-        if (mmu_map_page(&stack_ctx, 0x800000 - user_stack_size + (i * 4096), v2p((uint64_t)stack + (i * 4096)), MMU_PROT_READ | MMU_PROT_WRITE | MMU_PROT_USER) != 0)
-            kfree_null(stack);
-            proc->vmm_space = saved_space;
-            if (new_space) {
-                vmm_destroy_space(new_space);
-            } else {
-            mmu_context_t ctx = { .pml4_phys = new_pml4, .lock = SPINLOCK_INIT };
-            mmu_destroy_context(&ctx);
-            }
-            return -1;
+    mmu_context_t stack_ctx = { .pml4_phys = new_pml4, .lock = SPINLOCK_INIT };
+    if (mmu_map_page(&stack_ctx, 0x800000 - 4096, v2p((uint64_t)stack), MMU_PROT_READ | MMU_PROT_WRITE | MMU_PROT_USER) != 0) {
+        kfree_null(stack);
+        proc->vmm_space = saved_space;
+        if (new_space) {
+            vmm_destroy_space(new_space);
+        } else if (fallback_new_ctx) {
+            mmu_destroy_context(fallback_new_ctx);
         }
+        return -1;
     }
     proc->vmm_space = saved_space;
 
     int argc = 1;
-    char *args_buf = (char *)stack + user_stack_size;
+    char *args_buf = (char *)stack + 4096;
     uint64_t user_args_buf = 0x800000;
 
     int path_len = 0;
@@ -1548,25 +1541,28 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
     }
     argv_ptrs[argc] = 0;
 
-    int total_elements = 1 + (argc + 1) + 1 + 14; 
+    int total_elements = 1 + (argc + 1) + 1 + 20; 
     int total_size = total_elements * (int)sizeof(uint64_t);
 
     uint64_t target_sp = (user_args_buf - total_size) & ~15ULL;
     uint64_t current_user_sp = target_sp + total_size;
     
-    args_buf = (char *)((uint64_t)stack + (current_user_sp - (0x800000 - user_stack_size)));
+    args_buf = (char *)((uint64_t)stack + (current_user_sp - (0x800000 - 4096)));
 
     // 1. Push AUXV (mlibc standard entries + AT_NULL terminator)
-    args_buf -= 14 * sizeof(uint64_t);
-    current_user_sp -= 14 * sizeof(uint64_t);
+    args_buf -= 20 * sizeof(uint64_t);
+    current_user_sp -= 20 * sizeof(uint64_t);
     uint64_t *user_auxv = (uint64_t *)args_buf;
-    user_auxv[0] = 9;   user_auxv[1] = entry_point;    // AT_ENTRY
-    user_auxv[2] = 6;   user_auxv[3] = 4096;           // AT_PAGESZ
-    user_auxv[4] = 3;   user_auxv[5] = phdr_vaddr;     // AT_PHDR
-    user_auxv[6] = 4;   user_auxv[7] = 56;             // AT_PHENT (sizeof(Elf64_Phdr))
-    user_auxv[8] = 5;   user_auxv[9] = phdr_num;       // AT_PHNUM
-    user_auxv[10] = 25; user_auxv[11] = user_args_buf; // AT_RANDOM
-    user_auxv[12] = 0;  user_auxv[13] = 0;             // AT_NULL
+    user_auxv[0]  = AT_ENTRY;    user_auxv[1]  = elf_res.exec_entry;
+    user_auxv[2]  = AT_PAGESZ;   user_auxv[3]  = 4096;
+    user_auxv[4]  = AT_PHDR;     user_auxv[5]  = elf_res.phdr_vaddr;
+    user_auxv[6]  = AT_PHENT;    user_auxv[7]  = sizeof(Elf64_Phdr); // 56
+    user_auxv[8]  = AT_PHNUM;    user_auxv[9]  = elf_res.phdr_num;
+    user_auxv[10] = AT_BASE;     user_auxv[11] = elf_res.interp_base;
+    user_auxv[12] = AT_RANDOM;   user_auxv[13] = user_args_buf; // stack entropy
+    user_auxv[14] = AT_EXECFN;   user_auxv[15] = user_args_buf; // filepath on stack
+    user_auxv[16] = AT_SECURE;   user_auxv[17] = 0;
+    user_auxv[18] = AT_NULL;     user_auxv[19] = 0;
 
     args_buf -= 1 * sizeof(uint64_t);
     current_user_sp -= 1 * sizeof(uint64_t);
@@ -1629,9 +1625,9 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
 
     if (old_stack) {
         if (old_pml4) {
+            mmu_context_t ctx = { .pml4_phys = old_pml4, .lock = SPINLOCK_INIT };
             uint64_t stack_top = 0x800000;
             for (uint64_t off = 0; off < user_stack_size; off += 4096) {
-                mmu_context_t ctx = { .pml4_phys = old_pml4, .lock = SPINLOCK_INIT };
                 mmu_unmap_page(&ctx, stack_top - user_stack_size + off);
             }
         }
@@ -1647,7 +1643,7 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
     proc->fs_base = 0;
     wrmsr(MSR_FS_BASE, 0);
     proc->is_cloned_child = false;
-    proc->used_memory = elf_load_size + user_stack_size + KERNEL_STACK_SIZE;
+    proc->used_memory = elf_res.load_size + user_stack_size + KERNEL_STACK_SIZE;
     proc->heap_start = 0x20000000;
     proc->heap_end = 0x20000000;
     proc->mmap_current = 0x50000000;
@@ -1681,7 +1677,7 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
     }
     proc->name[ni] = 0;
 
-    regs->rip = entry_point;
+    regs->rip = elf_res.entry_point;
     regs->rdi = argc;
     regs->rsi = actual_argv_ptr;
     regs->rsp = current_user_sp;

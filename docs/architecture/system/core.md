@@ -24,7 +24,7 @@ BoredOS boots via **Limine**:
 
 1. **Bootloader**: Limine loads the kernel ELF into higher-half memory, sets up initial page tables, passes framebuffer info, and responds to boot requests (HHDM, SMP, memmap).
 2. **Kernel Entry (`_start` in `core/main.c`)**:
-   - Initializes serial logging and GDT/IDT.
+   - Initializes serial logging (`serial_init()`) and GDT/IDT.
    - Initializes memory: `pmm_init()` -> `slab_init()` -> `mmu_init()` -> `vmm_init()` -> `pagecache_init()`.
    - Initializes BSP SMP state via `smp_init_bsp()`.
    - Initializes ACPI and timer interrupts.
@@ -32,6 +32,7 @@ BoredOS boots via **Limine**:
    - Initializes storage drivers: FAT32, disk manager, AHCI scan.
    - Initializes VFS mounts: `/sys` (sysfs), `/proc` (procfs), `/` (tmpfs), and switches root to disk if specified.
    - Starts the background writeback flusher thread (`flusher_init()`).
+   - Initializes TTYs (10 graphical virtual consoles and 4 serial TTY devices `/dev/ttyS0`..`/dev/ttyS3`), launching interactive shells on `/dev/tty1` in graphical mode or `/dev/ttyS0` in headless mode. See [`tty.md`](tty.md) for detailed architecture.
 3. **AP Bringup**: `smp_init()` boots Application Processors using SIPI sequences. Each core initializes its local GDT, TSS, and idle scheduler loop.
 4. **Userspace Startup**: The kernel loads the init process or shell binary from the filesystem into a userland address space and switches to Ring 3.
 

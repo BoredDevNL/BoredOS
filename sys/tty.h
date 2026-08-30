@@ -21,7 +21,11 @@ struct winsize {
     unsigned short ws_ypixel;
 };
 
-#define TTY_COUNT 10
+#include "serial.h"
+
+#define GRAPHICAL_TTY_COUNT 10
+#define SERIAL_TTY_COUNT 4
+#define TTY_COUNT (GRAPHICAL_TTY_COUNT + SERIAL_TTY_COUNT)
 #define TTY_IN_QUEUE_SIZE 1024
 
 typedef struct {
@@ -40,6 +44,9 @@ typedef struct {
 typedef struct {
     int id;
     bool used;
+    bool is_serial;
+    uint16_t serial_port;
+    serial_device_t *serial_dev;
     tty_cell_t *grid;
     bool dirty;
     int width, height;
@@ -62,6 +69,7 @@ typedef struct {
     int saved_x, saved_y;
     int utf8_state;
     uint32_t utf8_codepoint;
+    bool last_char_was_cr;
     spinlock_t lock;
 } tty_t;
 
@@ -83,6 +91,8 @@ void tty_push_mouse(int id, uint8_t *packet, size_t len);
 int tty_read_key(int id, uint8_t *buf, size_t len);
 int tty_read_mouse(int id, uint8_t *buf, size_t len);
 void tty_push_char(int id, uint8_t c);
+void tty_push_serial_char(int id, uint8_t ch);
+bool tty_is_serial(int id);
 int tty_read_input(int id, char *buf, size_t len);
 
 int tty_set_foreground(int id, int pid);

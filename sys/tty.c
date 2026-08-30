@@ -48,30 +48,49 @@ static int tty_queue_pop(tty_queue_t *q, uint8_t *buf, size_t len) {
 void tty_init(void) {
     int w = get_screen_width();
     int h = get_screen_height();
-    size_t vfb_size = w * h * 4;
+    size_t vfb_size = (w > 0 && h > 0) ? (size_t)w * h * 4 : 0;
 
-    graphics_clear_back_buffer(0xFF000000);
-    graphics_mark_screen_dirty();
-    graphics_flip_buffer();
-
-    g_active_tty_vfb = (uint32_t *)graphics_get_fb_backing_params().address;
-    for (size_t j = 0; j < vfb_size / 4; j++) g_active_tty_vfb[j] = 0xFF000000;
-    int cols = w / 8;
-    int rows = h / 8;
+    if (w > 0 && h > 0) {
+        graphics_clear_back_buffer(0xFF000000);
+        graphics_mark_screen_dirty();
+        graphics_flip_buffer();
+        g_active_tty_vfb = (uint32_t *)graphics_get_fb_backing_params().address;
+        if (g_active_tty_vfb) {
+            for (size_t j = 0; j < vfb_size / 4; j++) g_active_tty_vfb[j] = 0xFF000000;
+        }
+    } else {
+        g_active_tty_vfb = NULL;
+    }
+    int cols = w > 0 ? w / 8 : 80;
+    int rows = h > 0 ? h / 8 : 24;
 
     for (int i = 0; i < TTY_COUNT; i++) {
         g_ttys[i].id = i;
         g_ttys[i].used = true;
-        g_ttys[i].width = w;
-        g_ttys[i].height = h;
-        g_ttys[i].grid = (i == 0) ? (tty_cell_t *)kmalloc(cols * rows * sizeof(tty_cell_t)) : NULL;
+        if (i >= GRAPHICAL_TTY_COUNT) {
+            int dev_id = i - GRAPHICAL_TTY_COUNT;
+            serial_device_t *dev = serial_get_device(dev_id);
+            g_ttys[i].is_serial = true;
+            g_ttys[i].serial_dev = dev;
+            g_ttys[i].serial_port = dev ? dev->io_port : 0;
+            g_ttys[i].width = 640;
+            g_ttys[i].height = 192;
+            g_ttys[i].grid = NULL;
+        } else {
+            g_ttys[i].is_serial = false;
+            g_ttys[i].serial_dev = NULL;
+            g_ttys[i].serial_port = 0;
+            g_ttys[i].width = w > 0 ? w : cols * 8;
+            g_ttys[i].height = h > 0 ? h : rows * 8;
+            g_ttys[i].grid = (i == 0 && cols > 0 && rows > 0) ? (tty_cell_t *)kmalloc(cols * rows * sizeof(tty_cell_t)) : NULL;
+        }
         g_ttys[i].dirty = true;
         g_ttys[i].cursor_x = 0;
         g_ttys[i].cursor_y = 0;
         g_ttys[i].cursor_visible = true;
         g_ttys[i].fg_color = 0xFFFFFFFF;
         g_ttys[i].bg_color = 0xFF000000;
-        g_ttys[i].blit_enabled = true;
+        g_ttys[i].blit_enabled = !g_ttys[i].is_serial;
         g_ttys[i].fg_pid = -1;
         g_ttys[i].esc_state = 0;
         g_ttys[i].esc_num_params = 0;
@@ -79,8 +98,9 @@ void tty_init(void) {
         g_ttys[i].saved_y = 0;
         g_ttys[i].utf8_state = 0;
         g_ttys[i].utf8_codepoint = 0;
+        g_ttys[i].last_char_was_cr = false;
         g_ttys[i].lock = SPINLOCK_INIT;
-        
+
         if (g_ttys[i].grid) {
             for (int j = 0; j < cols * rows; j++) {
                 g_ttys[i].grid[j].codepoint = ' ';
@@ -98,9 +118,10 @@ void tty_init(void) {
 }
 
 static void ensure_tty_grid(tty_t *t) {
-    if (!t || t->grid) return;
+    if (!t || t->grid || t->is_serial) return;
     int cols = t->width / 8;
     int rows = t->height / 8;
+    if (cols <= 0 || rows <= 0) return;
     t->grid = (tty_cell_t *)kmalloc(cols * rows * sizeof(tty_cell_t));
     if (t->grid) {
         for (int j = 0; j < cols * rows; j++) {
@@ -380,6 +401,27 @@ void tty_write(int id, const char *data, size_t len) {
     tty_t *t = tty_get(id);
     if (!t) return;
     uint64_t flags = spinlock_acquire_irqsave(&t->lock);
+    if (t->is_serial) {
+        if (t->serial_dev) {
+            for (size_t i = 0; i < len; i++) {
+                char c = data[i];
+                if (c == '\n') {
+                    serial_device_write_char(t->serial_dev, '\r');
+                }
+                serial_device_write_char(t->serial_dev, c);
+            }
+        } else if (t->serial_port > 0) {
+            for (size_t i = 0; i < len; i++) {
+                char c = data[i];
+                if (c == '\n') {
+                    serial_write_char(t->serial_port, '\r');
+                }
+                serial_write_char(t->serial_port, c);
+            }
+        }
+        spinlock_release_irqrestore(&t->lock, flags);
+        return;
+    }
     int font_w = 8;
     int font_h = 8;
     
@@ -673,6 +715,60 @@ void tty_push_char(int id, uint8_t c) {
     tty_queue_push(&t->char_queue, c);
 }
 
+void tty_push_serial_char(int id, uint8_t ch) {
+    tty_t *t = tty_get(id);
+    if (!t || !t->is_serial) return;
+
+    if (ch == CTRL_C_CHAR) { // Ctrl+C (ETX / SIGINT)
+        int fg = t->fg_pid;
+        process_t *target = NULL;
+        if (fg > 0) {
+            target = process_get_by_pid((uint32_t)fg);
+        }
+        if (!target) {
+            target = process_find_child_on_tty(id);
+        }
+        if (target && target->pid > 1) {
+            if (t->serial_dev) {
+                serial_device_write_str(t->serial_dev, "^C\r\n");
+            } else if (t->serial_port > 0) {
+                serial_write_str(t->serial_port, "^C\r\n");
+            }
+            target->signal_pending |= SIGINT;
+            if (target->state == PROC_STATE_BLOCKED) {
+                target->state = PROC_STATE_RUNNING;
+                target->sleep_until = 0;
+            }
+            t->fg_pid = -1;
+            return;
+        }
+    }
+
+    if (ch == '\r') {
+        t->last_char_was_cr = true;
+        tty_queue_push(&t->char_queue, '\n');
+    } else if (ch == '\n') {
+        if (t->last_char_was_cr) {
+            t->last_char_was_cr = false;
+            return;
+        }
+        tty_queue_push(&t->char_queue, '\n');
+    } else {
+        t->last_char_was_cr = false;
+        if (ch == 0x7F || ch == '\b') {
+            tty_queue_push(&t->char_queue, '\b');
+        } else {
+            tty_queue_push(&t->char_queue, ch);
+        }
+    }
+}
+
+bool tty_is_serial(int id) {
+    tty_t *t = tty_get(id);
+    if (!t) return false;
+    return t->is_serial;
+}
+
 int tty_read_input(int id, char *buf, size_t len) {
     if (pty_is_pty_id(id)) return pty_read_input(id, buf, len);
     tty_t *t = tty_get(id);
@@ -729,6 +825,10 @@ int tty_ioctl(int id, uint64_t request, void *arg) {
         return 0;
     } else if (request == 0x5606) { // VT_ACTIVATE
         tty_switch(id);
+        return 0;
+    } else if (request == 0x541F /* TIOCISSERIAL */) {
+        if (!arg) return -1;
+        *(int *)arg = t->is_serial ? 1 : 0;
         return 0;
     }
     

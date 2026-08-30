@@ -42,6 +42,9 @@
 #include "keyboard.h"
 #include "acpi.h"
 #include "ac97.h"
+#include "serial.h"
+
+bool g_headless_mode = false;
 
 extern void sysfs_init_subsystems(void);
 
@@ -116,57 +119,38 @@ static void hcf(void) {
     }
 }
 
-static void init_serial() {
-    outb(0x3F8 + 1, 0x00);
-    outb(0x3F8 + 3, 0x80);
-    outb(0x3F8 + 0, 0x03);
-    outb(0x3F8 + 1, 0x00);
-    outb(0x3F8 + 3, 0x03);
-    outb(0x3F8 + 2, 0xC7);
-    outb(0x3F8 + 4, 0x0B);
-}
-
 static spinlock_t serial_lock = SPINLOCK_INIT;
 
 void serial_write(const char *str) {
-    uint64_t flags = spinlock_acquire_irqsave(&serial_lock);
-    const char *p = str;
-    while (*p) {
-        char c = *p++;
-        while ((inb(0x3F8 + 5) & 0x20) == 0);
-        outb(0x3F8, c);
+    if (!str) return;
+    if (!serial_is_log_silenced()) {
+        serial_write_str(serial_get_debug_port(), str);
     }
     kconsole_write(str);
-    spinlock_release_irqrestore(&serial_lock, flags);
 }
 
 void serial_write_num_locked(uint32_t n) {
-    if (n >= 10) serial_write_num_locked(n / 10);
-    char c = '0' + (n % 10);
-    while ((inb(0x3F8 + 5) & 0x20) == 0);
-    outb(0x3F8, c);
-    kconsole_putc(c);
+    char buf[16];
+    itoa(n, buf);
+    serial_write(buf);
 }
 
 void serial_write_num(uint32_t n) {
-    uint64_t flags = spinlock_acquire_irqsave(&serial_lock);
-    serial_write_num_locked(n);
-    spinlock_release_irqrestore(&serial_lock, flags);
+    char buf[16];
+    itoa(n, buf);
+    serial_write(buf);
 }
 
 void serial_write_hex_locked(uint64_t n) {
-    char *hex = "0123456789ABCDEF";
-    if (n >= 16) serial_write_hex_locked(n / 16);
-    char c = hex[n % 16];
-    while ((inb(0x3F8 + 5) & 0x20) == 0);
-    outb(0x3F8, c);
-    kconsole_putc(c);
+    char buf[32];
+    itoa_hex(n, buf);
+    serial_write(buf);
 }
 
 void serial_write_hex(uint64_t n) {
-    uint64_t flags = spinlock_acquire_irqsave(&serial_lock);
-    serial_write_hex_locked(n);
-    spinlock_release_irqrestore(&serial_lock, flags);
+    char buf[32];
+    itoa_hex(n, buf);
+    serial_write(buf);
 }
 
 void serial_write_mac(const char *label, const uint8_t *mac) {
@@ -322,7 +306,7 @@ static void vfs_mkdir_recursive(const char *path) {
 
 static void init_early(void) {
     platform_init();
-    init_serial();
+    serial_init();
     vfs_init();
     serial_write("\n");
     log_ok("Platform initialized");
@@ -343,14 +327,30 @@ static void init_early(void) {
 }
 
 static void init_graphics(void) {
-    if (framebuffer_request.response == NULL || framebuffer_request.response->framebuffer_count < 1) {
-        serial_write("[INIT] No framebuffer! Halting.\n");
-        hcf();
+    const char *cmdline = NULL;
+    if (kernel_file_request.response != NULL && kernel_file_request.response->kernel_file != NULL) {
+        cmdline = kernel_file_request.response->kernel_file->cmdline;
+    }
+
+    bool force_headless = cmdline_has_flag(cmdline, "headless=1") || cmdline_has_flag(cmdline, "--headless");
+
+    if (force_headless || framebuffer_request.response == NULL || framebuffer_request.response->framebuffer_count < 1) {
+        g_headless_mode = true;
+        if (serial_is_com2_present()) {
+            serial_set_debug_port(COM2_PORT);
+            serial_set_log_silenced(false);
+        }
+        serial_write("[INIT] Headless mode active\n");
+        return;
     }
 
     struct limine_framebuffer *fb = framebuffer_request.response->framebuffers[0];
     graphics_init(fb);
     kconsole_init();
+
+    // Graphical mode active: set kernel debug to COM1
+    serial_set_debug_port(COM1_PORT);
+    serial_set_log_silenced(false);
 }
 
 static void init_cpu_state(void) {
@@ -700,14 +700,28 @@ static void init_tty(void) {
     pty_init();
     kconsole_set_active(false);
 
-    /* Spawn the zombie reaper daemon first so it registers via SYS_SET_REAPER
-     * before any user processes can become orphans. 
-     * ps: what's with people coming up with terms like orphans and stuff?
-     * says something about the devs that came up with it, hm?*/
+    /* Spawn the zombie reaper daemon first so it registers via SYS_SET_REAPER */
     process_create_elf("/bin/job_applications.elf", "", false, -1);
 
-    // Spawn shell on active TTY 0 on boot (secondary TTYs spawned on demand)
-    process_create_elf("/bin/bsh.elf", "1", true, 0);
+    if (!g_headless_mode) {
+        // Spawn shell on active TTY 0 on boot (secondary TTYs spawned on demand)
+        process_create_elf("/bin/bsh.elf", "1", true, 0);
+
+        // Route kernel debug output to COM1 and keep shell off COM1
+        serial_set_debug_port(COM1_PORT);
+        serial_set_log_silenced(false);
+    } else {
+        // Headless mode: interactive shell runs on COM1 (ID 10)
+        // COM2 (if present) is used for kernel debug logs; otherwise silence debug output on COM1
+        if (serial_is_com2_present()) {
+            serial_set_debug_port(COM2_PORT);
+            serial_set_log_silenced(false);
+        } else {
+            serial_set_debug_port(COM1_PORT);
+            serial_set_log_silenced(true);
+        }
+        process_create_elf("/bin/bsh.elf", "11", true, 10);
+    }
 }
 
 void kmain(void) {
@@ -727,7 +741,9 @@ void kmain(void) {
 
     // Main blitter loop
     while(1) {
-        tty_blit_active();
+        if (!g_headless_mode) {
+            tty_blit_active();
+        }
         k_sleep(16); 
     }
 

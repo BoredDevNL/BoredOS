@@ -4,10 +4,16 @@
 // present in, as per the GPL license terms.
 #include "syscall.h"
 #include "gdt.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "process.h"
 #include "vfs.h"
 #include "shm.h"
+#include "errno.h"
+
+#include "mmu.h"
+#include "pmm.h"
+#include "vmm.h"
+#include "vma.h"
 
 #include "cmd.h"
 #include "disk.h"
@@ -18,9 +24,9 @@
 #include "keymap.h"
 #include "io.h"
 #include "kutils.h"
-#include "mkfs_fat32.h"
 #include "network.h"
-#include "paging.h"
+#include "pagecache.h"
+#include "mmu.h"
 #include "pci.h"
 #include "platform.h"
 #include "smp.h"
@@ -32,6 +38,9 @@
 #include "work_queue.h"
 #include <string.h>
 
+extern void serial_write(const char *str);
+extern void serial_write_num(uint64_t n);
+
 #define SPAWN_FLAG_TERMINAL 0x1
 #define SPAWN_FLAG_INHERIT_TTY 0x2
 #define SPAWN_FLAG_TTY_ID 0x4
@@ -39,22 +48,71 @@
 #define MSR_FS_BASE 0xC0000100
 
 static bool is_valid_user_ptr(const void *ptr, size_t size) {
+  if (size == 0) return true;
   uint64_t addr = (uint64_t)ptr;
   if (!ptr || addr < 0x1000 || addr >= 0xFFFF800000000000ULL) return false;
-  if (addr + size < addr || addr + size >= 0xFFFF800000000000ULL) return false;
+  if (addr + size < addr || addr + size > 0xFFFF800000000000ULL) return false;
 
   process_t *proc = process_get_current();
-  if (!proc || !proc->pml4_phys) return false;
+  if (!proc) return false;
+  if (!proc->is_user) return true;
 
   uint64_t page_start = addr & ~0xFFFULL;
-  uint64_t page_end = (addr + (size > 0 ? size - 1 : 0)) & ~0xFFFULL;
+  uint64_t page_end = (addr + size - 1) & ~0xFFFULL;
+
+  if (proc->vmm_space) {
+    for (uint64_t p = page_start; p <= page_end; p += 4096) {
+      if (mmu_virt_to_phys(proc->vmm_space->mmu_ctx, p) == 0) {
+        if (!vma_find(&proc->vmm_space->vma_tree, p)) {
+          return false;
+        }
+      }
+      if (p == page_end) break;
+    }
+    return true;
+  }
+
+  if (!proc->pml4_phys) return false;
+
+  mmu_context_t ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
   for (uint64_t p = page_start; p <= page_end; p += 4096) {
-    if (paging_virt2phys(proc->pml4_phys, p) == 0) {
+    if (mmu_virt_to_phys(&ctx, p) == 0) {
       return false;
     }
     if (p == page_end) break;
   }
   return true;
+}
+
+static bool is_valid_user_string(const char *str, size_t max_len) {
+  if (!str) return false;
+  uint64_t addr = (uint64_t)str;
+  if (addr < 0x1000 || addr >= 0xFFFF800000000000ULL) return false;
+
+  process_t *proc = process_get_current();
+  if (!proc) return false;
+  if (!proc->is_user) return true;
+  if (!proc->pml4_phys) return false;
+
+  mmu_context_t ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
+  mmu_context_t *uctx = (proc->vmm_space && proc->vmm_space->mmu_ctx) ? proc->vmm_space->mmu_ctx : &ctx;
+
+  for (size_t i = 0; i < max_len; i++) {
+    uint64_t cur_addr = addr + i;
+    if (cur_addr >= 0xFFFF800000000000ULL) return false;
+    if ((cur_addr & 0xFFF) == 0 || i == 0) {
+      uint64_t p = cur_addr & ~0xFFFULL;
+      if (mmu_virt_to_phys(uctx, p) == 0) {
+        if (!proc->vmm_space || !vma_find(&proc->vmm_space->vma_tree, p)) {
+          return false;
+        }
+      }
+    }
+    if (str[i] == '\0') {
+      return true;
+    }
+  }
+  return false;
 }
 
 extern void isr128_wrapper(void);
@@ -168,6 +226,7 @@ static process_fd_pipe_t *fs_create_pipe_state(void) {
   memset(pipe, 0, sizeof(*pipe));
   pipe->readers = 1;
   pipe->writers = 1;
+  pipe->lock = SPINLOCK_INIT;
   wait_queue_init(&pipe->read_queue);
   wait_queue_init(&pipe->write_queue);
   return pipe;
@@ -179,8 +238,9 @@ static void fs_pipe_drop_reader(process_fd_pipe_t **pipe) {
 
   process_fd_pipe_t *p = *pipe;
 
-  p->readers--;
-  if (p->readers <= 0 && p->writers <= 0) {
+  __atomic_fetch_sub(&p->readers, 1, __ATOMIC_RELEASE);
+  if (__atomic_load_n(&p->readers, __ATOMIC_ACQUIRE) <= 0 &&
+      __atomic_load_n(&p->writers, __ATOMIC_ACQUIRE) <= 0) {
     kfree_null(*pipe);
   }
 }
@@ -191,8 +251,9 @@ static void fs_pipe_drop_writer(process_fd_pipe_t **pipe) {
 
   process_fd_pipe_t *p = *pipe;
 
-  p->writers--;
-  if (p->readers <= 0 && p->writers <= 0) {
+  __atomic_fetch_sub(&p->writers, 1, __ATOMIC_RELEASE);
+  if (__atomic_load_n(&p->readers, __ATOMIC_ACQUIRE) <= 0 &&
+      __atomic_load_n(&p->writers, __ATOMIC_ACQUIRE) <= 0) {
     kfree_null(*pipe);
   }
 }
@@ -442,8 +503,8 @@ static uint64_t fs_cmd_open(const syscall_args_t *args) {
   process_t *proc = process_get_current();
   const char *path = (const char *)args->arg2;
   const char *mode_arg = (const char *)args->arg3;
-  if (!path)
-    return (uint64_t)-2; // -ENOENT
+  if (!path || !is_valid_user_string(path, 1024))
+    return (uint64_t)-EFAULT;
 
   const char *mode = "r";
   if (mode_arg != NULL) {
@@ -456,16 +517,16 @@ static uint64_t fs_cmd_open(const syscall_args_t *args) {
 
   if (!vf) {
     if (mode && (mode[0] == 'r' && !strchr(mode, '+'))) {
-      return (uint64_t)-2; // -ENOENT
+      return (uint64_t)-ENOENT;
     }
-    return (uint64_t)-5; // -EIO
+    return (uint64_t)-EIO;
   }
 
   process_fd_file_ref_t *ref =
       (process_fd_file_ref_t *)kmalloc(sizeof(process_fd_file_ref_t));
   if (!ref) {
     vfs_close(vf);
-    return (uint64_t)-12; // -ENOMEM
+    return (uint64_t)-ENOMEM;
   }
   ref->file = vf;
   ref->refs = 1;
@@ -481,7 +542,7 @@ static uint64_t fs_cmd_open(const syscall_args_t *args) {
 
   kfree_null(ref);
   vfs_close(vf);
-  return (uint64_t)-24; // -EMFILE
+  return (uint64_t)-EMFILE;
 }
 
 static uint64_t fs_cmd_read(const syscall_args_t *args) {
@@ -490,12 +551,22 @@ static uint64_t fs_cmd_read(const syscall_args_t *args) {
   void *buf = (void *)args->arg3;
   uint32_t len = (uint32_t)args->arg4;
   if (fd < 0 || fd >= MAX_PROCESS_FDS || !proc->fds[fd])
-    return -1;
+    return (uint64_t)-EBADF;
+
+  if (len > 0 && !is_valid_user_ptr(buf, len))
+    return (uint64_t)-EFAULT;
 
   if (proc->fd_kind[fd] == PROC_FD_KIND_FILE) {
     process_fd_file_ref_t *ref = (process_fd_file_ref_t *)proc->fds[fd];
     if (!ref || !ref->file)
       return -1;
+    if ((uint64_t)buf < 0xFFFF800000000000ULL && len > 0) {
+      volatile uint8_t *p = (volatile uint8_t *)buf;
+      for (size_t i = 0; i < len; i += 4096) {
+        p[i] = p[i];
+      }
+      p[len - 1] = p[len - 1];
+    }
     return (uint64_t)vfs_read(ref->file, buf, (int)len);
   }
 
@@ -505,13 +576,16 @@ static uint64_t fs_cmd_read(const syscall_args_t *args) {
       return -1;
     uint8_t *out = (uint8_t *)buf;
     uint32_t n = 0;
+    uint64_t pflags = spinlock_acquire_irqsave(&pipe->lock);
     while (n < len) {
       if (pipe->count == 0) {
-        if (pipe->writers == 0)
+        if (__atomic_load_n(&pipe->writers, __ATOMIC_ACQUIRE) == 0)
           break;
         if (proc->fd_flags[fd] & O_NONBLOCK) {
-          if (n == 0)
+          if (n == 0) {
+            spinlock_release_irqrestore(&pipe->lock, pflags);
             return (uint64_t)-2;
+          }
           break;
         }
         break;
@@ -520,6 +594,7 @@ static uint64_t fs_cmd_read(const syscall_args_t *args) {
       pipe->read_pos = (pipe->read_pos + 1) % sizeof(pipe->data);
       pipe->count--;
     }
+    spinlock_release_irqrestore(&pipe->lock, pflags);
     if (n > 0) {
       wait_queue_wake_all(&pipe->write_queue);
     }
@@ -558,6 +633,7 @@ static uint64_t fs_cmd_write(const syscall_args_t *args) {
     return -1;
 
   if (proc->fd_kind[fd] == PROC_FD_KIND_FILE) {
+    balance_dirty_pages();
     process_fd_file_ref_t *ref = (process_fd_file_ref_t *)proc->fds[fd];
     if (!ref || !ref->file)
       return -1;
@@ -568,15 +644,18 @@ static uint64_t fs_cmd_write(const syscall_args_t *args) {
     process_fd_pipe_t *pipe = (process_fd_pipe_t *)proc->fds[fd];
     if (!pipe || !buf)
       return -1;
-    if (pipe->readers <= 0)
+    if (__atomic_load_n(&pipe->readers, __ATOMIC_ACQUIRE) <= 0)
       return (uint64_t)-1;
     const uint8_t *in = (const uint8_t *)buf;
     uint32_t n = 0;
+    uint64_t pflags = spinlock_acquire_irqsave(&pipe->lock);
     while (n < len) {
       if (pipe->count == sizeof(pipe->data)) {
         if (proc->fd_flags[fd] & O_NONBLOCK) {
-          if (n == 0)
+          if (n == 0) {
+            spinlock_release_irqrestore(&pipe->lock, pflags);
             return (uint64_t)-2;
+          }
           break;
         }
         break;
@@ -585,6 +664,7 @@ static uint64_t fs_cmd_write(const syscall_args_t *args) {
       pipe->write_pos = (pipe->write_pos + 1) % sizeof(pipe->data);
       pipe->count++;
     }
+    spinlock_release_irqrestore(&pipe->lock, pflags);
     if (n > 0) {
       wait_queue_wake_all(&pipe->read_queue);
     }
@@ -627,16 +707,32 @@ static uint64_t fs_cmd_close(const syscall_args_t *args) {
 static uint64_t fs_cmd_seek(const syscall_args_t *args) {
   process_t *proc = process_get_current();
   int fd = (int)args->arg2;
-  int offset = (int)args->arg3;
+  int64_t offset = (int64_t)args->arg3;
   int whence = (int)args->arg4; // 0=SET, 1=CUR, 2=END
-  if (fd < 0 || fd >= MAX_PROCESS_FDS || !proc->fds[fd])
-    return -1;
-  if (proc->fd_kind[fd] != PROC_FD_KIND_FILE)
-    return -1;
+  if (fd < 0 || fd >= MAX_PROCESS_FDS) {
+    return (uint64_t)-9; // -EBADF
+  }
+  if (!proc->fds[fd]) {
+    if (fd == 0 || fd == 1 || fd == 2) {
+      return (uint64_t)-29; // -ESPIPE
+    }
+    return (uint64_t)-9; // -EBADF
+  }
+  if (proc->fd_kind[fd] != PROC_FD_KIND_FILE) {
+    return (uint64_t)-29; // -ESPIPE
+  }
   process_fd_file_ref_t *ref = (process_fd_file_ref_t *)proc->fds[fd];
-  if (!ref || !ref->file)
-    return -1;
-  return (uint64_t)vfs_seek(ref->file, offset, whence);
+  if (!ref || !ref->file) {
+    return (uint64_t)-9; // -EBADF
+  }
+  int sret = vfs_seek((vfs_file_t *)ref->file, offset, whence);
+  if (sret == -29) {
+    return (uint64_t)-29; // -ESPIPE
+  }
+  if (sret < 0) {
+    return (uint64_t)-22; // -EINVAL
+  }
+  return (uint64_t)vfs_file_position((vfs_file_t *)ref->file);
 }
 
 static uint64_t fs_cmd_tell(const syscall_args_t *args) {
@@ -679,15 +775,15 @@ static void fd_addref(process_t *proc, int fd) {
   if (proc->fd_kind[fd] == PROC_FD_KIND_FILE) {
     process_fd_file_ref_t *ref = (process_fd_file_ref_t *)proc->fds[fd];
     if (ref)
-      ref->refs++;
+      __atomic_fetch_add(&ref->refs, 1, __ATOMIC_RELAXED);
   } else if (proc->fd_kind[fd] == PROC_FD_KIND_PIPE_READ) {
     process_fd_pipe_t *pipe = (process_fd_pipe_t *)proc->fds[fd];
     if (pipe)
-      pipe->readers++;
+      __atomic_fetch_add(&pipe->readers, 1, __ATOMIC_RELAXED);
   } else if (proc->fd_kind[fd] == PROC_FD_KIND_PIPE_WRITE) {
     process_fd_pipe_t *pipe = (process_fd_pipe_t *)proc->fds[fd];
     if (pipe)
-      pipe->writers++;
+      __atomic_fetch_add(&pipe->writers, 1, __ATOMIC_RELAXED);
   } else if (proc->fd_kind[fd] == PROC_FD_KIND_SOCKET) {
     process_socket_addref((process_fd_socket_t *)proc->fds[fd]);
   }
@@ -740,8 +836,8 @@ static uint64_t fs_cmd_dup2(const syscall_args_t *args) {
 static uint64_t fs_cmd_pipe(const syscall_args_t *args) {
   process_t *proc = process_get_current();
   int *pipefd = (int *)args->arg2;
-  if (!pipefd)
-    return -1;
+  if (!pipefd || !is_valid_user_ptr(pipefd, 2 * sizeof(int)))
+    return (uint64_t)-EFAULT;
 
   int rfd = fs_alloc_fd_slot(proc, 0);
   if (rfd < 0)
@@ -789,8 +885,8 @@ static uint64_t fs_cmd_fcntl(const syscall_args_t *args) {
 static uint64_t fs_list_common(process_t *proc, const char *path,
                                FAT32_FileInfo *u_entries, int max_entries,
                                int offset) {
-  if (!path || !u_entries)
-    return -1;
+  if (!path || !is_valid_user_string(path, 1024) || !u_entries || !is_valid_user_ptr(u_entries, sizeof(FAT32_FileInfo) * max_entries))
+    return (uint64_t)-EFAULT;
 
   char normalized[VFS_MAX_PATH];
   vfs_normalize_path(proc->cwd, path, normalized);
@@ -831,8 +927,8 @@ static uint64_t fs_cmd_list_offset(const syscall_args_t *args) {
 static uint64_t fs_cmd_delete(const syscall_args_t *args) {
   process_t *proc = process_get_current();
   const char *path = (const char *)args->arg2;
-  if (!path)
-    return -1;
+  if (!path || !is_valid_user_string(path, 1024))
+    return (uint64_t)-EFAULT;
   char normalized[VFS_MAX_PATH];
   vfs_normalize_path(proc->cwd, path, normalized);
   if (vfs_is_directory(normalized)) {
@@ -847,8 +943,8 @@ static uint64_t fs_cmd_get_info(const syscall_args_t *args) {
   process_t *proc = process_get_current();
   const char *path = (const char *)args->arg2;
   FAT32_FileInfo *u_info = (FAT32_FileInfo *)args->arg3;
-  if (!path || !u_info)
-    return -1;
+  if (!path || !is_valid_user_string(path, 1024) || !u_info || !is_valid_user_ptr(u_info, sizeof(FAT32_FileInfo)))
+    return (uint64_t)-EFAULT;
 
   char normalized[VFS_MAX_PATH];
   vfs_normalize_path(proc->cwd, path, normalized);
@@ -868,8 +964,8 @@ static uint64_t fs_cmd_get_info(const syscall_args_t *args) {
 
 static uint64_t fs_cmd_mkdir(const syscall_args_t *args) {
   const char *path = (const char *)args->arg2;
-  if (!path)
-    return -1;
+  if (!path || !is_valid_user_string(path, 1024))
+    return (uint64_t)-EFAULT;
   if (vfs_exists(path)) {
     return (uint64_t)-17;
   }
@@ -887,8 +983,8 @@ static uint64_t fs_cmd_getcwd(const syscall_args_t *args) {
   process_t *proc = process_get_current();
   char *buf = (char *)args->arg2;
   size_t size = args->arg3;
-  if (!buf || size <= 0)
-    return -1;
+  if (!buf || size <= 0 || !is_valid_user_ptr(buf, size))
+    return (uint64_t)-EFAULT;
   size_t len = strlen(proc->cwd);
   if (len >= size)
     return -1;
@@ -899,8 +995,8 @@ static uint64_t fs_cmd_getcwd(const syscall_args_t *args) {
 static uint64_t fs_cmd_chdir(const syscall_args_t *args) {
   process_t *proc = process_get_current();
   const char *path = (const char *)args->arg2;
-  if (!path)
-    return -1;
+  if (!path || !is_valid_user_string(path, 1024))
+    return (uint64_t)-EFAULT;
   char normalized[VFS_MAX_PATH];
   vfs_normalize_path(proc->cwd, path, normalized);
   if (vfs_is_directory(normalized)) {
@@ -959,8 +1055,13 @@ void poll_cleanup(process_t *proc) {
 
 static void poll_qproc(wait_queue_head_t *h, poll_table_t *pt) {
   (void)pt;
+  if (!h) return;
   process_t *proc = process_get_current();
+  if (!proc) return;
   poll_wtable_t *wt = &proc->poll_table;
+  for (int i = 0; i < wt->count; i++) {
+    if (wt->entries[i].h == h) return;
+  }
   if (wt->count < MAX_POLL_ENTRIES) {
     poll_entry_t *pe = &wt->entries[wt->count++];
     pe->h = h;
@@ -981,11 +1082,15 @@ static uint64_t fs_cmd_poll(const syscall_args_t *args) {
   }
 
   if (!proc || !fds || nfds <= 0 || nfds > 128) {
-    return -1;
+    return (uint64_t)-EINVAL;
+  }
+
+  if (!is_valid_user_ptr(fds, nfds * sizeof(struct pollfd))) {
+    return (uint64_t)-EFAULT;
   }
 
   // Initialize/reset poll table in process structure
-  proc->poll_table.pt.qproc = poll_qproc;
+  proc->poll_table.pt.qproc = (timeout != 0) ? poll_qproc : NULL;
   proc->poll_table.count = 0;
   poll_table_t *pt = &proc->poll_table.pt;
 
@@ -1014,14 +1119,14 @@ static uint64_t fs_cmd_poll(const syscall_args_t *args) {
                proc->fd_kind[fd] == PROC_FD_KIND_PIPE_WRITE) {
       process_fd_pipe_t *pipe = (process_fd_pipe_t *)proc->fds[fd];
       if (proc->fd_kind[fd] == PROC_FD_KIND_PIPE_READ) {
-        if (pt->qproc)
+        if (pt->qproc && (fds[i].events & POLLIN))
           pt->qproc(&pipe->read_queue, pt);
         if (pipe->count > 0)
           mask |= POLLIN;
         if (pipe->writers == 0)
           mask |= POLLHUP;
       } else {
-        if (pt->qproc)
+        if (pt->qproc && (fds[i].events & POLLOUT))
           pt->qproc(&pipe->write_queue, pt);
         if (pipe->count < sizeof(pipe->data))
           mask |= POLLOUT;
@@ -1034,18 +1139,18 @@ static uint64_t fs_cmd_poll(const syscall_args_t *args) {
         if (sock->is_listening) {
           if (sock->domain == AF_UNIX && sock->unpcb) {
             unpcb_t *unp = (unpcb_t *)sock->unpcb;
-            if (pt->qproc)
+            if (pt->qproc && (fds[i].events & POLLIN))
               pt->qproc(&unp->accept_waitq, pt);
             if (unp->accept_count > 0)
               mask |= POLLIN;
           } else {
-            if (pt->qproc)
+            if (pt->qproc && (fds[i].events & POLLIN))
               pt->qproc(&sock->accept_waitq, pt);
             if (sock->accept_queue_count > 0)
               mask |= POLLIN;
           }
         } else {
-          if (pt->qproc) {
+          if (pt->qproc && (fds[i].events & POLLIN)) {
             pt->qproc(&sock->rx_sb.waitq, pt);
             pt->qproc(&sock->rx_waitq, pt);
           }
@@ -1056,10 +1161,21 @@ static uint64_t fs_cmd_poll(const syscall_args_t *args) {
             if (unp->state == UNP_STATE_CLOSED || (unp->peer == NULL && unp->state == UNP_STATE_CONNECTED)) {
               mask |= (POLLIN | POLLHUP);
             }
+            if (unp->peer && unp->peer->sock) {
+              process_fd_socket_t *ps = (process_fd_socket_t *)unp->peer->sock;
+              if (pt && pt->qproc && (fds[i].events & POLLOUT)) {
+                pt->qproc(&ps->rx_sb.waitq, pt);
+              }
+              extern int sockbuf_writable(sockbuf_t *sb);
+              if (sockbuf_writable(&ps->rx_sb)) mask |= POLLOUT;
+            } else if (unp->type == 2) {
+              mask |= POLLOUT;
+            }
+          } else {
+            if (sock->tcp_closed) mask |= (POLLIN | POLLHUP);
+            if (sock->tcp_connect_error) mask |= POLLERR;
+            if (sock->is_connected || sock->type == 2) mask |= POLLOUT;
           }
-          if (sock->tcp_closed) mask |= (POLLIN | POLLHUP);
-          if (sock->tcp_connect_error) mask |= POLLERR;
-          if (sock->is_connected || sock->type == 2) mask |= POLLOUT;
         }
       }
     } else if (proc->fd_kind[fd] == PROC_FD_KIND_TTY) {
@@ -1203,8 +1319,10 @@ static uint64_t sys_cmd_spawn_process(const syscall_args_t *args) {
   uint64_t flags = args->arg4;
   int tty_id = (int)args->arg5;
 
-  if (!user_path)
-    return -1;
+  if (!user_path || !is_valid_user_string(user_path, 256))
+    return (uint64_t)-EFAULT;
+  if (user_args && !is_valid_user_string(user_args, 512))
+    return (uint64_t)-EFAULT;
 
   char path_buf[256];
   int pi = 0;
@@ -1252,8 +1370,10 @@ typedef struct {
 static uint64_t sys_cmd_exec_process(const syscall_args_t *args) {
   const char *user_path = (const char *)args->arg2;
   const char *user_args = (const char *)args->arg3;
-  if (!user_path)
-    return -1;
+  if (!user_path || !is_valid_user_string(user_path, 256))
+    return (uint64_t)-EFAULT;
+  if (user_args && !is_valid_user_string(user_args, 512))
+    return (uint64_t)-EFAULT;
 
   char path_buf[256];
   int pi = 0;
@@ -1332,8 +1452,10 @@ static uint64_t sys_cmd_waitpid(const syscall_args_t *args) {
   }
   if (res < 0)
     return (uint64_t)-1;
-  if (status)
+  if (status) {
+    if (!is_valid_user_ptr(status, sizeof(int))) return (uint64_t)-EFAULT;
     *status = st;
+  }
   return (uint64_t)res;
 }
 
@@ -1348,13 +1470,30 @@ static uint64_t sys_cmd_kill_signal(const syscall_args_t *args) {
   }
   if (!target)
     return -1;
-  if (sig == 0)
+  if (sig == 0) {
+    if (pid != -1) process_put(target);
     return 0;
-  if (sig <= 0 || sig >= MAX_SIGNALS)
+  }
+  if (sig <= 0 || sig >= MAX_SIGNALS) {
+    if (pid != -1) process_put(target);
     return -1;
+  }
 
   if (sig == 9) {
-    process_terminate_with_status(target, 128 + sig);
+    process_terminate_with_status(target, sig & 0x7f);
+    if (pid != -1) process_put(target);
+    return 0;
+  }
+
+  if (target->signal_handlers[sig] == 1 ||
+      (target->signal_handlers[sig] == 0 && (sig == 17 || sig == 28 || sig == 23))) {
+    if (pid != -1) process_put(target);
+    return 0;
+  }
+
+  if (target->signal_handlers[sig] == 0) {
+    process_terminate_with_status(target, sig & 0x7f);
+    if (pid != -1) process_put(target);
     return 0;
   }
 
@@ -1363,7 +1502,16 @@ static uint64_t sys_cmd_kill_signal(const syscall_args_t *args) {
     target->state = PROC_STATE_RUNNING;
     target->sleep_until = 0;
   }
+  if (pid != -1) process_put(target);
   return 0;
+}
+
+int signal_send_to_pid(int pid, int sig) {
+  syscall_args_t args = {
+    .arg2 = (uint64_t)pid,
+    .arg3 = (uint64_t)sig
+  };
+  return (int)sys_cmd_kill_signal(&args);
 }
 
 static uint64_t sys_cmd_sigaction(const syscall_args_t *args) {
@@ -1372,7 +1520,12 @@ static uint64_t sys_cmd_sigaction(const syscall_args_t *args) {
   const k_sigaction_t *act = (const k_sigaction_t *)args->arg3;
   k_sigaction_t *oldact = (k_sigaction_t *)args->arg4;
   if (!proc || sig <= 0 || sig >= MAX_SIGNALS)
-    return -1;
+    return (uint64_t)-EINVAL;
+
+  if (act && !is_valid_user_ptr(act, sizeof(k_sigaction_t)))
+    return (uint64_t)-EFAULT;
+  if (oldact && !is_valid_user_ptr(oldact, sizeof(k_sigaction_t)))
+    return (uint64_t)-EFAULT;
 
   if (oldact) {
     oldact->sa_handler = proc->signal_handlers[sig];
@@ -1396,7 +1549,12 @@ static uint64_t sys_cmd_sigprocmask(const syscall_args_t *args) {
   const uint64_t *set = (const uint64_t *)args->arg3;
   uint64_t *oldset = (uint64_t *)args->arg4;
   if (!proc)
-    return -1;
+    return (uint64_t)-EINVAL;
+
+  if (set && !is_valid_user_ptr(set, sizeof(uint64_t)))
+    return (uint64_t)-EFAULT;
+  if (oldset && !is_valid_user_ptr(oldset, sizeof(uint64_t)))
+    return (uint64_t)-EFAULT;
 
   if (oldset) {
     *oldset = proc->signal_mask;
@@ -1421,8 +1579,10 @@ static uint64_t sys_cmd_sigprocmask(const syscall_args_t *args) {
 static uint64_t sys_cmd_sigpending(const syscall_args_t *args) {
   process_t *proc = process_get_current();
   uint64_t *set = (uint64_t *)args->arg2;
-  if (!proc || !set)
-    return -1;
+  if (!proc)
+    return (uint64_t)-EINVAL;
+  if (!set || !is_valid_user_ptr(set, sizeof(uint64_t)))
+    return (uint64_t)-EFAULT;
   *set = proc->signal_pending;
   return 0;
 }
@@ -1444,11 +1604,14 @@ static uint64_t sys_cmd_tty_kill_fg(const syscall_args_t *args) {
   if (pid <= 0)
     return 0;
   process_t *target = process_get_by_pid((uint32_t)pid);
-  if (target)
+  if (target) {
     process_terminate(target);
+    process_put(target);
+  }
   tty_set_foreground(tty_id, 0);
   return 0;
 }
+
 
 static uint64_t sys_cmd_tty_kill_all(const syscall_args_t *args) {
   int tty_id = (int)args->arg2;
@@ -1527,46 +1690,6 @@ static uint64_t sys_cmd_disk_get_info(const syscall_args_t *args) {
   return 0;
 }
 
-static uint64_t sys_cmd_disk_write_gpt(const syscall_args_t *args) {
-  const char *devname = (const char *)args->arg2;
-  k_partition_spec_t *parts = (k_partition_spec_t *)args->arg3;
-  int count = (int)args->arg4;
-  if (!devname || !parts)
-    return (uint64_t)-1;
-  Disk *d = disk_get_by_name(devname);
-  if (!d)
-    return (uint64_t)-1;
-  return (uint64_t)disk_write_gpt(d, (disk_partition_spec_t *)parts, count);
-}
-
-static uint64_t sys_cmd_disk_write_mbr(const syscall_args_t *args) {
-  const char *devname = (const char *)args->arg2;
-  k_partition_spec_t *parts = (k_partition_spec_t *)args->arg3;
-  int count = (int)args->arg4;
-  if (!devname || !parts)
-    return (uint64_t)-1;
-  Disk *d = disk_get_by_name(devname);
-  if (!d)
-    return (uint64_t)-1;
-  return (uint64_t)disk_write_mbr(d, (disk_partition_spec_t *)parts, count);
-}
-
-static uint64_t sys_cmd_disk_mkfs_fat32(const syscall_args_t *args) {
-  extern int mkfs_fat32_format(Disk * disk, uint32_t sector_count,
-                               const char *label);
-  const char *devname = (const char *)args->arg2;
-  const char *label = (const char *)args->arg3;
-  if (!devname)
-    return (uint64_t)-1;
-  Disk *d = disk_get_by_name(devname);
-  if (!d)
-    return (uint64_t)-1;
-  int ret = mkfs_fat32_format(d, d->total_sectors, label);
-  if (ret == 0)
-    d->is_fat32 = true;
-  return (uint64_t)ret;
-}
-
 static uint64_t sys_cmd_disk_mount(const syscall_args_t *args) {
   const char *devname = (const char *)args->arg2;
   const char *mountpoint = (const char *)args->arg3;
@@ -1575,21 +1698,46 @@ static uint64_t sys_cmd_disk_mount(const syscall_args_t *args) {
   Disk *d = disk_get_by_name(devname);
   if (!d)
     return (uint64_t)-1;
+
   if (d->is_fat32) {
     void *vol = fat32_mount_volume(d);
-    if (!vol)
-      return (uint64_t)-1;
-    if (!vfs_mount(mountpoint, devname, "fat32", fat32_get_realfs_ops(), vol))
-      return (uint64_t)-1;
-    return 0;
+    if (vol) {
+      if (vfs_mount(mountpoint, devname, "fat32", fat32_get_realfs_ops(), vol))
+        return 0;
+    }
   }
-  // Try ext4
+
+  uint8_t sb_buf[512];
+  if (d->read_sector(d, 2, sb_buf) == 0) {
+    uint16_t magic = *(uint16_t *)(sb_buf + 56);
+    if (magic == 0xEF53) {
+      void *vol = ext4fs_mount_volume(d);
+      if (vol) {
+        if (vfs_mount(mountpoint, devname, "ext4", ext4fs_get_ops(), vol)) {
+          d->is_fat32 = false;
+          return 0;
+        }
+      }
+    }
+  }
+
   void *vol = ext4fs_mount_volume(d);
-  if (!vol)
-    return (uint64_t)-1;
-  if (!vfs_mount(mountpoint, devname, "ext4", ext4fs_get_ops(), vol))
-    return (uint64_t)-1;
-  return 0;
+  if (vol) {
+    if (vfs_mount(mountpoint, devname, "ext4", ext4fs_get_ops(), vol)) {
+      d->is_fat32 = false;
+      return 0;
+    }
+  }
+
+  vol = fat32_mount_volume(d);
+  if (vol) {
+    if (vfs_mount(mountpoint, devname, "fat32", fat32_get_realfs_ops(), vol)) {
+      d->is_fat32 = true;
+      return 0;
+    }
+  }
+
+  return (uint64_t)-1;
 }
 
 static uint64_t sys_cmd_disk_umount(const syscall_args_t *args) {
@@ -1643,6 +1791,7 @@ static uint64_t handle_sys_write(const syscall_args_t *args) {
   size_t len = (size_t)args->arg3;
 
   if (!buf || len == 0) return 0;
+  if (proc && proc->is_user && !is_valid_user_ptr(buf, len)) return (uint64_t)-EFAULT;
 
   if (proc && fd >= 0 && fd < MAX_PROCESS_FDS && proc->fds[fd]) {
     syscall_args_t fs_args = *args;
@@ -1669,51 +1818,101 @@ static uint64_t handle_sys_write(const syscall_args_t *args) {
 
 
 
-static uint64_t handle_sys_sbrk(const syscall_args_t *args) {
-  int incr = (int)args->arg1;
+static uint64_t handle_sys_brk(const syscall_args_t *args) {
+  uint64_t val = args->arg1;
   process_t *proc = process_get_current();
   if (!proc || !proc->is_user)
     return (uint64_t)-1;
 
-  uint64_t old_end = proc->heap_end;
-  if (incr == 0)
-    return old_end;
+  if (val == 0)
+    return proc->heap_end;
 
-  uint64_t new_end = old_end + incr;
-
-  if (incr > 0) {
-    uint64_t start_page = (old_end + 0xFFF) & ~0xFFF;
-    uint64_t end_page = (new_end + 0xFFF) & ~0xFFF;
-
-    if (end_page > start_page) {
-      for (uint64_t page = start_page; page < end_page; page += 4096) {
-        void *phys_page = kmalloc_aligned(4096, 4096);
-        if (!phys_page)
-          return old_end;
-
-        memset(phys_page, 0, 4096);
-
-        if (!paging_map_page(proc->pml4_phys, page, v2p((uint64_t)phys_page), 0x07)) {
-          kfree_null(phys_page);
-          return old_end;
-        }
-        proc->used_memory += 4096;
-      }
-    }
+  if (proc->vmm_space) {
+    uintptr_t res = vmm_brk(proc->vmm_space, val);
+    proc->heap_end = res;
+    return res;
   }
 
-  proc->heap_end = new_end;
-  return old_end;
+  return proc->heap_end;
 }
 
 #define PROT_READ 0x1
 #define PROT_WRITE 0x2
+#define PROT_EXEC 0x4
 #define MAP_SHARED 0x01
 #define MAP_PRIVATE 0x02
+#define MAP_FIXED 0x10
 #define MAP_FIXED 0x10
 #define MAP_ANONYMOUS 0x20
 #define MAP_FAILED ((void *)-1)
 
+
+typedef struct vfs_page_cache_node {
+    void *mount_or_fs;
+    void *fs_handle;
+    uint64_t offset;
+    uintptr_t phys_addr;
+    struct vfs_page_cache_node *next;
+} vfs_page_cache_node_t;
+
+#define VFS_PAGE_CACHE_BUCKETS 512
+static vfs_page_cache_node_t *vfs_page_cache_table[VFS_PAGE_CACHE_BUCKETS] = {NULL};
+static spinlock_t vfs_page_cache_lock = SPINLOCK_INIT;
+
+static uintptr_t vfs_get_cached_page(vfs_file_t *file, uint64_t offset, uint64_t file_size) {
+    if (!file || !file->fs_handle) return 0;
+    uint32_t bucket = (((uintptr_t)file->fs_handle >> 4) ^ (offset >> 12)) % VFS_PAGE_CACHE_BUCKETS;
+
+    uint64_t flags = spinlock_acquire_irqsave(&vfs_page_cache_lock);
+    vfs_page_cache_node_t *node = vfs_page_cache_table[bucket];
+    while (node) {
+        if (node->mount_or_fs == file->mount && node->fs_handle == file->fs_handle && node->offset == offset) {
+            uintptr_t paddr = node->phys_addr;
+            spinlock_release_irqrestore(&vfs_page_cache_lock, flags);
+            return paddr;
+        }
+        node = node->next;
+    }
+    spinlock_release_irqrestore(&vfs_page_cache_lock, flags);
+
+    page_t *pg = pmm_alloc_page(PAGE_FLAG_ZERO);
+    if (!pg) return 0;
+    uintptr_t phys = pmm_page_to_paddr(pg);
+    extern uint64_t p2v(uint64_t phys);
+    void *kptr = (void *)p2v(phys);
+    memset(kptr, 0, 4096);
+
+    if (offset < file_size) {
+        size_t to_read = (file_size - offset > 4096) ? 4096 : (size_t)(file_size - offset);
+        vfs_seek(file, (int64_t)offset, 0);
+        vfs_read(file, kptr, to_read);
+    }
+
+    flags = spinlock_acquire_irqsave(&vfs_page_cache_lock);
+    node = vfs_page_cache_table[bucket];
+    while (node) {
+        if (node->mount_or_fs == file->mount && node->fs_handle == file->fs_handle && node->offset == offset) {
+            uintptr_t paddr = node->phys_addr;
+            spinlock_release_irqrestore(&vfs_page_cache_lock, flags);
+            pmm_free_page(pg);
+            return paddr;
+        }
+        node = node->next;
+    }
+
+    vfs_page_cache_node_t *new_node = (vfs_page_cache_node_t *)kmalloc(sizeof(vfs_page_cache_node_t));
+    if (new_node) {
+        new_node->mount_or_fs = file->mount;
+        new_node->fs_handle = file->fs_handle;
+        new_node->offset = offset;
+        new_node->phys_addr = phys;
+        new_node->next = vfs_page_cache_table[bucket];
+        vfs_page_cache_table[bucket] = new_node;
+    }
+    spinlock_release_irqrestore(&vfs_page_cache_lock, flags);
+
+    return phys;
+}
 
 static uint64_t handle_sys_mmap(const syscall_args_t *args) {
   process_t *proc = process_get_current();
@@ -1726,11 +1925,30 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
   int flags = (int)args->arg4;
   int fd = (int)args->arg5;
   uint64_t offset = args->arg6;
-  (void)offset;
 
   if (length == 0)
     return (uint64_t)MAP_FAILED;
   uint64_t aligned_len = (length + 4095) & ~4095ULL;
+
+  if (flags & MAP_FIXED) {
+    if (addr < 0x10000 || addr + aligned_len > 0x00007FFFFFF00000ULL)
+      return (uint64_t)MAP_FAILED;
+    if (proc->vmm_space) {
+      vmm_unmap(proc->vmm_space, addr, aligned_len);
+    }
+  }
+
+  if (flags & MAP_ANONYMOUS) {
+    if (proc->vmm_space) {
+      uint32_t mmu_prot = MMU_PROT_USER;
+      if (prot & PROT_READ)  mmu_prot |= MMU_PROT_READ;
+      if (prot & PROT_WRITE) mmu_prot |= MMU_PROT_WRITE;
+      if (prot & PROT_EXEC)  mmu_prot |= MMU_PROT_EXEC;
+      void *res = vmm_map(proc->vmm_space, addr, aligned_len, mmu_prot, 0, NULL, 0);
+      if (!res) return (uint64_t)MAP_FAILED;
+      return (uint64_t)res;
+    }
+  }
 
   uint64_t virt_addr = addr;
   if (virt_addr == 0) {
@@ -1738,9 +1956,14 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
     proc->mmap_current += aligned_len;
   }
 
-  uint64_t pt_flags = PT_PRESENT | PT_USER;
+  uint32_t map_prot = MMU_PROT_READ | MMU_PROT_USER;
   if (prot & PROT_WRITE)
-    pt_flags |= PT_RW;
+    map_prot |= MMU_PROT_WRITE;
+  if (prot & 0x4)
+    map_prot |= MMU_PROT_EXEC;
+
+  mmu_context_t fallback_ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
+  mmu_context_t *proc_ctx = (proc->vmm_space && proc->vmm_space->mmu_ctx) ? proc->vmm_space->mmu_ctx : &fallback_ctx;
 
   if (flags & MAP_ANONYMOUS) {
     for (uint64_t off = 0; off < aligned_len; off += 4096) {
@@ -1749,8 +1972,7 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
         return (uint64_t)MAP_FAILED;
       memset(phys_page, 0, 4096);
 
-      if (!paging_map_page(proc->pml4_phys, virt_addr + off, v2p((uint64_t)phys_page),
-                      pt_flags)) {
+      if (mmu_map_page(proc_ctx, virt_addr + off, v2p((uint64_t)phys_page), map_prot) != 0) {
         kfree_null(phys_page);
         return (uint64_t)MAP_FAILED;
       }
@@ -1775,10 +1997,20 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
       return (uint64_t)MAP_FAILED;
 
     uint64_t phys_addr = v2p((uint64_t)fb.address);
-    uint64_t fb_flags = pt_flags | PT_WRITE_THROUGH;
+    if (proc->vmm_space) {
+      uint32_t mmu_prot = MMU_PROT_READ | MMU_PROT_USER;
+      if (prot & PROT_WRITE) mmu_prot |= MMU_PROT_WRITE;
+      void *res = vmm_map(proc->vmm_space, addr, aligned_len, mmu_prot, VMA_FLAG_SHARED, (void *)1, 0);
+      if (!res) return (uint64_t)MAP_FAILED;
+      virt_addr = (uint64_t)res;
+      for (uint64_t off = 0; off < aligned_len; off += 4096) {
+        mmu_map_page(proc->vmm_space->mmu_ctx, virt_addr + off, phys_addr + off, mmu_prot);
+      }
+      return virt_addr;
+    }
+
     for (uint64_t off = 0; off < aligned_len; off += 4096) {
-      if (!paging_map_page(proc->pml4_phys, virt_addr + off, phys_addr + off,
-                      fb_flags))
+      if (mmu_map_page(proc_ctx, virt_addr + off, phys_addr + off, map_prot | MMU_FLAG_WC) != 0)
         return (uint64_t)MAP_FAILED;
     }
     return virt_addr;
@@ -1788,6 +2020,7 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
     typedef struct shm_segment shm_segment_t;
     extern int shm_allocate(shm_segment_t *seg, size_t size);
     extern void shm_ref(shm_segment_t *seg);
+    extern void shm_unref(shm_segment_t *seg);
     shm_segment_t *seg = (shm_segment_t *)file->fs_handle;
     if (!seg)
       return (uint64_t)MAP_FAILED;
@@ -1799,9 +2032,32 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
     }
 
     // Keep the segment alive after the file descriptor is closed.
-    // Without this, close(shm_fd) after mmap drops refcount to 0,
-    // freeing backing pages while they are still mapped into userspace.
     shm_ref(seg);
+
+    if (proc->vmm_space) {
+      uint32_t mmu_prot = MMU_PROT_READ | MMU_PROT_USER;
+      if (prot & PROT_WRITE) mmu_prot |= MMU_PROT_WRITE;
+      if (prot & 0x4)        mmu_prot |= MMU_PROT_EXEC;
+      void *res = vmm_map(proc->vmm_space, addr, aligned_len, mmu_prot, VMA_FLAG_SHARED, (void *)seg, 0);
+      if (!res) {
+        shm_unref(seg);
+        return (uint64_t)MAP_FAILED;
+      }
+      virt_addr = (uint64_t)res;
+
+      if (proc->shm_mapping_count < 64) {
+        proc->shm_mappings[proc->shm_mapping_count].addr = virt_addr;
+        proc->shm_mappings[proc->shm_mapping_count].length = aligned_len;
+        proc->shm_mappings[proc->shm_mapping_count].seg = (void*)seg;
+        proc->shm_mapping_count++;
+      }
+
+      uint32_t pages_to_map = aligned_len / 4096;
+      for (uint32_t i = 0; i < pages_to_map; i++) {
+        mmu_map_page(proc->vmm_space->mmu_ctx, virt_addr + i * 4096, seg->phys_pages[i], mmu_prot);
+      }
+      return virt_addr;
+    }
 
     // Track the SHM mapping in proc
     if (proc->shm_mapping_count >= 64) {
@@ -1816,9 +2072,59 @@ static uint64_t handle_sys_mmap(const syscall_args_t *args) {
     // Map pages covering the requested length
     uint32_t pages_to_map = aligned_len / 4096;
     for (uint32_t i = 0; i < pages_to_map; i++) {
-      if (!paging_map_page(proc->pml4_phys, virt_addr + i * 4096, seg->phys_pages[i],
-                      pt_flags))
+      if (mmu_map_page(proc_ctx, virt_addr + i * 4096, seg->phys_pages[i], map_prot) != 0)
         return (uint64_t)MAP_FAILED;
+    }
+    return virt_addr;
+  }
+
+  if (!file->is_device && file->fs_handle) {
+    uint64_t file_size = 0;
+    if (file->mount && file->mount->ops && file->mount->ops->get_size) {
+      file_size = file->mount->ops->get_size(file->fs_handle);
+    }
+
+    if (proc->vmm_space) {
+      uint32_t mmu_prot = MMU_PROT_READ | MMU_PROT_USER;
+      if (prot & PROT_WRITE) mmu_prot |= MMU_PROT_WRITE;
+      if (prot & 0x4)        mmu_prot |= MMU_PROT_EXEC;
+
+      uint32_t vma_flags = VMA_FLAG_READ;
+      if (prot & PROT_WRITE) vma_flags |= VMA_FLAG_WRITE;
+      if (prot & 0x4)        vma_flags |= VMA_FLAG_EXEC;
+      if (flags & MAP_SHARED) vma_flags |= VMA_FLAG_SHARED;
+      else if (!(prot & PROT_WRITE)) vma_flags |= VMA_FLAG_SHARED;
+
+      void *res = vmm_map(proc->vmm_space, addr, aligned_len, mmu_prot, vma_flags, (void *)1, 0);
+      if (!res) return (uint64_t)MAP_FAILED;
+      virt_addr = (uint64_t)res;
+
+      uint32_t pages_to_map = aligned_len / 4096;
+      for (uint32_t i = 0; i < pages_to_map; i++) {
+        uint64_t curr_off = offset + (uint64_t)i * 4096;
+        uintptr_t phys_page = vfs_get_cached_page(file, curr_off, file_size);
+        if (!phys_page) {
+          page_t *p = pmm_alloc_page(PAGE_FLAG_ZERO);
+          if (p) phys_page = pmm_page_to_paddr(p);
+        }
+        if (phys_page) {
+          mmu_map_page(proc->vmm_space->mmu_ctx, virt_addr + (uint64_t)i * 4096, phys_page, mmu_prot);
+        }
+      }
+      return virt_addr;
+    }
+
+    uint32_t pages_to_map = aligned_len / 4096;
+    for (uint32_t i = 0; i < pages_to_map; i++) {
+      uint64_t curr_off = offset + (uint64_t)i * 4096;
+      uintptr_t phys_page = vfs_get_cached_page(file, curr_off, file_size);
+      if (!phys_page) {
+        page_t *p = pmm_alloc_page(PAGE_FLAG_ZERO);
+        if (p) phys_page = pmm_page_to_paddr(p);
+      }
+      if (phys_page) {
+        mmu_map_page(proc_ctx, virt_addr + (uint64_t)i * 4096, phys_page, map_prot);
+      }
     }
     return virt_addr;
   }
@@ -1838,9 +2144,27 @@ static uint64_t handle_sys_munmap(const syscall_args_t *args) {
     return 0;
   uint64_t aligned_len = (length + 4095) & ~4095ULL;
 
+  if (proc->vmm_space) {
+    for (uint32_t i = 0; i < proc->shm_mapping_count; i++) {
+      if (proc->shm_mappings[i].addr == addr) {
+        if (proc->shm_mappings[i].seg) {
+          shm_unref((shm_segment_t *)proc->shm_mappings[i].seg);
+          proc->shm_mappings[i].seg = NULL;
+        }
+        for (uint32_t j = i; j < proc->shm_mapping_count - 1; j++) {
+          proc->shm_mappings[j] = proc->shm_mappings[j + 1];
+        }
+        proc->shm_mapping_count--;
+        break;
+      }
+    }
+    return (uint64_t)vmm_unmap(proc->vmm_space, addr, aligned_len);
+  }
+
+  mmu_context_t fallback_ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
   for (uint64_t off = 0; off < aligned_len; off += 4096) {
     uint64_t vaddr = addr + off;
-    uint64_t phys = paging_virt2phys(proc->pml4_phys, vaddr);
+    uint64_t phys = mmu_virt_to_phys(&fallback_ctx, vaddr);
     if (phys) {
       bool is_shm = false;
       for (uint32_t i = 0; i < proc->shm_mapping_count; i++) {
@@ -1851,14 +2175,15 @@ static uint64_t handle_sys_munmap(const syscall_args_t *args) {
         }
       }
       if (!is_shm) {
-        void *virt_ptr = (void *)p2v(phys);
-        extern bool mm_is_heap_address(void *ptr);
-        if (mm_is_heap_address(virt_ptr)) {
-          kfree_null(virt_ptr);
+        page_t *p = pmm_paddr_to_page(phys);
+        if (p && !(p->flags & (PAGE_FLAG_SLAB | PAGE_FLAG_KMALLOC_LARGE))) {
+          pmm_free_page(p);
+        } else {
+          kfree((void *)p2v(phys));
         }
       }
     }
-    paging_unmap_page(proc->pml4_phys, vaddr);
+    mmu_unmap_page(&fallback_ctx, vaddr);
   }
 
   // Find and release the SHM mapping
@@ -1879,6 +2204,25 @@ static uint64_t handle_sys_munmap(const syscall_args_t *args) {
   return 0;
 }
 
+static uint64_t handle_sys_mprotect(const syscall_args_t *args) {
+  process_t *proc = process_get_current();
+  if (!proc || !proc->is_user)
+    return (uint64_t)-1;
+
+  uintptr_t addr = args->arg1;
+  size_t length = args->arg2;
+  int prot = (int)args->arg3;
+
+  if (proc->vmm_space) {
+    uint32_t mmu_prot = MMU_PROT_USER;
+    if (prot & PROT_READ)  mmu_prot |= MMU_PROT_READ;
+    if (prot & PROT_WRITE) mmu_prot |= MMU_PROT_WRITE;
+    if (prot & PROT_EXEC)  mmu_prot |= MMU_PROT_EXEC;
+    return (uint64_t)vmm_protect(proc->vmm_space, addr, length, mmu_prot);
+  }
+  return 0;
+}
+
 // ---------------------------------------------------------------------------
 // Futex implementation
 // ---------------------------------------------------------------------------
@@ -1895,7 +2239,7 @@ typedef struct {
 static futex_bucket_t g_futex_buckets[FUTEX_BUCKETS];
 static bool g_futex_initialized = false;
 
-static void futex_init(void) {
+void futex_init(void) {
   for (int i = 0; i < FUTEX_BUCKETS; i++) {
     g_futex_buckets[i].head = NULL;
     g_futex_buckets[i].lock = SPINLOCK_INIT;
@@ -1903,19 +2247,33 @@ static void futex_init(void) {
   g_futex_initialized = true;
 }
 
-static inline futex_bucket_t *futex_bucket(uint32_t *uaddr) {
-  if (!g_futex_initialized)
-    futex_init();
-  uintptr_t key = (uintptr_t)uaddr >> 2;
-  return &g_futex_buckets[key & (FUTEX_BUCKETS - 1)];
+static inline futex_bucket_t *futex_bucket(uintptr_t key) {
+  return &g_futex_buckets[(key >> 2) & (FUTEX_BUCKETS - 1)];
+}
+
+static inline uintptr_t futex_get_phys(process_t *proc, uint32_t *uaddr) {
+  if (!proc || !uaddr) return 0;
+  extern uintptr_t mmu_virt_to_phys(mmu_context_t *ctx, uintptr_t virt);
+  if (proc->vmm_space && proc->vmm_space->mmu_ctx) {
+    return mmu_virt_to_phys(proc->vmm_space->mmu_ctx, (uintptr_t)uaddr);
+  }
+  if (proc->pml4_phys) {
+    mmu_context_t tmp_ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
+    return mmu_virt_to_phys(&tmp_ctx, (uintptr_t)uaddr);
+  }
+  return 0;
 }
 
 /* Public kernel API, usable from sysdep test drivers */
 int kernel_futex_wait(uint32_t *uaddr, uint32_t expected) {
-  futex_bucket_t *b = futex_bucket(uaddr);
   process_t *proc = process_get_current();
   if (!proc)
     return -1;
+
+  uintptr_t phys = futex_get_phys(proc, uaddr);
+  uintptr_t key = phys ? phys : ((uintptr_t)uaddr ^ (uintptr_t)proc->pml4_phys);
+
+  futex_bucket_t *b = futex_bucket(key);
 
   uint64_t flags = spinlock_acquire_irqsave(&b->lock);
 
@@ -1926,6 +2284,8 @@ int kernel_futex_wait(uint32_t *uaddr, uint32_t expected) {
   }
 
   proc->futex_waiter.uaddr = uaddr;
+  proc->futex_waiter.pml4_phys = proc->pml4_phys;
+  proc->futex_waiter.phys_addr = phys;
   proc->futex_waiter.proc = (struct process *)proc;
   proc->futex_waiter.next = b->head;
   b->head = (futex_waiter_t *)&proc->futex_waiter;
@@ -1937,7 +2297,14 @@ int kernel_futex_wait(uint32_t *uaddr, uint32_t expected) {
 }
 
 int kernel_futex_wake(uint32_t *uaddr, int count) {
-  futex_bucket_t *b = futex_bucket(uaddr);
+  process_t *proc = process_get_current();
+  if (!proc)
+    return 0;
+
+  uintptr_t phys = futex_get_phys(proc, uaddr);
+  uintptr_t key = phys ? phys : ((uintptr_t)uaddr ^ (uintptr_t)proc->pml4_phys);
+
+  futex_bucket_t *b = futex_bucket(key);
   int woken = 0;
 
   uint64_t flags = spinlock_acquire_irqsave(&b->lock);
@@ -1945,12 +2312,21 @@ int kernel_futex_wake(uint32_t *uaddr, int count) {
   futex_waiter_t **pprev = &b->head;
   futex_waiter_t *cur = b->head;
   while (cur && woken < count) {
-    if (cur->uaddr == uaddr) {
+    bool match = false;
+    if (phys != 0 && cur->phys_addr != 0 && cur->phys_addr == phys) {
+      match = true;
+    } else if (cur->pml4_phys == proc->pml4_phys && cur->uaddr == uaddr) {
+      match = true;
+    }
+
+    if (match) {
       *pprev = cur->next; /* unlink */
       if (cur->proc) {
         ((process_t *)cur->proc)->state = PROC_STATE_RUNNING;
       }
       cur->uaddr = NULL;
+      cur->pml4_phys = 0;
+      cur->phys_addr = 0;
       cur->next = NULL;
       woken++;
       cur = *pprev; /* continue from same position */
@@ -1961,6 +2337,10 @@ int kernel_futex_wake(uint32_t *uaddr, int count) {
   }
 
   spinlock_release_irqrestore(&b->lock, flags);
+  if (woken > 0) {
+    extern void smp_wake_idle_cpus(void);
+    smp_wake_idle_cpus();
+  }
   return woken;
 }
 
@@ -1975,8 +2355,8 @@ static uint64_t handle_sys_futex(const syscall_args_t *args) {
   int op = (int)args->arg2;
   uint32_t val = (uint32_t)args->arg3;
 
-  if (!uaddr)
-    return (uint64_t)-1;
+  if (!uaddr || !is_valid_user_ptr(uaddr, sizeof(uint32_t)))
+    return (uint64_t)-EFAULT;
 
   int cmd = op & 0x7F;
 
@@ -2403,29 +2783,6 @@ static uint64_t handle_sys_disk_get_info(const syscall_args_t *args) {
   shifted.arg2 = args->arg1;
   shifted.arg3 = args->arg2;
   return sys_cmd_disk_get_info(&shifted);
-}
-
-static uint64_t handle_sys_disk_write_gpt(const syscall_args_t *args) {
-  syscall_args_t shifted = *args;
-  shifted.arg2 = args->arg1;
-  shifted.arg3 = args->arg2;
-  shifted.arg4 = args->arg3;
-  return sys_cmd_disk_write_gpt(&shifted);
-}
-
-static uint64_t handle_sys_disk_write_mbr(const syscall_args_t *args) {
-  syscall_args_t shifted = *args;
-  shifted.arg2 = args->arg1;
-  shifted.arg3 = args->arg2;
-  shifted.arg4 = args->arg3;
-  return sys_cmd_disk_write_mbr(&shifted);
-}
-
-static uint64_t handle_sys_disk_mkfs_fat32(const syscall_args_t *args) {
-  syscall_args_t shifted = *args;
-  shifted.arg2 = args->arg1;
-  shifted.arg3 = args->arg2;
-  return sys_cmd_disk_mkfs_fat32(&shifted);
 }
 
 static uint64_t handle_sys_disk_mount(const syscall_args_t *args) {
@@ -2863,8 +3220,9 @@ static const syscall_handler_fn syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_POLL] = handle_sys_poll,
     [SYS_LSEEK] = handle_sys_lseek,
     [SYS_MMAP] = handle_sys_mmap,
+    [SYS_MPROTECT] = handle_sys_mprotect,
     [SYS_MUNMAP] = handle_sys_munmap,
-    [SYS_BRK] = handle_sys_sbrk,
+    [SYS_BRK] = handle_sys_brk,
     [SYS_RT_SIGACTION] = handle_sys_rt_sigaction,
     [SYS_RT_SIGPROCMASK] = handle_sys_rt_sigprocmask,
     [SYS_IOCTL] = handle_sys_ioctl,
@@ -2920,9 +3278,6 @@ static const syscall_handler_fn syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_SPAWN] = handle_sys_spawn,
     [SYS_DISK_GET_COUNT] = handle_sys_disk_get_count,
     [SYS_DISK_GET_INFO] = handle_sys_disk_get_info,
-    [SYS_DISK_WRITE_GPT] = handle_sys_disk_write_gpt,
-    [SYS_DISK_WRITE_MBR] = handle_sys_disk_write_mbr,
-    [SYS_DISK_MKFS_FAT32] = handle_sys_disk_mkfs_fat32,
     [SYS_DISK_MOUNT] = handle_sys_disk_mount,
     [SYS_DISK_UMOUNT] = handle_sys_disk_umount,
     [SYS_DISK_SYNC] = handle_sys_disk_sync,
@@ -2980,7 +3335,7 @@ static uint64_t syscall_maybe_deliver_signal(registers_t *regs) {
   }
 
   if (handler == 0 || sig == 9) {
-    process_terminate_with_status(proc, 128 + sig);
+    process_terminate_with_status(proc, sig & 0x7f);
     return process_schedule((uint64_t)regs);
   }
 
@@ -3010,7 +3365,9 @@ static uint64_t syscall_maybe_deliver_signal(registers_t *regs) {
    * and write to the underlying physical frame via p2v(). This avoids
    * accidentally writing into kernel memory if regs->rsp was corrupted
    * or pointed at an unmapped address. */
-  uint64_t phys = paging_virt2phys(proc->pml4_phys, new_rsp);
+  mmu_context_t fallback_ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
+  mmu_context_t *uctx = (proc->vmm_space && proc->vmm_space->mmu_ctx) ? proc->vmm_space->mmu_ctx : &fallback_ctx;
+  uint64_t phys = mmu_virt_to_phys(uctx, new_rsp);
   if (!phys) {
     return process_terminate_current_with_status(128 + 11, (uint64_t)regs);
   }

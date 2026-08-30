@@ -29,17 +29,15 @@ uint64_t timer_handler(registers_t *regs) {
 
         extern void k_beep_process(void);
         k_beep_process();
+
+        if (smp_cpu_count() > 1) {
+            lapic_send_ipi_all();
+        }
     }
 
     outb(0x20, 0x20);
     extern uint64_t process_schedule(uint64_t current_rsp);
-    uint64_t new_rsp = process_schedule((uint64_t)regs);
-
-    if (smp_cpu_count() > 1) {
-        lapic_send_ipi_all();
-    }
-
-    return new_rsp;
+    return process_schedule((uint64_t)regs);
 }
 
 // --- Keyboard ---
@@ -128,7 +126,10 @@ uint64_t keyboard_handler(registers_t *regs) {
                             process_t *proc = process_get_by_pid((uint32_t)fg_pid);
                             if (proc) {
                                 proc->signal_pending |= SIGINT;
+                                extern void process_put(process_t *proc);
+                                process_put(proc);
                             }
+
                         } else {
                             // No foreground process, send as input character
                             tty_push_char(tty_id, CTRL_C_CHAR); // Ctrl+C = ETX

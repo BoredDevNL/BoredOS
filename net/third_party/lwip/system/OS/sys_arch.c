@@ -41,6 +41,9 @@
 
 #include "cmsis_os2.h"
 #include "process.h"
+#include "spinlock.h"
+
+static spinlock_t lwip_core_lock = SPINLOCK_INIT;
 
 #if (defined (__CC_ARM) || defined (__ARMCC_VERSION) || defined (__ICCARM__))
 int errno;
@@ -390,7 +393,7 @@ sys_thread_t sys_thread_new(const char *name, lwip_thread_fn thread , void *arg,
 */
 sys_prot_t sys_arch_protect(void)
 {
-  return 1;
+  return (sys_prot_t)spinlock_acquire_irqsave(&lwip_core_lock);
 }
 
 
@@ -405,7 +408,7 @@ sys_prot_t sys_arch_protect(void)
 */
 void sys_arch_unprotect(sys_prot_t pval)
 {
-  ( void ) pval;
+  spinlock_release_irqrestore(&lwip_core_lock, (uint64_t)pval);
 }
 
 #endif /* !NO_SYS */

@@ -80,7 +80,40 @@ typedef struct {
 #define EM_X86_64 62
 
 /* p_type constants */
-#define PT_LOAD 1
+#define PT_NULL    0
+#define PT_LOAD    1
+#define PT_DYNAMIC 2
+#define PT_INTERP  3
+#define PT_NOTE    4
+#define PT_SHLIB   5
+#define PT_PHDR    6
+#define PT_TLS     7
+
+/* AUXV (Auxiliary Vector) types */
+#define AT_NULL    0
+#define AT_IGNORE  1
+#define AT_EXECFD  2
+#define AT_PHDR    3
+#define AT_PHENT   4
+#define AT_PHNUM   5
+#define AT_PAGESZ  6
+#define AT_BASE    7
+#define AT_FLAGS   8
+#define AT_ENTRY   9
+#define AT_NOTELF  10
+#define AT_UID     11
+#define AT_EUID    12
+#define AT_GID     13
+#define AT_EGID    14
+#define AT_PLATFORM 15
+#define AT_HWCAP   16
+#define AT_CLKTCK  17
+#define AT_SECURE  23
+#define AT_BASE_PLATFORM 24
+#define AT_RANDOM  25
+#define AT_HWCAP2  26
+#define AT_EXECFN  31
+#define AT_SYSINFO_EHDR 33
 
 /* sh_type constants */
 #define SHT_NOTE 7
@@ -116,10 +149,16 @@ typedef struct __attribute__((packed)) {
 #include <stdbool.h>
 #include <stddef.h>
 
-// Loads the ELF executable at 'path' using fat32 into the pagemap given by user_pml4.
-// Returns entry point address on success, or 0 on failure.
+typedef struct {
+    uint64_t entry_point;
+    uint64_t exec_entry;
+    uint64_t phdr_vaddr;
+    uint64_t phdr_num;
+    uint64_t interp_base;
+    size_t   load_size;
+    bool     has_interp;
+} elf_load_result_t;
 struct process;
-uint64_t elf_load(const char *path, uint64_t user_pml4, size_t *out_load_size, struct process *proc,
-                  uint64_t *out_phdr_vaddr, uint64_t *out_phdr_num);
+bool elf_load(const char *path, uint64_t user_pml4, struct process *proc, elf_load_result_t *out_result);
 
 #endif

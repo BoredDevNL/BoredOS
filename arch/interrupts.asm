@@ -15,11 +15,12 @@ global isr12_wrapper
 global isr14_wrapper
 global isr128_wrapper
 global isr_sched_ipi_wrapper
-
+global isr_tlb_ipi_wrapper
 extern timer_handler
 extern keyboard_handler
 extern mouse_handler
 extern sched_ipi_handler
+extern tlb_shootdown_ipi_handler
 extern syscall_handler_c
 extern exception_handler_c
 extern serial_com1_handler
@@ -62,6 +63,7 @@ isr%2_wrapper:
 %%skip_swap:
     
     sub rsp, 512
+    fxsave64 [rsp]
 
     ; Pass current RSP as 1st argument (registers_t*)
     mov rdi, rsp
@@ -71,6 +73,7 @@ isr%2_wrapper:
     ; Restore RSP from return value (may be same stack or task-switched stack)
     ; Both cases need to skip the 512-byte fxsave_region
     mov rsp, rax
+    fxrstor64 [rsp]
     add rsp, 512
 %%restore_regs:
     
@@ -113,22 +116,26 @@ isr4_wrapper:
     ISR_NOERRCODE serial_com1_handler, 36
 
 isr5_wrapper:
-    ISR_NOERRCODE ac97_handler, 37
+    ISR_NOERRCODE pci_irq_handler, 37
 
 isr9_wrapper:
-    ISR_NOERRCODE ac97_handler, 41
+    ISR_NOERRCODE pci_irq_handler, 41
 
 isr10_wrapper:
-    ISR_NOERRCODE ac97_handler, 42
+    ISR_NOERRCODE pci_irq_handler, 42
 
 isr11_wrapper:
-    ISR_NOERRCODE ac97_handler, 43
+    ISR_NOERRCODE pci_irq_handler, 43
+
 
 isr12_wrapper:
     ISR_NOERRCODE mouse_handler, 44
 
 isr_sched_ipi_wrapper:
     ISR_NOERRCODE sched_ipi_handler, 65
+
+isr_tlb_ipi_wrapper:
+    ISR_NOERRCODE tlb_shootdown_ipi_handler, 66
 
 isr128_wrapper:
     ISR_NOERRCODE syscall_handler_c, 128
@@ -208,6 +215,7 @@ exception_common:
 .skip_swap_exc:
     
     sub rsp, 512
+    fxsave64 [rsp]
 
     ; Pass current RSP as 1st argument (registers_t*)
     mov rdi, rsp
@@ -217,6 +225,7 @@ exception_common:
     ; Restore RSP from return value (may be same stack or task-switched stack)
     ; Both cases need to skip the 512-byte fxsave_region
     mov rsp, rax
+    fxrstor64 [rsp]
     add rsp, 512
 .restore_regs_exc:
 

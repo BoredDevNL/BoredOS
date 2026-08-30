@@ -4,8 +4,8 @@
 #include "ahci.h"
 #include "pci.h"
 #include "disk.h"
-#include "memory_manager.h"
-#include "paging.h"
+#include "slab.h"
+#include "mmu.h"
 #include "io.h"
 #include <stddef.h>
 #include "spinlock.h"
@@ -14,7 +14,7 @@
 
 extern void serial_write(const char *str);
 extern void serial_write_num(uint64_t num);
-extern void serial_write_hex(uint32_t val);
+extern void serial_write_hex(uint64_t val);
 
 // ============================================================================
 // AHCI Driver State
@@ -86,6 +86,8 @@ static int ahci_check_port_type(HBA_PORT *port) {
     }
 }
 
+#define AHCI_MAX_PRDT 256
+
 static void ahci_port_rebase(ahci_port_state_t *ps) {
     HBA_PORT *port = ps->port;
 
@@ -109,7 +111,7 @@ static void ahci_port_rebase(ahci_port_state_t *ps) {
     port->fb = (uint32_t)(fb_phys & 0xFFFFFFFF);
     port->fbu = (uint32_t)(fb_phys >> 32);
 
-    int cmd_tbl_size = sizeof(HBA_CMD_TBL) + 32 * sizeof(HBA_PRDT_ENTRY);
+    int cmd_tbl_size = sizeof(HBA_CMD_TBL) + AHCI_MAX_PRDT * sizeof(HBA_PRDT_ENTRY);
     ps->cmd_tbl = (HBA_CMD_TBL*)kmalloc_aligned(cmd_tbl_size, 256);
     if (!ps->cmd_tbl) return;
     memset(ps->cmd_tbl, 0, cmd_tbl_size);
@@ -138,61 +140,80 @@ static int ahci_find_free_slot(HBA_PORT *port) {
 
 static int ahci_identify(int port_num, uint32_t *sectors, char *model) {
     ahci_port_state_t *ps = &ports[port_num];
-    HBA_PORT *port = ps->port;
+    if (!ps->active) return -1;
 
     uint64_t rflags = spinlock_acquire_irqsave(&ps->lock);
-    port->is = 0xFFFFFFFF;
+    HBA_PORT *port = ps->port;
+
     int slot = ahci_find_free_slot(port);
-    if (slot < 0) { spinlock_release_irqrestore(&ps->lock, rflags); return -1; }
+    if (slot < 0) {
+        spinlock_release_irqrestore(&ps->lock, rflags);
+        return -1;
+    }
 
     HBA_CMD_HEADER *cmd_hdr = &ps->cmd_list[slot];
     cmd_hdr->cfl = sizeof(FIS_REG_H2D) / sizeof(uint32_t);
     cmd_hdr->w = 0;
     cmd_hdr->prdtl = 1;
 
-    HBA_CMD_TBL *cmd_tbl = ps->cmd_tbl;
-    memset(cmd_tbl, 0, sizeof(HBA_CMD_TBL) + 32 * sizeof(HBA_PRDT_ENTRY));
+    uint8_t *buf = (uint8_t*)kmalloc_aligned(512, 512);
+    if (!buf) {
+        spinlock_release_irqrestore(&ps->lock, rflags);
+        return -1;
+    }
+    memset(buf, 0, 512);
 
-    uint16_t *buf = (uint16_t*)kmalloc_aligned(512, 512);
-    uint64_t phys = v2p((uint64_t)buf);
+    HBA_CMD_TBL *cmd_tbl = ps->cmd_tbl;
+    memset(cmd_tbl, 0, sizeof(HBA_CMD_TBL) + sizeof(HBA_PRDT_ENTRY));
+
+    uint64_t phys = mmu_virt_to_phys(mmu_get_current_context(), (uintptr_t)buf);
+    if (!phys) {
+        kfree_null(buf);
+        spinlock_release_irqrestore(&ps->lock, rflags);
+        return -1;
+    }
 
     cmd_tbl->prdt[0].dba = (uint32_t)(phys & 0xFFFFFFFF);
     cmd_tbl->prdt[0].dbau = (uint32_t)(phys >> 32);
-    cmd_tbl->prdt[0].dbc = 511; // 512 bytes
+    cmd_tbl->prdt[0].dbc = 512 - 1;
     cmd_tbl->prdt[0].i = 1;
 
-    FIS_REG_H2D *fis = (FIS_REG_H2D*)(&cmd_tbl->cfis);
+    FIS_REG_H2D *fis = (FIS_REG_H2D*)&cmd_tbl->cfis;
     fis->fis_type = FIS_TYPE_REG_H2D;
-    fis->c = 1;  // Command
-    fis->command = 0xEC; // IDENTIFY DEVICE
-
-    // Wait for port to be idle
-    int timeout = 1000000;
-    while ((port->tfd & (ATA_SR_BSY | ATA_SR_DRQ)) && --timeout > 0);
-    if (timeout <= 0) { kfree_null(buf); spinlock_release_irqrestore(&ps->lock, rflags); return -1; }
+    fis->c = 1;
+    fis->command = ATA_CMD_IDENTIFY;
 
     port->ci = (1 << slot);
 
-    while (1) {
-        if ((port->ci & (1 << slot)) == 0) break;
-        if (port->is & HBA_PORT_IS_TFES) { kfree_null(buf); spinlock_release_irqrestore(&ps->lock, rflags); return -1; }
+    int timeout = 1000000;
+    while (timeout-- > 0) {
+        if (!(port->ci & (1 << slot))) break;
+        if (port->is & (1 << 30)) {
+            kfree_null(buf);
+            spinlock_release_irqrestore(&ps->lock, rflags);
+            return -1;
+        }
     }
 
-    // Extract sectors (28-bit LBA for now, or 48-bit if supported)
-    uint32_t s28 = *((uint32_t*)&buf[60]);
-    uint64_t s48 = *((uint64_t*)&buf[100]);
+    if (timeout <= 0) {
+        kfree_null(buf);
+        spinlock_release_irqrestore(&ps->lock, rflags);
+        return -1;
+    }
+
+    uint16_t *wbuf = (uint16_t*)buf;
+    uint32_t s28 = *((uint32_t*)&wbuf[60]);
+    uint64_t s48 = *((uint64_t*)&wbuf[100]);
 
     if (s48 > 0) *sectors = (uint32_t)s48;
     else *sectors = s28;
 
-    // Extract model name (Words 27-46, 40 bytes, big-endian shorts)
     for (int i = 0; i < 20; i++) {
-        model[i*2] = (char)(buf[27+i] >> 8);
-        model[i*2+1] = (char)(buf[27+i] & 0xFF);
+        model[i*2] = (char)(wbuf[27+i] >> 8);
+        model[i*2+1] = (char)(wbuf[27+i] & 0xFF);
     }
     model[40] = 0;
 
-    // Swap bytes in model string (ATA strings are byte-swapped)
     for (int i = 0; i < 40; i += 2) {
         char tmp = model[i];
         model[i] = model[i+1];
@@ -204,17 +225,15 @@ static int ahci_identify(int port_num, uint32_t *sectors, char *model) {
     return 0;
 }
 
-
-
 static int ahci_fill_prdt(HBA_CMD_TBL *cmd_tbl, const void *buffer,
                           uint32_t byte_count) {
-    uint64_t pml4 = paging_get_pml4_phys();
+    mmu_context_t *ctx = mmu_get_current_context();
     uint64_t buf_addr = (uint64_t)buffer;
     uint32_t remaining = byte_count;
     int prd_idx = 0;
 
-    while (remaining > 0 && prd_idx < 32) {
-        uint64_t phys = paging_virt2phys(pml4, buf_addr);
+    while (remaining > 0 && prd_idx < AHCI_MAX_PRDT) {
+        uint64_t phys = mmu_virt_to_phys(ctx, buf_addr);
         if (!phys)
             return -1;
 
@@ -222,9 +241,22 @@ static int ahci_fill_prdt(HBA_CMD_TBL *cmd_tbl, const void *buffer,
         uint32_t can_do = 4096 - offset;
         if (can_do > remaining) can_do = remaining;
 
+        if (prd_idx > 0) {
+            uint64_t prev_phys = ((uint64_t)cmd_tbl->prdt[prd_idx - 1].dbau << 32) | cmd_tbl->prdt[prd_idx - 1].dba;
+            uint32_t prev_len = cmd_tbl->prdt[prd_idx - 1].dbc + 1;
+            if (prev_phys + prev_len == phys && (prev_len + can_do) <= 0x400000) {
+                cmd_tbl->prdt[prd_idx - 1].dbc += can_do;
+                buf_addr += can_do;
+                remaining -= can_do;
+                continue;
+            }
+        }
+
         cmd_tbl->prdt[prd_idx].dba = (uint32_t)(phys & 0xFFFFFFFF);
         cmd_tbl->prdt[prd_idx].dbau = (uint32_t)(phys >> 32);
+        cmd_tbl->prdt[prd_idx].rsv0 = 0;
         cmd_tbl->prdt[prd_idx].dbc = can_do - 1;
+        cmd_tbl->prdt[prd_idx].rsv1 = 0;
         cmd_tbl->prdt[prd_idx].i = 0;
 
         buf_addr += can_do;
@@ -232,31 +264,38 @@ static int ahci_fill_prdt(HBA_CMD_TBL *cmd_tbl, const void *buffer,
         prd_idx++;
     }
 
+    if (remaining > 0) return -1;
     if (prd_idx > 0) cmd_tbl->prdt[prd_idx - 1].i = 1;
     return prd_idx;
 }
 
-int ahci_read_sectors(int port_num, uint64_t lba, uint32_t count, uint8_t *buffer) {
-    if (!ahci_initialized || port_num < 0 || port_num >= MAX_AHCI_PORTS) return -1;
-    ahci_port_state_t *ps = &ports[port_num];
-    if (!ps->active) return -1;
+static int ahci_read_sectors_single(ahci_port_state_t *ps, int port_num, uint64_t lba, uint32_t count, uint8_t *buffer) {
+    if ((uint64_t)buffer < 0xFFFF800000000000ULL && count > 0) {
+        volatile uint8_t *p = (volatile uint8_t *)buffer;
+        uint32_t total = count * 512;
+        for (uint32_t i = 0; i < total; i += 4096) {
+            p[i] = p[i];
+        }
+        p[total - 1] = p[total - 1];
+    }
 
     uint64_t rflags = spinlock_acquire_irqsave(&ps->lock);
     HBA_PORT *port = ps->port;
-
-    // Clear any pending interrupts/errors
     port->is = 0xFFFFFFFF;
 
     int slot = ahci_find_free_slot(port);
-    if (slot < 0) return -1;
+    if (slot < 0) {
+        spinlock_release_irqrestore(&ps->lock, rflags);
+        return -1;
+    }
 
     HBA_CMD_HEADER *cmd_hdr = &ps->cmd_list[slot];
     cmd_hdr->cfl = sizeof(FIS_REG_H2D) / sizeof(uint32_t);
-    cmd_hdr->w = 0;   // Read
+    cmd_hdr->w = 0;
     cmd_hdr->prdtl = 1;
 
     HBA_CMD_TBL *cmd_tbl = ps->cmd_tbl;
-    memset(cmd_tbl, 0, sizeof(HBA_CMD_TBL) + 32 * sizeof(HBA_PRDT_ENTRY));
+    memset(cmd_tbl, 0, sizeof(HBA_CMD_TBL));
 
     int prd_idx = ahci_fill_prdt(cmd_tbl, buffer, count * 512);
     if (prd_idx < 0) {
@@ -265,16 +304,15 @@ int ahci_read_sectors(int port_num, uint64_t lba, uint32_t count, uint8_t *buffe
     }
     cmd_hdr->prdtl = prd_idx;
 
-    // Setup Command FIS
     FIS_REG_H2D *fis = (FIS_REG_H2D*)&cmd_tbl->cfis;
     fis->fis_type = FIS_TYPE_REG_H2D;
-    fis->c = 1;  // Command
+    fis->c = 1;
     fis->command = ATA_CMD_READ_DMA_EX;
 
     fis->lba0 = (uint8_t)(lba);
     fis->lba1 = (uint8_t)(lba >> 8);
     fis->lba2 = (uint8_t)(lba >> 16);
-    fis->device = 1 << 6;  // LBA mode
+    fis->device = 1 << 6;
     fis->lba3 = (uint8_t)(lba >> 24);
     fis->lba4 = (uint8_t)(lba >> 32);
     fis->lba5 = (uint8_t)(lba >> 40);
@@ -282,14 +320,12 @@ int ahci_read_sectors(int port_num, uint64_t lba, uint32_t count, uint8_t *buffe
     fis->countl = (uint8_t)(count);
     fis->counth = (uint8_t)(count >> 8);
 
-    // Issue command
     port->ci = (1 << slot);
 
-    // Wait for completion
     int timeout = 1000000;
     while (timeout-- > 0) {
         if (!(port->ci & (1 << slot))) break;
-        if (port->is & (1 << 30)) {  // Task File Error
+        if (port->is & (1 << 30)) {
             serial_write("\n");
             spinlock_release_irqrestore(&ps->lock, rflags);
             return -1;
@@ -308,26 +344,50 @@ int ahci_read_sectors(int port_num, uint64_t lba, uint32_t count, uint8_t *buffe
     return 0;
 }
 
-int ahci_write_sectors(int port_num, uint64_t lba, uint32_t count, const uint8_t *buffer) {
+int ahci_read_sectors(int port_num, uint64_t lba, uint32_t count, uint8_t *buffer) {
     if (!ahci_initialized || port_num < 0 || port_num >= MAX_AHCI_PORTS) return -1;
     ahci_port_state_t *ps = &ports[port_num];
     if (!ps->active) return -1;
 
+    while (count > 0) {
+        uint32_t chunk = (count > 256) ? 256 : count;
+        if (ahci_read_sectors_single(ps, port_num, lba, chunk, buffer) != 0) return -1;
+        lba += chunk;
+        buffer += chunk * 512;
+        count -= chunk;
+    }
+    return 0;
+}
+
+static int ahci_write_sectors_single(ahci_port_state_t *ps, int port_num, uint64_t lba, uint32_t count, const uint8_t *buffer) {
+    if ((uint64_t)buffer < 0xFFFF800000000000ULL && count > 0) {
+        const volatile uint8_t *p = (const volatile uint8_t *)buffer;
+        uint32_t total = count * 512;
+        for (uint32_t i = 0; i < total; i += 4096) {
+            uint8_t dummy = p[i];
+            (void)dummy;
+        }
+        uint8_t dummy = p[total - 1];
+        (void)dummy;
+    }
+
     uint64_t rflags = spinlock_acquire_irqsave(&ps->lock);
     HBA_PORT *port = ps->port;
-
     port->is = 0xFFFFFFFF;
 
     int slot = ahci_find_free_slot(port);
-    if (slot < 0) return -1;
+    if (slot < 0) {
+        spinlock_release_irqrestore(&ps->lock, rflags);
+        return -1;
+    }
 
     HBA_CMD_HEADER *cmd_hdr = &ps->cmd_list[slot];
     cmd_hdr->cfl = sizeof(FIS_REG_H2D) / sizeof(uint32_t);
-    cmd_hdr->w = 1;   // Write
+    cmd_hdr->w = 1;
     cmd_hdr->prdtl = 1;
 
     HBA_CMD_TBL *cmd_tbl = ps->cmd_tbl;
-    memset(cmd_tbl, 0, sizeof(HBA_CMD_TBL) + 32 * sizeof(HBA_PRDT_ENTRY));
+    memset(cmd_tbl, 0, sizeof(HBA_CMD_TBL));
 
     int prd_idx = ahci_fill_prdt(cmd_tbl, buffer, count * 512);
     if (prd_idx < 0) {
@@ -375,6 +435,21 @@ int ahci_write_sectors(int port_num, uint64_t lba, uint32_t count, const uint8_t
     }
 
     spinlock_release_irqrestore(&ps->lock, rflags);
+    return 0;
+}
+
+int ahci_write_sectors(int port_num, uint64_t lba, uint32_t count, const uint8_t *buffer) {
+    if (!ahci_initialized || port_num < 0 || port_num >= MAX_AHCI_PORTS) return -1;
+    ahci_port_state_t *ps = &ports[port_num];
+    if (!ps->active) return -1;
+
+    while (count > 0) {
+        uint32_t chunk = (count > 256) ? 256 : count;
+        if (ahci_write_sectors_single(ps, port_num, lba, chunk, buffer) != 0) return -1;
+        lba += chunk;
+        buffer += chunk * 512;
+        count -= chunk;
+    }
     return 0;
 }
 
@@ -478,9 +553,9 @@ void ahci_init(void) {
 
     uint64_t abar_virt = p2v(abar_phys);
     for (uint64_t offset = 0; offset < 0x2000; offset += 4096) {
-        if (!paging_map_page(paging_get_pml4_phys(), abar_virt + offset,
-                        abar_phys + offset,
-                        PT_PRESENT | PT_RW | PT_CACHE_DISABLE))
+        if (mmu_map_page(mmu_get_kernel_context(), abar_virt + offset,
+                         abar_phys + offset,
+                         MMU_PROT_READ | MMU_PROT_WRITE | MMU_FLAG_NOCACHE) != 0)
             return;
     }
 
@@ -501,6 +576,7 @@ void ahci_init(void) {
 
     for (int i = 0; i < 32; i++) {
         ports[i].active = false;
+        if (!(pi & (1 << i))) continue;
 
         HBA_PORT *port = &abar->ports[i];
         ports[i].lock = SPINLOCK_INIT;
@@ -521,7 +597,13 @@ void ahci_init(void) {
             // Register as a block device
             Disk *disk = (Disk*)kmalloc(sizeof(Disk));
             if (disk) {
+                memset(disk, 0, sizeof(Disk));
                 AHCIDriverData *drv = (AHCIDriverData*)kmalloc(sizeof(AHCIDriverData));
+                if (!drv) {
+                    kfree_null(disk);
+                    continue;
+                }
+                memset(drv, 0, sizeof(AHCIDriverData));
                 drv->ahci_port = i;
 
                 disk->devname[0] = 0; // Auto-assign
@@ -617,6 +699,10 @@ int ahci_flush_cache(int port_num) {
 }
 
 static int ahci_disk_sync(Disk *disk) {
+    if (!disk) return -1;
+    if (disk->is_partition && disk->parent) {
+        return ahci_disk_sync(disk->parent);
+    }
     AHCIDriverData *drv = (AHCIDriverData*)disk->driver_data;
     if (!drv) return -1;
     return ahci_flush_cache(drv->ahci_port);

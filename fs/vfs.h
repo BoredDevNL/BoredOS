@@ -20,6 +20,8 @@
 #define POLLNVAL   0x0020
 
 struct poll_table;
+struct page;
+struct address_space;
 
 // statfs structure
 typedef struct {
@@ -63,6 +65,9 @@ typedef struct vfs_fs_ops {
     bool  (*is_dir)(void *fs_private, const char *rel_path);
     int   (*get_info)(void *fs_private, const char *rel_path, vfs_dirent_t *info);
     int   (*statfs)(void *fs_private, vfs_statfs_t *stat);
+    int   (*sync_fs)(void *fs_private);
+    int   (*unmount)(void *fs_private);
+    int   (*writepage)(struct address_space *mapping, struct page *page);
 
     // Handle info (for backward compat with syscall position/size queries)
     uint32_t (*get_position)(void *file_handle);
@@ -93,7 +98,9 @@ struct vfs_file {
     uint64_t position;      // Current Seek Position (for raw devices/fallbacks)
     bool is_device;         // Is this a raw device handle?
     int device_type;        // DEVICE_TYPE_BLOCK, TTY, etc.
+    uint32_t wb_err;        // errseq_t snapshot
 };
+
 
 
 // Mount entry
@@ -120,7 +127,7 @@ vfs_file_t* vfs_open(const char *path, const char *mode);
 void vfs_close(vfs_file_t *file);
 int vfs_read(vfs_file_t *file, void *buf, size_t size);
 int vfs_write(vfs_file_t *file, const void *buf, size_t size);
-int vfs_seek(vfs_file_t *file, int offset, int whence);
+int vfs_seek(vfs_file_t *file, int64_t offset, int whence);
 int vfs_poll(vfs_file_t *file, struct poll_table *pt);
 
 // Directory operations
@@ -139,6 +146,7 @@ int vfs_statfs(const char *path, vfs_statfs_t *stat);
 // Mount enumeration
 int vfs_get_mount_count(void);
 vfs_mount_t* vfs_get_mount(int index);
+int vfs_sync_all(void);
 
 // Block device auto-mount
 void vfs_automount_partition(const char *devname);
@@ -147,7 +155,7 @@ void vfs_automount_partition(const char *devname);
 void vfs_normalize_path(const char *cwd, const char *path, char *normalized);
 
 // Backward compat: get position/size from vfs_file
-uint32_t vfs_file_position(vfs_file_t *file);
-uint32_t vfs_file_size(vfs_file_t *file);
+uint64_t vfs_file_position(vfs_file_t *file);
+uint64_t vfs_file_size(vfs_file_t *file);
 
 #endif

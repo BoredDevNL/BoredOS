@@ -4,10 +4,10 @@
 #include "process.h"
 #include "gdt.h"
 #include "idt.h"
-#include "paging.h"
+#include "mmu.h"
 #include "io.h"
 #include "platform.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "tty.h"
 #include "elf.h"
 #include "vfs.h"
@@ -18,6 +18,7 @@
 #include "shm.h"
 #include "kutils.h"
 #include "fpu.h"
+#include "vmm.h"
 
 #define MSR_FS_BASE 0xC0000100
 
@@ -29,22 +30,29 @@ extern void serial_write_num(uint32_t n);
 #define MAX_CPUS_SCHED 32
 #define PID_HASH_BUCKETS 128
 
-typedef struct process_node {
-    process_t *proc;
-    struct process_node *next;
-} process_node_t;
-
-static process_node_t *pid_hash_table[PID_HASH_BUCKETS] = {0};
+static process_t *pid_hash_table[PID_HASH_BUCKETS] = {NULL};
 static spinlock_t process_table_lock = SPINLOCK_INIT;
 static spinlock_t runqueue_lock = SPINLOCK_INIT;
 
-static uint32_t next_pid = 0;
+static volatile uint32_t next_pid = 0;
 
-uint32_t reaper_pid = 0; // PID of the userspace zombie reaper daemon
+uint32_t reaper_pid = 0; 
 
 static void process_cleanup_inner(process_t *proc);
 static void process_init_signal_state(process_t *proc);
 extern void poll_cleanup(process_t *proc);
+
+static inline process_t *process_alloc_struct(void) {
+    process_t *p = (process_t *)kmalloc(sizeof(process_t));
+    if (p) memset(p, 0, sizeof(process_t));
+    return p;
+}
+
+static inline void process_free_struct(process_t *p) {
+    if (p) kfree(p);
+}
+
+static __attribute__((aligned(16))) uint8_t clean_fxsave_template[512];
 
 static uint32_t pid_hash(uint32_t pid) {
     return pid % PID_HASH_BUCKETS;
@@ -54,32 +62,33 @@ static void pid_table_insert(process_t *proc) {
     if (!proc) return;
     uint64_t rflags = spinlock_acquire_irqsave(&process_table_lock);
     uint32_t idx = pid_hash(proc->pid);
-    process_node_t *node = (process_node_t *)kmalloc(sizeof(process_node_t));
-    if (node) {
-        node->proc = proc;
-        node->next = pid_hash_table[idx];
-        pid_hash_table[idx] = node;
-    }
+    proc->pid_hash_next = pid_hash_table[idx];
+    pid_hash_table[idx] = proc;
     spinlock_release_irqrestore(&process_table_lock, rflags);
+}
+
+static process_t *pid_table_remove_unlocked(uint32_t pid) {
+    uint32_t idx = pid_hash(pid);
+    process_t *curr = pid_hash_table[idx];
+    process_t *prev = NULL;
+    process_t *found = NULL;
+    while (curr) {
+        if (curr->pid == pid) {
+            found = curr;
+            if (prev) prev->pid_hash_next = curr->pid_hash_next;
+            else pid_hash_table[idx] = curr->pid_hash_next;
+            curr->pid_hash_next = NULL;
+            break;
+        }
+        prev = curr;
+        curr = curr->pid_hash_next;
+    }
+    return found;
 }
 
 static process_t *pid_table_remove(uint32_t pid) {
     uint64_t rflags = spinlock_acquire_irqsave(&process_table_lock);
-    uint32_t idx = pid_hash(pid);
-    process_node_t *curr = pid_hash_table[idx];
-    process_node_t *prev = NULL;
-    process_t *found = NULL;
-    while (curr) {
-        if (curr->proc && curr->proc->pid == pid) {
-            found = curr->proc;
-            if (prev) prev->next = curr->next;
-            else pid_hash_table[idx] = curr->next;
-            kfree_null(curr);
-            break;
-        }
-        prev = curr;
-        curr = curr->next;
-    }
+    process_t *found = pid_table_remove_unlocked(pid);
     spinlock_release_irqrestore(&process_table_lock, rflags);
     return found;
 }
@@ -108,25 +117,29 @@ void process_put(process_t *proc) {
                 proc->pml4_refcount = NULL;
             }
         }
-        if (proc->pml4_phys && should_destroy_pml4) {
-            if (proc->user_stack_alloc) {
-                extern void paging_unmap_page(uint64_t pml4_phys, uint64_t virtual_addr);
+        if (proc->user_stack_alloc) {
+            if (proc->pml4_phys) {
+                mmu_context_t ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
                 uint64_t stack_top = 0x800000;
                 uint64_t stack_size = 262144;
                 for (uint64_t off = 0; off < stack_size; off += 4096) {
-                    paging_unmap_page(proc->pml4_phys, stack_top - stack_size + off);
+                    mmu_unmap_page(&ctx, stack_top - stack_size + off);
                 }
-                kfree_null(proc->user_stack_alloc);
-                proc->user_stack_alloc = NULL;
             }
-            extern void paging_destroy_user_pml4_phys(uint64_t pml4_phys, bool free_mapped);
-            paging_destroy_user_pml4_phys(proc->pml4_phys, true);
-            proc->pml4_phys = 0;
-        } else if (proc->user_stack_alloc && !should_destroy_pml4) {
             kfree_null(proc->user_stack_alloc);
             proc->user_stack_alloc = NULL;
         }
-        kfree_null(proc);
+        if (proc->vmm_space && should_destroy_pml4) {
+            vmm_destroy_space(proc->vmm_space);
+            proc->vmm_space = NULL;
+            proc->pml4_phys = 0;
+        } else if (proc->pml4_phys && should_destroy_pml4) {
+            mmu_context_t ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
+            mmu_destroy_context(&ctx);
+            proc->pml4_phys = 0;
+        }
+        process_free_struct(proc);
+        proc = NULL;
     }
 }
 
@@ -134,15 +147,15 @@ void process_put(process_t *proc) {
 process_t* process_get_by_pid(uint32_t pid) {
     uint64_t rflags = spinlock_acquire_irqsave(&process_table_lock);
     uint32_t idx = pid_hash(pid);
-    process_node_t *curr = pid_hash_table[idx];
+    process_t *curr = pid_hash_table[idx];
     process_t *found = NULL;
     while (curr) {
-        if (curr->proc && curr->proc->pid == pid) {
-            found = curr->proc;
+        if (curr->pid == pid) {
+            found = curr;
             process_hold(found);
             break;
         }
-        curr = curr->next;
+        curr = curr->pid_hash_next;
     }
     spinlock_release_irqrestore(&process_table_lock, rflags);
     return found;
@@ -152,12 +165,10 @@ void process_table_for_each(void (*cb)(process_t *proc, void *arg), void *arg) {
     if (!cb) return;
     uint64_t rflags = spinlock_acquire_irqsave(&process_table_lock);
     for (int i = 0; i < PID_HASH_BUCKETS; i++) {
-        process_node_t *curr = pid_hash_table[i];
+        process_t *curr = pid_hash_table[i];
         while (curr) {
-            if (curr->proc) {
-                cb(curr->proc, arg);
-            }
-            curr = curr->next;
+            cb(curr, arg);
+            curr = curr->pid_hash_next;
         }
     }
     spinlock_release_irqrestore(&process_table_lock, rflags);
@@ -193,8 +204,8 @@ void process_close_fd_inner(process_t *proc, int fd) {
     if (proc->fd_kind[fd] == PROC_FD_KIND_FILE) {
         process_fd_file_ref_t *ref = (process_fd_file_ref_t *)proc->fds[fd];
         if (ref) {
-            ref->refs--;
-            if (ref->refs <= 0) {
+            if (__atomic_fetch_sub(&ref->refs, 1, __ATOMIC_RELEASE) == 1) {
+                __atomic_thread_fence(__ATOMIC_ACQUIRE);
                 if (ref->file) vfs_close((vfs_file_t *)ref->file);
                 kfree_null(ref);
             }
@@ -202,9 +213,12 @@ void process_close_fd_inner(process_t *proc, int fd) {
     } else if (proc->fd_kind[fd] == PROC_FD_KIND_PIPE_READ || proc->fd_kind[fd] == PROC_FD_KIND_PIPE_WRITE) {
         process_fd_pipe_t *pipe = (process_fd_pipe_t *)proc->fds[fd];
         if (pipe) {
-            if (proc->fd_kind[fd] == PROC_FD_KIND_PIPE_READ) pipe->readers--;
-            else pipe->writers--;
-            if (pipe->readers <= 0 && pipe->writers <= 0) {
+            if (proc->fd_kind[fd] == PROC_FD_KIND_PIPE_READ)
+                __atomic_fetch_sub(&pipe->readers, 1, __ATOMIC_RELEASE);
+            else
+                __atomic_fetch_sub(&pipe->writers, 1, __ATOMIC_RELEASE);
+            if (__atomic_load_n(&pipe->readers, __ATOMIC_ACQUIRE) <= 0 &&
+                __atomic_load_n(&pipe->writers, __ATOMIC_ACQUIRE) <= 0) {
                 kfree_null(pipe);
             }
         }
@@ -235,13 +249,13 @@ process_fd_socket_t *process_socket_create(void) {
 
 void process_socket_addref(process_fd_socket_t *sock) {
     if (!sock) return;
-    sock->refs++;
+    __atomic_fetch_add(&sock->refs, 1, __ATOMIC_RELAXED);
 }
 
 void process_socket_release(process_fd_socket_t *sock) {
     if (!sock) return;
-    sock->refs--;
-    if (sock->refs > 0) return;
+    if (__atomic_fetch_sub(&sock->refs, 1, __ATOMIC_RELEASE) > 1) return;
+    __atomic_thread_fence(__ATOMIC_ACQUIRE);
 
     if (sock->domain == 1 || sock->unpcb != NULL) {
         extern void unix_socket_close(void *sock);
@@ -281,9 +295,12 @@ static void process_init_signal_state(process_t *proc) {
 }
 
 void process_init(void) {
-    process_t *kernel_proc = (process_t *)kmalloc(sizeof(process_t));
-    memset(kernel_proc, 0, sizeof(process_t));
-    kernel_proc->pid = next_pid++;
+    asm volatile("fninit");
+    asm volatile("fxsave %0" : "=m"(clean_fxsave_template));
+
+    process_t *kernel_proc = process_alloc_struct();
+    if (!kernel_proc) return;
+    kernel_proc->pid = __atomic_fetch_add(&next_pid, 1, __ATOMIC_SEQ_CST);
     kernel_proc->refcount = 10000;
     kernel_proc->running_cpu = 0;
     kernel_proc->is_user = false;
@@ -292,7 +309,7 @@ void process_init(void) {
     kernel_proc->tty_id = -1;
     kernel_proc->kill_pending = false;
 
-    kernel_proc->pml4_phys = paging_get_kernel_pml4_phys();
+    kernel_proc->pml4_phys = mmu_get_kernel_context()->pml4_phys;
     void *kstack = kmalloc_aligned(KERNEL_STACK_SIZE, KERNEL_STACK_ALIGNMENT);
     if (kstack) {
         memset(kstack, 0, KERNEL_STACK_SIZE);
@@ -310,8 +327,7 @@ void process_init(void) {
         *(--stack_ptr) = 0;                                   // int_no
         for (int i = 0; i < 15; i++) *(--stack_ptr) = 0;      // 15 GPRs
         stack_ptr = (uint64_t *)((uint64_t)stack_ptr - 512);  // fxsave_region
-        asm volatile("fninit");
-        asm volatile("fxsave %0" : "=m"(*(uint8_t *)stack_ptr));
+        memcpy((void *)stack_ptr, clean_fxsave_template, 512);
         kernel_proc->rsp = (uint64_t)stack_ptr;
     } else {
         kernel_proc->kernel_stack = 0;
@@ -354,18 +370,14 @@ process_t* process_create(void (*entry_point)(void), bool is_user) {
         entry_point = work_queue_drain_loop;
     }
 
-    uint64_t rflags = spinlock_acquire_irqsave(&runqueue_lock);
-
-    process_t *new_proc = (process_t *)kmalloc(sizeof(process_t));
+    process_t *new_proc = process_alloc_struct();
     if (!new_proc) {
-        spinlock_release_irqrestore(&runqueue_lock, rflags);
         return NULL;
     }
-    memset(new_proc, 0, sizeof(process_t));
 
     process_t *parent = process_get_current();
 
-    new_proc->pid = next_pid++;
+    new_proc->pid = __atomic_fetch_add(&next_pid, 1, __ATOMIC_SEQ_CST);
     new_proc->refcount = 1;
     new_proc->running_cpu = -1;
     new_proc->is_user = is_user;
@@ -389,16 +401,17 @@ process_t* process_create(void (*entry_point)(void), bool is_user) {
     
     // 1. Setup Page Table
     if (is_user) {
-        new_proc->pml4_phys = paging_create_user_pml4_phys();
+        mmu_context_t *ctx = mmu_create_context();
+        new_proc->pml4_phys = ctx ? ctx->pml4_phys : 0;
         new_proc->pml4_refcount = (int *)kmalloc(sizeof(int));
         if (new_proc->pml4_refcount) *new_proc->pml4_refcount = 1;
     } else {
-        new_proc->pml4_phys = paging_get_kernel_pml4_phys();
+        new_proc->pml4_phys = mmu_get_kernel_context()->pml4_phys;
         new_proc->pml4_refcount = NULL;
     }
     
     if (!new_proc->pml4_phys) {
-        spinlock_release_irqrestore(&runqueue_lock, rflags);
+        process_put(new_proc);
         return NULL;
     }
     
@@ -407,16 +420,19 @@ process_t* process_create(void (*entry_point)(void), bool is_user) {
     if (!user_stack || !kernel_stack) {
         kfree_null(user_stack);
         kfree_null(kernel_stack);
-        spinlock_release_irqrestore(&runqueue_lock, rflags);
+        process_put(new_proc);
         return NULL;
     }
     memset(user_stack, 0, 131072);
     memset(kernel_stack, 0, 32768);
     
     if (is_user) {
+        mmu_context_t ctx = { .pml4_phys = new_proc->pml4_phys, .lock = SPINLOCK_INIT };
         for (int i = 0; i < 32; i++) {
-            if (!paging_map_page(new_proc->pml4_phys, 0x800000 + i*4096, v2p((uint64_t)user_stack + i*4096), PT_PRESENT | PT_RW | PT_USER)) {
-                spinlock_release_irqrestore(&runqueue_lock, rflags);
+            if (mmu_map_page(&ctx, 0x800000 + i*4096, v2p((uint64_t)user_stack + i*4096), MMU_PROT_READ | MMU_PROT_WRITE | MMU_PROT_USER) != 0) {
+                kfree_null(user_stack);
+                kfree_null(kernel_stack);
+                process_put(new_proc);
                 return NULL;
             }
         }
@@ -424,13 +440,18 @@ process_t* process_create(void (*entry_point)(void), bool is_user) {
         // Allocate code page aligned and copy code
         void* code = kmalloc_aligned(4096, 4096);
         if (!code) {
-            spinlock_release_irqrestore(&runqueue_lock, rflags);
+            kfree_null(user_stack);
+            kfree_null(kernel_stack);
+            process_put(new_proc);
             return NULL;
         }
         for(int i=0; i<128; i++) ((uint8_t*)code)[i] = ((uint8_t*)entry_point)[i];
 
-        if (!paging_map_page(new_proc->pml4_phys, 0x400000, v2p((uint64_t)code), PT_PRESENT | PT_RW | PT_USER)) {
-            spinlock_release_irqrestore(&runqueue_lock, rflags);
+        if (mmu_map_page(&ctx, 0x400000, v2p((uint64_t)code), MMU_PROT_READ | MMU_PROT_WRITE | MMU_PROT_USER) != 0) {
+            kfree_null(code);
+            kfree_null(user_stack);
+            kfree_null(kernel_stack);
+            process_put(new_proc);
             return NULL;
         }
         
@@ -451,10 +472,11 @@ process_t* process_create(void (*entry_point)(void), bool is_user) {
         
         // Push 512 bytes for SSE/FPU state (fxsave_region)
         stack_ptr = (uint64_t*)((uint64_t)stack_ptr - 512);
-        asm volatile("fninit");
-        asm volatile("fxsave %0" : "=m"(*(uint8_t *)stack_ptr));
+        memcpy((void *)stack_ptr, clean_fxsave_template, 512);
 
         new_proc->kernel_stack = (uint64_t)kernel_stack + 32768;
+        new_proc->kernel_stack_alloc = kernel_stack;
+        new_proc->user_stack_alloc = user_stack;
         new_proc->rsp = (uint64_t)stack_ptr;
     } else {
         // Kernel thread
@@ -472,10 +494,10 @@ process_t* process_create(void (*entry_point)(void), bool is_user) {
         
         // Push 512 bytes for SSE/FPU state (fxsave_region)
         stack_ptr = (uint64_t*)((uint64_t)stack_ptr - 512);
-        asm volatile("fninit");
-        asm volatile("fxsave %0" : "=m"(*(uint8_t *)stack_ptr));
+        memcpy((void *)stack_ptr, clean_fxsave_template, 512);
 
         new_proc->kernel_stack = (uint64_t)kernel_stack + 32768;
+        new_proc->kernel_stack_alloc = kernel_stack;
         new_proc->rsp = (uint64_t)stack_ptr;
         kfree_null(user_stack); // Unused for kernel threads
     }
@@ -487,7 +509,8 @@ process_t* process_create(void (*entry_point)(void), bool is_user) {
     }
     
     // Add to linked list
-    process_t *head = pid_hash_table[0] ? pid_hash_table[0]->proc : process_get_current_for_cpu(0);
+    uint64_t rflags = spinlock_acquire_irqsave(&runqueue_lock);
+    process_t *head = pid_hash_table[0] ? pid_hash_table[0] : process_get_current_for_cpu(0);
     if (head) {
         new_proc->next = head->next;
         head->next = new_proc;
@@ -508,14 +531,20 @@ void process_add_elf_segment(process_t *proc, void *ptr, uint64_t vaddr, size_t 
         proc->elf_segments[proc->elf_segment_count].size = size;
         proc->elf_segment_count++;
     }
+    if (proc->vmm_space) {
+        vm_area_t *vma = vma_create(vaddr, vaddr + size, VMA_TYPE_ANON,
+                                    VMA_FLAG_READ | VMA_FLAG_WRITE | VMA_FLAG_EXEC);
+        if (vma) {
+            vma_insert(&proc->vmm_space->vma_head, &proc->vmm_space->vma_tree, vma);
+        }
+    }
 }
 
 process_t* process_create_elf(const char* filepath, const char* args_str, bool terminal_proc, int tty_id) {
-    process_t *new_proc = (process_t *)kmalloc(sizeof(process_t));
+    process_t *new_proc = process_alloc_struct();
     if (!new_proc) return NULL;
-    memset(new_proc, 0, sizeof(process_t));
 
-    new_proc->pid = next_pid++;
+    new_proc->pid = __atomic_fetch_add(&next_pid, 1, __ATOMIC_SEQ_CST);
     new_proc->refcount = 1;
     new_proc->running_cpu = -1;
     new_proc->is_user = true;
@@ -525,9 +554,15 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
     new_proc->cpu_affinity = CPU_AFFINITY_ANY;
     
     // 1. Setup Page Table
-    new_proc->pml4_phys = paging_create_user_pml4_phys();
+    new_proc->vmm_space = vmm_create_space();
+    if (new_proc->vmm_space) {
+        new_proc->pml4_phys = new_proc->vmm_space->mmu_ctx->pml4_phys;
+    } else {
+        mmu_context_t *ctx = mmu_create_context();
+        new_proc->pml4_phys = ctx ? ctx->pml4_phys : 0;
+    }
     if (!new_proc->pml4_phys) {
-        kfree_null(new_proc);
+        process_put(new_proc);
         return NULL;
     }
     new_proc->pml4_refcount = (int *)kmalloc(sizeof(int));
@@ -558,13 +593,13 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
                 
                 if (new_proc->fd_kind[i] == PROC_FD_KIND_FILE) {
                     process_fd_file_ref_t *ref = (process_fd_file_ref_t *)new_proc->fds[i];
-                    if (ref) ref->refs++;
+                    if (ref) __atomic_fetch_add(&ref->refs, 1, __ATOMIC_RELAXED);
                 } else if (new_proc->fd_kind[i] == PROC_FD_KIND_PIPE_READ) {
                     process_fd_pipe_t *pipe = (process_fd_pipe_t *)new_proc->fds[i];
-                    if (pipe) pipe->readers++;
+                    if (pipe) __atomic_fetch_add(&pipe->readers, 1, __ATOMIC_RELAXED);
                 } else if (new_proc->fd_kind[i] == PROC_FD_KIND_PIPE_WRITE) {
                     process_fd_pipe_t *pipe = (process_fd_pipe_t *)new_proc->fds[i];
-                    if (pipe) pipe->writers++;
+                    if (pipe) __atomic_fetch_add(&pipe->writers, 1, __ATOMIC_RELAXED);
                 } else if (new_proc->fd_kind[i] == PROC_FD_KIND_SOCKET) {
                     process_socket_addref((process_fd_socket_t *)new_proc->fds[i]);
                 }
@@ -641,10 +676,8 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
     }
 
     // 2. Load ELF executable
-    size_t elf_load_size = 0;
-    uint64_t phdr_vaddr = 0, phdr_num = 0;
-    uint64_t entry_point = elf_load(filepath, new_proc->pml4_phys, &elf_load_size, new_proc, &phdr_vaddr, &phdr_num);
-    if (entry_point == 0) {
+    elf_load_result_t elf_res;
+    if (!elf_load(filepath, new_proc->pml4_phys, new_proc, &elf_res)) {
         serial_write("[PROC] Failed to load ELF: ");
         serial_write(filepath);
         serial_write("\n");
@@ -663,30 +696,45 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
     new_proc->name[ni] = 0;
     new_proc->ticks = 0;
 
-    // 3. Allocate generic User stack and Kernel stack for interrupts
-    // Increase to 256KB to prevent stack smashing on heavy networking
+    // 3. Allocate generic User stack (initial top 4KB page, rest demand-paged) and Kernel stack for interrupts
     const size_t user_stack_size = 262144;
-    void* stack = kmalloc_aligned(user_stack_size, 4096);
+    void* stack = kmalloc_aligned(4096, 4096);
     void* kernel_stack = kmalloc_aligned(KERNEL_STACK_SIZE, KERNEL_STACK_ALIGNMENT); 
     if (!stack || !kernel_stack) {
         kfree_null(stack);
         kfree_null(kernel_stack);
         return NULL;
     }
-    memset(stack, 0, user_stack_size);
+    memset(stack, 0, 4096);
     memset(kernel_stack, 0, KERNEL_STACK_SIZE); 
     
-    // Map User stack to 0x800000
-    for (uint64_t i = 0; i < (user_stack_size / 4096); i++) {
-        if (!paging_map_page(new_proc->pml4_phys, 0x800000 - user_stack_size + (i * 4096), v2p((uint64_t)stack + (i * 4096)), PT_PRESENT | PT_RW | PT_USER)) {
-            kfree_null(stack);
-            kfree_null(kernel_stack);
-            return NULL;
+    // Map initial top page of User stack to [0x800000 - 4096 .. 0x800000]
+    mmu_context_t fallback_ctx = { .pml4_phys = new_proc->pml4_phys, .lock = SPINLOCK_INIT };
+    mmu_context_t *proc_ctx = (new_proc->vmm_space && new_proc->vmm_space->mmu_ctx) ? new_proc->vmm_space->mmu_ctx : &fallback_ctx;
+    if (mmu_map_page(proc_ctx, 0x800000 - 4096, v2p((uint64_t)stack), MMU_PROT_READ | MMU_PROT_WRITE | MMU_PROT_USER) != 0) {
+        kfree_null(stack);
+        kfree_null(kernel_stack);
+        return NULL;
+    }
+
+    if (new_proc->vmm_space) {
+        vm_area_t *stack_vma = vma_create(0x800000 - user_stack_size, 0x800000, VMA_TYPE_ANON,
+                                          VMA_FLAG_READ | VMA_FLAG_WRITE | VMA_FLAG_STACK);
+        if (stack_vma) {
+            vma_insert(&new_proc->vmm_space->vma_head, &new_proc->vmm_space->vma_tree, stack_vma);
+        }
+
+        new_proc->vmm_space->brk_start = new_proc->heap_start;
+        new_proc->vmm_space->brk_current = new_proc->heap_end;
+        vm_area_t *heap_vma = vma_create(new_proc->heap_start, new_proc->heap_end, VMA_TYPE_ANON,
+                                         VMA_FLAG_READ | VMA_FLAG_WRITE | VMA_FLAG_HEAP);
+        if (heap_vma) {
+            vma_insert(&new_proc->vmm_space->vma_head, &new_proc->vmm_space->vma_tree, heap_vma);
         }
     }
 
     int argc = 1;
-    char *args_buf = (char *)stack + user_stack_size;
+    char *args_buf = (char *)stack + 4096;
     uint64_t user_args_buf = 0x800000;
 
     // Copy filepath as argv[0]
@@ -740,31 +788,31 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
     //        [argv[0] ... argv[argc-1]]
     //        [NULL]
     //        [envp[0] = NULL]
-    //        [auxv[0] key = AT_NULL]
-    //        [auxv[0] val = 0]
+    //        [auxv pairs...]
+    //        [auxv terminator: AT_NULL = 0, 0]
     
-    int total_elements = 1 + (argc + 1) + 1 + 10; 
+    int total_elements = 1 + (argc + 1) + 1 + 20; 
     int total_size = total_elements * (int)sizeof(uint64_t);
 
-    uint64_t current_user_sp = user_args_buf;
-    current_user_sp &= ~7ULL; // 8-byte align
+    uint64_t target_sp = (user_args_buf - total_size) & ~15ULL;
+    uint64_t current_user_sp = target_sp + total_size;
     
-    // Align final stack to 16 bytes
-    uint64_t target_sp = current_user_sp - total_size;
-    target_sp &= ~15ULL;
-    current_user_sp = target_sp + total_size;
-    
-    args_buf = (char *)((uint64_t)stack + (current_user_sp - (0x800000 - user_stack_size)));
+    args_buf = (char *)((uint64_t)stack + (current_user_sp - (0x800000 - 4096)));
 
-    // 1. Push AUXV (mlibc mandatory entries + AT_NULL terminator)
-    args_buf -= 10 * sizeof(uint64_t);
-    current_user_sp -= 10 * sizeof(uint64_t);
+    // 1. Push AUXV (mlibc standard entries + AT_NULL terminator)
+    args_buf -= 20 * sizeof(uint64_t);
+    current_user_sp -= 20 * sizeof(uint64_t);
     uint64_t *user_auxv = (uint64_t *)args_buf;
-    user_auxv[0] = 9;  user_auxv[1] = entry_point;  // AT_ENTRY
-    user_auxv[2] = 6;  user_auxv[3] = 4096;          // AT_PAGESZ
-    user_auxv[4] = 3;  user_auxv[5] = phdr_vaddr;    // AT_PHDR
-    user_auxv[6] = 5;  user_auxv[7] = phdr_num;      // AT_PHNUM
-    user_auxv[8] = 0;  user_auxv[9] = 0;             // AT_NULL
+    user_auxv[0]  = AT_ENTRY;    user_auxv[1]  = elf_res.exec_entry;
+    user_auxv[2]  = AT_PAGESZ;   user_auxv[3]  = 4096;
+    user_auxv[4]  = AT_PHDR;     user_auxv[5]  = elf_res.phdr_vaddr;
+    user_auxv[6]  = AT_PHENT;    user_auxv[7]  = sizeof(Elf64_Phdr); // 56
+    user_auxv[8]  = AT_PHNUM;    user_auxv[9]  = elf_res.phdr_num;
+    user_auxv[10] = AT_BASE;     user_auxv[11] = elf_res.interp_base;
+    user_auxv[12] = AT_RANDOM;   user_auxv[13] = user_args_buf; // stack entropy
+    user_auxv[14] = AT_EXECFN;   user_auxv[15] = user_args_buf; // filepath on stack
+    user_auxv[16] = AT_SECURE;   user_auxv[17] = 0;
+    user_auxv[18] = AT_NULL;     user_auxv[19] = 0;
 
     // 2. Push ENVP (empty)
     args_buf -= 1 * sizeof(uint64_t);
@@ -790,13 +838,13 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
 
     // 4. Build Stack Frame for context switch via IRETQ
     uint64_t* stack_ptr = (uint64_t*)((uint64_t)kernel_stack + KERNEL_STACK_SIZE);
-    *(--stack_ptr) = 0x1B;            // SS (User Mode Data)
-    *(--stack_ptr) = current_user_sp; // RSP (Updated user stack pointer)
-    *(--stack_ptr) = 0x202;           // RFLAGS (Interrupts Enabled)
-    *(--stack_ptr) = 0x23;            // CS (User Mode Code)
-    *(--stack_ptr) = entry_point;     // RIP
-    *(--stack_ptr) = 0;               // err_code
-    *(--stack_ptr) = 0;               // int_no
+    *(--stack_ptr) = 0x1B;                // SS (User Mode Data)
+    *(--stack_ptr) = current_user_sp;     // RSP (Updated user stack pointer)
+    *(--stack_ptr) = 0x202;               // RFLAGS (Interrupts Enabled)
+    *(--stack_ptr) = 0x23;                // CS (User Mode Code)
+    *(--stack_ptr) = elf_res.entry_point; // RIP (Interpreter entry if dynamic, or binary entry if static)
+    *(--stack_ptr) = 0;                   // err_code
+    *(--stack_ptr) = 0;                   // int_no
     // 15 General purpose registers
     *(--stack_ptr) = 0;                // RAX
     *(--stack_ptr) = 0;                // RBX
@@ -816,24 +864,21 @@ process_t* process_create_elf(const char* filepath, const char* args_str, bool t
     
     // Space for 512-byte fxsave_region
     stack_ptr = (uint64_t*)((uint64_t)stack_ptr - 512);
-    // Initialize with a clean FPU state
-    asm volatile("fninit");
-    asm volatile("fxsave %0" : "=m"(*stack_ptr));
+    // Initialize with a clean FPU state from template
+    memcpy((void *)stack_ptr, clean_fxsave_template, 512);
 
     new_proc->kernel_stack = (uint64_t)kernel_stack + KERNEL_STACK_SIZE;
     new_proc->kernel_stack_alloc = kernel_stack;
     new_proc->user_stack_alloc = stack;
     new_proc->rsp = (uint64_t)stack_ptr;
-    new_proc->used_memory = elf_load_size + user_stack_size + KERNEL_STACK_SIZE;
+    new_proc->used_memory = elf_res.load_size + user_stack_size + KERNEL_STACK_SIZE;
 
-    // Initialize FPU state for new process
-    asm volatile("fninit");
     new_proc->fpu_initialized = true;
 
     new_proc->cpu_affinity = CPU_AFFINITY_ANY;
 
     uint64_t rflags = spinlock_acquire_irqsave(&runqueue_lock);
-    process_t *head = pid_hash_table[0] ? pid_hash_table[0]->proc : process_get_current_for_cpu(0);
+    process_t *head = pid_hash_table[0] ? pid_hash_table[0] : process_get_current_for_cpu(0);
     if (head) {
         new_proc->next = head->next;
         head->next = new_proc;
@@ -895,11 +940,6 @@ uint64_t process_schedule(uint64_t current_rsp) {
 
     uint64_t rflags = spinlock_acquire_irqsave(&runqueue_lock);
 
-    if (current_cpu->process_last_run) {
-        ((process_t *)current_cpu->process_last_run)->running_cpu = -1;
-        current_cpu->process_last_run = NULL;
-    }
-
     process_t *cur = (process_t *)current_cpu->current_process;
     if (!cur) {
         spinlock_release_irqrestore(&runqueue_lock, rflags);
@@ -955,6 +995,7 @@ uint64_t process_schedule(uint64_t current_rsp) {
     }
 
     if (cur != chosen) {
+        cur->running_cpu = -1;
         chosen->running_cpu = (int)my_cpu;
         current_cpu->current_process = (struct process *)chosen;
 
@@ -963,10 +1004,16 @@ uint64_t process_schedule(uint64_t current_rsp) {
             current_cpu->kernel_syscall_stack = chosen->kernel_stack;
         }
 
-        paging_switch_directory(chosen->pml4_phys);
+        if (chosen->vmm_space) {
+            __atomic_fetch_or(&chosen->vmm_space->active_cpus, (1ULL << my_cpu), __ATOMIC_SEQ_CST);
+        }
+        asm volatile("mfence" ::: "memory");
+        write_cr3(chosen->pml4_phys);
+        asm volatile("mfence" ::: "memory");
+        if (cur && cur->vmm_space) {
+            __atomic_fetch_and(&cur->vmm_space->active_cpus, ~(1ULL << my_cpu), __ATOMIC_SEQ_CST);
+        }
         wrmsr(MSR_FS_BASE, chosen->fs_base);
-
-        current_cpu->process_last_run = (struct process *)cur;
     }
 
     chosen->ticks++;
@@ -982,12 +1029,12 @@ uint64_t process_schedule(uint64_t current_rsp) {
 
 static process_t *pid_table_find_unlocked(uint32_t pid) {
     uint32_t idx = pid_hash(pid);
-    process_node_t *curr = pid_hash_table[idx];
+    process_t *curr = pid_hash_table[idx];
     while (curr) {
-        if (curr->proc && curr->proc->pid == pid) {
-            return curr->proc;
+        if (curr->pid == pid) {
+            return curr;
         }
-        curr = curr->next;
+        curr = curr->pid_hash_next;
     }
     return NULL;
 }
@@ -996,10 +1043,16 @@ static void reparent_cb(process_t *proc, void *arg) {
     uint32_t parent_pid = *(uint32_t *)arg;
     if (proc && proc->parent_pid == parent_pid) {
         proc->parent_pid = reaper_pid;
-        if (proc->state == PROC_STATE_ZOMBIE && reaper_pid != 0) {
-            process_t *reaper = pid_table_find_unlocked(reaper_pid);
-            if (reaper) {
-                wait_queue_wake_all(&reaper->wait_exit_queue);
+        if (proc->state == PROC_STATE_ZOMBIE) {
+            if (reaper_pid != 0) {
+                process_t *reaper = pid_table_find_unlocked(reaper_pid);
+                if (reaper) {
+                    wait_queue_wake_all(&reaper->wait_exit_queue);
+                }
+            } else {
+                pid_table_remove_unlocked(proc->pid);
+                proc->reaped = true;
+                process_put(proc);
             }
         }
     }
@@ -1010,9 +1063,13 @@ static void process_release_shm(process_t *proc) {
         if (proc->shm_mappings[i].seg) {
             uint64_t addr = proc->shm_mappings[i].addr;
             uint64_t len = proc->shm_mappings[i].length;
-            for (uint64_t off = 0; off < len; off += 4096) {
-                extern void paging_unmap_page(uint64_t pml4_phys, uint64_t virtual_addr);
-                paging_unmap_page(proc->pml4_phys, addr + off);
+            if (proc->vmm_space && proc->vmm_space->mmu_ctx) {
+                mmu_unmap_pages(proc->vmm_space->mmu_ctx, addr, len >> 12);
+            } else if (proc->pml4_phys) {
+                mmu_context_t ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
+                for (uint64_t off = 0; off < len; off += 4096) {
+                    mmu_unmap_page(&ctx, addr + off);
+                }
             }
             shm_unref((shm_segment_t *)proc->shm_mappings[i].seg);
             proc->shm_mappings[i].seg = NULL;
@@ -1020,6 +1077,7 @@ static void process_release_shm(process_t *proc) {
     }
     proc->shm_mapping_count = 0;
 }
+
 
 static void process_cleanup_inner(process_t *proc) {
     if (!proc || proc->pid == 0) return;
@@ -1032,9 +1090,11 @@ static void process_cleanup_inner(process_t *proc) {
     if (is_last_thread) {
         for (uint32_t i = 0; i < proc->elf_segment_count; i++) {
             if (proc->elf_segments[i].ptr) {
-                for (uint64_t off = 0; off < proc->elf_segments[i].size; off += 4096) {
-                    extern void paging_unmap_page(uint64_t pml4_phys, uint64_t virtual_addr);
-                    paging_unmap_page(proc->pml4_phys, proc->elf_segments[i].vaddr + off);
+                if (proc->pml4_phys) {
+                    mmu_context_t ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
+                    for (uint64_t off = 0; off < proc->elf_segments[i].size; off += 4096) {
+                        mmu_unmap_page(&ctx, proc->elf_segments[i].vaddr + off);
+                    }
                 }
                 kfree_null(proc->elf_segments[i].ptr);
                 proc->elf_segments[i].ptr = NULL;
@@ -1054,6 +1114,7 @@ static void process_cleanup_inner(process_t *proc) {
     if (is_last_thread) {
         process_release_shm(proc);
     }
+
 
     if (proc->is_terminal_proc && proc->tty_id >= 0) {
         extern void tty_set_blit_enabled_for_id(int id, bool enabled);
@@ -1129,9 +1190,10 @@ void process_terminate_with_status(process_t *to_delete, int status) {
         }
     }
 
+    process_cleanup_inner(to_delete);
+
     uint64_t rflags = spinlock_acquire_irqsave(&runqueue_lock);
 
-    process_cleanup_inner(to_delete);
     to_delete->state = PROC_STATE_ZOMBIE;
     to_delete->exited = true;
     to_delete->exit_status = status;
@@ -1145,44 +1207,44 @@ void process_terminate_with_status(process_t *to_delete, int status) {
         prev->next = to_delete->next;
     }
 
+    spinlock_release_irqrestore(&runqueue_lock, rflags);
+
     if (to_delete->parent_pid != 0) {
-        process_t *parent = pid_table_find_unlocked(to_delete->parent_pid);
+        process_t *parent = process_get_by_pid(to_delete->parent_pid);
         if (parent) {
             wait_queue_wake_all(&parent->wait_exit_queue);
+            process_put(parent);
         }
     }
     if (reaper_pid != 0 && to_delete->parent_pid != reaper_pid) {
-        process_t *reaper = pid_table_find_unlocked(reaper_pid);
+        process_t *reaper = process_get_by_pid(reaper_pid);
         if (reaper) {
             wait_queue_wake_all(&reaper->wait_exit_queue);
+            process_put(reaper);
         }
     }
 
-    spinlock_release_irqrestore(&runqueue_lock, rflags);
+    if (to_delete->parent_pid == 0 && reaper_pid == 0) {
+        pid_table_remove(to_delete->pid);
+        to_delete->reaped = true;
+        process_put(to_delete);
+    }
 }
 
 
 
 uint64_t process_terminate_current_with_status(int status, uint64_t current_rsp) {
-    uint64_t rflags = spinlock_acquire_irqsave(&runqueue_lock);
-
-    uint32_t my_cpu = current_cpu->cpu_id;
-
-    if (current_cpu->process_last_run) {
-        ((process_t *)current_cpu->process_last_run)->running_cpu = -1;
-        current_cpu->process_last_run = NULL;
-    }
-
     process_t *cur = (process_t *)current_cpu->current_process;
-
     if (!cur || cur->pid == 0) {
-        spinlock_release_irqrestore(&runqueue_lock, rflags);
         return current_rsp;
     }
 
     process_hold(cur);
-
     process_cleanup_inner(cur);
+
+    uint64_t rflags = spinlock_acquire_irqsave(&runqueue_lock);
+    uint32_t my_cpu = current_cpu->cpu_id;
+
     cur->exited = true;
     cur->exit_status = status;
     cur->state = PROC_STATE_ZOMBIE;
@@ -1231,26 +1293,39 @@ uint64_t process_terminate_current_with_status(int status, uint64_t current_rsp)
         current_cpu->kernel_syscall_stack = next_proc->kernel_stack;
     }
 
-    paging_switch_directory(next_proc->pml4_phys);
+    if (next_proc->vmm_space) {
+        __atomic_fetch_or(&next_proc->vmm_space->active_cpus, (1ULL << my_cpu), __ATOMIC_SEQ_CST);
+    }
+    asm volatile("mfence" ::: "memory");
+    write_cr3(next_proc->pml4_phys);
+    asm volatile("mfence" ::: "memory");
+    if (cur && cur->vmm_space) {
+        __atomic_fetch_and(&cur->vmm_space->active_cpus, ~(1ULL << my_cpu), __ATOMIC_SEQ_CST);
+    }
     wrmsr(MSR_FS_BASE, next_proc->fs_base);
 
 
     if (cur->parent_pid != 0) {
-        process_t *parent = process_get_by_pid(cur->parent_pid);
+        process_t *parent = pid_table_find_unlocked(cur->parent_pid);
         if (parent) {
             wait_queue_wake_all(&parent->wait_exit_queue);
-            process_put(parent);
         }
     }
     if (reaper_pid != 0 && cur->parent_pid != reaper_pid) {
-        process_t *reaper = process_get_by_pid(reaper_pid);
+        process_t *reaper = pid_table_find_unlocked(reaper_pid);
         if (reaper) {
             wait_queue_wake_all(&reaper->wait_exit_queue);
-            process_put(reaper);
         }
     }
 
+    if (cur->parent_pid == 0 && reaper_pid == 0) {
+        pid_table_remove(cur->pid);
+        cur->reaped = true;
+        process_put(cur);
+    }
+
     uint64_t next_rsp = next_proc->rsp;
+
 
     current_cpu->process_free_later = (struct process *)cur;
 
@@ -1307,10 +1382,9 @@ static void waitpid_scan_cb(process_t *p, void *arg) {
     if (w->target_pid > 0) match = ((int)p->pid == w->target_pid);
     else if (w->target_pid == -1) match = true;
     else if (w->target_pid == 0) {
-        process_t *caller = process_get_by_pid(w->caller_pid);
+        process_t *caller = pid_table_find_unlocked(w->caller_pid);
         if (caller) {
             match = (p->pgid == caller->pgid);
-            process_put(caller);
         }
     } else match = (p->pgid == (uint32_t)(-w->target_pid));
 
@@ -1329,11 +1403,16 @@ int process_waitpid(uint32_t caller_pid, int target_pid, int options, int *statu
         process_table_for_each(waitpid_scan_cb, &w);
 
         if (w.match_zombie) {
-            uint32_t reaped_pid = w.match_zombie->pid;
-            process_put(w.match_zombie);
-            if (process_reap(caller_pid, reaped_pid, status_out) == 0) {
-                return (int)reaped_pid;
+            process_t *z = w.match_zombie;
+            uint32_t reaped_pid = z->pid;
+            if (status_out) {
+                *status_out = z->exit_status;
             }
+            z->reaped = true;
+            pid_table_remove(reaped_pid);
+            process_put(z);
+            process_put(z);
+            return (int)reaped_pid;
         }
 
         if (w.child_count == 0) {
@@ -1344,14 +1423,13 @@ int process_waitpid(uint32_t caller_pid, int target_pid, int options, int *statu
             return 0;
         }
 
-        process_t *caller = process_get_by_pid(caller_pid);
+        process_t *caller = process_get_current();
         if (caller) {
             wait_queue_entry_t entry = { .proc = caller, .next = NULL };
             wait_queue_add(&caller->wait_exit_queue, &entry);
             caller->state = PROC_STATE_BLOCKED;
             asm volatile("int $0x20");
             wait_queue_remove(&caller->wait_exit_queue, &entry);
-            process_put(caller);
         } else {
             return -1;
         }
@@ -1362,44 +1440,73 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
     process_t *proc = process_get_current();
     if (!proc || !proc->is_user || !regs || !filepath) return -1;
 
-    uint64_t new_pml4 = paging_create_user_pml4_phys();
-    if (!new_pml4) return -1;
+    vmm_space_t *new_space = vmm_create_space();
+    mmu_context_t *fallback_new_ctx = new_space ? NULL : mmu_create_context();
+    uint64_t new_pml4 = new_space ? new_space->mmu_ctx->pml4_phys : (fallback_new_ctx ? fallback_new_ctx->pml4_phys : 0);
+    if (!new_pml4) {
+        if (new_space) {
+            vmm_destroy_space(new_space);
+        }
+        return -1;
+    }
 
     for (uint32_t i = 0; i < proc->elf_segment_count; i++) {
-        kfree_null(proc->elf_segments[i].ptr);
-        proc->elf_segments[i].ptr = NULL;
+        if (proc->elf_segments[i].ptr) {
+            if (proc->pml4_phys) {
+                mmu_context_t ctx = { .pml4_phys = proc->pml4_phys, .lock = SPINLOCK_INIT };
+                for (uint64_t off = 0; off < proc->elf_segments[i].size; off += 4096) {
+                    mmu_unmap_page(&ctx, proc->elf_segments[i].vaddr + off);
+                }
+            }
+            kfree_null(proc->elf_segments[i].ptr);
+            proc->elf_segments[i].ptr = NULL;
+        }
     }
     proc->elf_segment_count = 0;
 
 
+    vmm_space_t *saved_space = proc->vmm_space;
+    proc->vmm_space = new_space;
 
-    size_t elf_load_size = 0;
-    uint64_t phdr_vaddr = 0, phdr_num = 0;
-    uint64_t entry_point = elf_load(filepath, new_pml4, &elf_load_size, proc, &phdr_vaddr, &phdr_num);
-    if (entry_point == 0) {
-        extern void paging_destroy_user_pml4_phys(uint64_t pml4_phys, bool free_mapped);
-        paging_destroy_user_pml4_phys(new_pml4, true);
+    elf_load_result_t elf_res;
+    if (!elf_load(filepath, new_pml4, proc, &elf_res)) {
+        proc->vmm_space = saved_space;
+        if (new_space) {
+            vmm_destroy_space(new_space);
+        } else if (fallback_new_ctx) {
+            mmu_destroy_context(fallback_new_ctx);
+        }
         return -1;
     }
 
     size_t user_stack_size = 262144;
-    void* stack = kmalloc_aligned(user_stack_size, 4096);
+    void* stack = kmalloc_aligned(4096, 4096);
     if (!stack) {
-        extern void paging_destroy_user_pml4_phys(uint64_t pml4_phys, bool free_mapped);
-        paging_destroy_user_pml4_phys(new_pml4, true);
+        proc->vmm_space = saved_space;
+        if (new_space) {
+            vmm_destroy_space(new_space);
+        } else if (fallback_new_ctx) {
+            mmu_destroy_context(fallback_new_ctx);
+        }
         return -1;
     }
+    memset(stack, 0, 4096);
 
-    for (uint64_t i = 0; i < (user_stack_size / 4096); i++) {
-        if (!paging_map_page(new_pml4, 0x800000 - user_stack_size + (i * 4096), v2p((uint64_t)stack + (i * 4096)), PT_PRESENT | PT_RW | PT_USER)) {
-            kfree_null(stack);
-            paging_destroy_user_pml4_phys(new_pml4, true);
-            return -1;
+    mmu_context_t stack_ctx = { .pml4_phys = new_pml4, .lock = SPINLOCK_INIT };
+    if (mmu_map_page(&stack_ctx, 0x800000 - 4096, v2p((uint64_t)stack), MMU_PROT_READ | MMU_PROT_WRITE | MMU_PROT_USER) != 0) {
+        kfree_null(stack);
+        proc->vmm_space = saved_space;
+        if (new_space) {
+            vmm_destroy_space(new_space);
+        } else if (fallback_new_ctx) {
+            mmu_destroy_context(fallback_new_ctx);
         }
+        return -1;
     }
+    proc->vmm_space = saved_space;
 
     int argc = 1;
-    char *args_buf = (char *)stack + user_stack_size;
+    char *args_buf = (char *)stack + 4096;
     uint64_t user_args_buf = 0x800000;
 
     int path_len = 0;
@@ -1439,26 +1546,28 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
     }
     argv_ptrs[argc] = 0;
 
-    int total_elements = 1 + (argc + 1) + 1 + 10; 
+    int total_elements = 1 + (argc + 1) + 1 + 20; 
     int total_size = total_elements * (int)sizeof(uint64_t);
 
-    uint64_t current_user_sp = user_args_buf;
-    current_user_sp &= ~7ULL;
+    uint64_t target_sp = (user_args_buf - total_size) & ~15ULL;
+    uint64_t current_user_sp = target_sp + total_size;
     
-    uint64_t target_sp = current_user_sp - total_size;
-    target_sp &= ~15ULL;
-    current_user_sp = target_sp + total_size;
-    
-    args_buf = (char *)((uint64_t)stack + (current_user_sp - (0x800000 - user_stack_size)));
+    args_buf = (char *)((uint64_t)stack + (current_user_sp - (0x800000 - 4096)));
 
-    args_buf -= 10 * sizeof(uint64_t);
-    current_user_sp -= 10 * sizeof(uint64_t);
+    // 1. Push AUXV (mlibc standard entries + AT_NULL terminator)
+    args_buf -= 20 * sizeof(uint64_t);
+    current_user_sp -= 20 * sizeof(uint64_t);
     uint64_t *user_auxv = (uint64_t *)args_buf;
-    user_auxv[0] = 9;  user_auxv[1] = entry_point;
-    user_auxv[2] = 6;  user_auxv[3] = 4096;
-    user_auxv[4] = 3;  user_auxv[5] = phdr_vaddr;
-    user_auxv[6] = 5;  user_auxv[7] = phdr_num;
-    user_auxv[8] = 0;  user_auxv[9] = 0;
+    user_auxv[0]  = AT_ENTRY;    user_auxv[1]  = elf_res.exec_entry;
+    user_auxv[2]  = AT_PAGESZ;   user_auxv[3]  = 4096;
+    user_auxv[4]  = AT_PHDR;     user_auxv[5]  = elf_res.phdr_vaddr;
+    user_auxv[6]  = AT_PHENT;    user_auxv[7]  = sizeof(Elf64_Phdr); // 56
+    user_auxv[8]  = AT_PHNUM;    user_auxv[9]  = elf_res.phdr_num;
+    user_auxv[10] = AT_BASE;     user_auxv[11] = elf_res.interp_base;
+    user_auxv[12] = AT_RANDOM;   user_auxv[13] = user_args_buf; // stack entropy
+    user_auxv[14] = AT_EXECFN;   user_auxv[15] = user_args_buf; // filepath on stack
+    user_auxv[16] = AT_SECURE;   user_auxv[17] = 0;
+    user_auxv[18] = AT_NULL;     user_auxv[19] = 0;
 
     args_buf -= 1 * sizeof(uint64_t);
     current_user_sp -= 1 * sizeof(uint64_t);
@@ -1478,6 +1587,7 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
     current_user_sp -= 1 * sizeof(uint64_t);
     uint64_t *user_argc = (uint64_t *)args_buf;
     user_argc[0] = (uint64_t)argc;
+    vmm_space_t *old_space = proc->vmm_space;
     uint64_t old_pml4 = proc->pml4_phys;
     int *old_refcount = proc->pml4_refcount;
     void *old_stack = proc->user_stack_alloc;
@@ -1485,11 +1595,27 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
     int *new_refcount = (int *)kmalloc(sizeof(int));
     if (new_refcount) *new_refcount = 1;
 
+    proc->vmm_space = new_space;
     proc->pml4_phys = new_pml4;
     proc->pml4_refcount = new_refcount;
     proc->user_stack_alloc = stack;
 
-    paging_switch_directory(new_pml4);
+    if (new_space) {
+        vm_area_t *stack_vma = vma_create(0x800000 - user_stack_size, 0x800000, VMA_TYPE_ANON,
+                                          VMA_FLAG_READ | VMA_FLAG_WRITE | VMA_FLAG_STACK);
+        if (stack_vma) {
+            vma_insert(&new_space->vma_head, &new_space->vma_tree, stack_vma);
+        }
+        new_space->brk_start = 0x20000000;
+        new_space->brk_current = 0x20000000;
+        vm_area_t *heap_vma = vma_create(0x20000000, 0x20000000, VMA_TYPE_ANON,
+                                         VMA_FLAG_READ | VMA_FLAG_WRITE | VMA_FLAG_HEAP);
+        if (heap_vma) {
+            vma_insert(&new_space->vma_head, &new_space->vma_tree, heap_vma);
+        }
+    }
+
+    write_cr3(new_pml4);
 
     bool destroy_old = true;
     if (old_refcount) {
@@ -1502,24 +1628,27 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
         }
     }
 
-    if (old_pml4 && destroy_old) {
-        if (old_stack) {
-            extern void paging_unmap_page(uint64_t pml4_phys, uint64_t virtual_addr);
+    if (old_stack) {
+        if (old_pml4) {
+            mmu_context_t ctx = { .pml4_phys = old_pml4, .lock = SPINLOCK_INIT };
             uint64_t stack_top = 0x800000;
             for (uint64_t off = 0; off < user_stack_size; off += 4096) {
-                paging_unmap_page(old_pml4, stack_top - user_stack_size + off);
+                mmu_unmap_page(&ctx, stack_top - user_stack_size + off);
             }
-            kfree_null(old_stack);
         }
-        extern void paging_destroy_user_pml4_phys(uint64_t pml4_phys, bool free_mapped);
-        paging_destroy_user_pml4_phys(old_pml4, true);
-    } else if (old_stack && !destroy_old) {
         kfree_null(old_stack);
     }
+    if (old_space && destroy_old) {
+        vmm_destroy_space(old_space);
+    } else if (old_pml4 && destroy_old) {
+        mmu_context_t ctx = { .pml4_phys = old_pml4, .lock = SPINLOCK_INIT };
+        mmu_destroy_context(&ctx);
+    }
+
     proc->fs_base = 0;
     wrmsr(MSR_FS_BASE, 0);
     proc->is_cloned_child = false;
-    proc->used_memory = elf_load_size + user_stack_size + KERNEL_STACK_SIZE;
+    proc->used_memory = elf_res.load_size + user_stack_size + KERNEL_STACK_SIZE;
     proc->heap_start = 0x20000000;
     proc->heap_end = 0x20000000;
     proc->mmap_current = 0x50000000;
@@ -1553,7 +1682,7 @@ int process_exec_replace_current(registers_t *regs, const char* filepath, const 
     }
     proc->name[ni] = 0;
 
-    regs->rip = entry_point;
+    regs->rip = elf_res.entry_point;
     regs->rdi = argc;
     regs->rsi = actual_argv_ptr;
     regs->rsp = current_user_sp;
@@ -1578,6 +1707,13 @@ uint64_t sched_ipi_handler(registers_t *regs) {
     return process_schedule((uint64_t)regs);
 }
 
+uint64_t tlb_shootdown_ipi_handler(registers_t *regs) {
+    extern void mmu_tlb_ipi_handler(void);
+    mmu_tlb_ipi_handler();
+    lapic_eoi();
+    return (uint64_t)regs;
+}
+
 process_t* process_duplicate(registers_t *parent_regs) {
     uint64_t rflags = spinlock_acquire_irqsave(&runqueue_lock);
 
@@ -1587,14 +1723,13 @@ process_t* process_duplicate(registers_t *parent_regs) {
         return NULL;
     }
 
-    process_t *child = (process_t *)kmalloc(sizeof(process_t));
+    process_t *child = process_alloc_struct();
     if (!child) {
         spinlock_release_irqrestore(&runqueue_lock, rflags);
         return NULL;
     }
-    memset(child, 0, sizeof(process_t));
 
-    child->pid = next_pid++;
+    child->pid = __atomic_fetch_add(&next_pid, 1, __ATOMIC_SEQ_CST);
     child->refcount = 1;
     child->running_cpu = -1;
     child->parent_pid = parent->pid;
@@ -1627,10 +1762,21 @@ process_t* process_duplicate(registers_t *parent_regs) {
         child->name[len] = 0;
     }
 
-    extern uint64_t paging_clone_user_pml4(uint64_t parent_pml4_phys);
-    child->pml4_phys = paging_clone_user_pml4(parent->pml4_phys);
+    if (parent->vmm_space) {
+        child->vmm_space = vmm_clone_space(parent->vmm_space);
+        if (child->vmm_space) {
+            child->pml4_phys = child->vmm_space->mmu_ctx->pml4_phys;
+        }
+    } else {
+        mmu_context_t *child_ctx = mmu_create_context();
+        if (child_ctx) {
+            mmu_context_t parent_ctx = { .pml4_phys = parent->pml4_phys, .lock = SPINLOCK_INIT };
+            mmu_clone_user_cow(&parent_ctx, child_ctx);
+            child->pml4_phys = child_ctx->pml4_phys;
+        }
+    }
     if (!child->pml4_phys) {
-        kfree_null(child);
+        process_put(child);
         spinlock_release_irqrestore(&runqueue_lock, rflags);
         return NULL;
     }
@@ -1643,10 +1789,7 @@ process_t* process_duplicate(registers_t *parent_regs) {
     const size_t stack_alignment = 4096;
     child->kernel_stack_alloc = kmalloc_aligned(stack_size, stack_alignment);
     if (!child->kernel_stack_alloc) {
-        extern void paging_destroy_user_pml4_phys(uint64_t pml4_phys, bool free_mapped);
-        paging_destroy_user_pml4_phys(child->pml4_phys, true);
-        kfree_null(child->pml4_refcount);
-        kfree_null(child);
+        process_put(child);
         spinlock_release_irqrestore(&runqueue_lock, rflags);
         return NULL;
     }
@@ -1670,11 +1813,11 @@ process_t* process_duplicate(registers_t *parent_regs) {
         if (child->fds[i]) {
             if (child->fd_kind[i] == PROC_FD_KIND_FILE) {
                 process_fd_file_ref_t *ref = (process_fd_file_ref_t *)child->fds[i];
-                ref->refs++;
+                __atomic_fetch_add(&ref->refs, 1, __ATOMIC_RELAXED);
             } else if (child->fd_kind[i] == PROC_FD_KIND_PIPE_READ || child->fd_kind[i] == PROC_FD_KIND_PIPE_WRITE) {
                 process_fd_pipe_t *pipe = (process_fd_pipe_t *)child->fds[i];
-                if (child->fd_kind[i] == PROC_FD_KIND_PIPE_READ) pipe->readers++;
-                else pipe->writers++;
+                if (child->fd_kind[i] == PROC_FD_KIND_PIPE_READ) __atomic_fetch_add(&pipe->readers, 1, __ATOMIC_RELAXED);
+                else __atomic_fetch_add(&pipe->writers, 1, __ATOMIC_RELAXED);
             } else if (child->fd_kind[i] == PROC_FD_KIND_SOCKET) {
                 process_socket_addref((process_fd_socket_t *)child->fds[i]);
             }
@@ -1717,14 +1860,13 @@ process_t* process_create_thread(registers_t *parent_regs, uint64_t entry_point,
         return NULL;
     }
 
-    process_t *child = (process_t *)kmalloc(sizeof(process_t));
+    process_t *child = process_alloc_struct();
     if (!child) {
         spinlock_release_irqrestore(&runqueue_lock, rflags);
         return NULL;
     }
-    memset(child, 0, sizeof(process_t));
 
-    child->pid = next_pid++;
+    child->pid = __atomic_fetch_add(&next_pid, 1, __ATOMIC_SEQ_CST);
     child->tgid = parent->tgid ? parent->tgid : parent->pid;
     child->is_thread = true;
     child->refcount = 1;
@@ -1758,7 +1900,8 @@ process_t* process_create_thread(registers_t *parent_regs, uint64_t entry_point,
     child->name[len++] = 'h';
     child->name[len++] = 'd';
     child->name[len] = 0;
-
+    child->vmm_space = parent->vmm_space;
+    child->mmap_current = parent->mmap_current;
     child->pml4_phys = parent->pml4_phys;
     child->pml4_refcount = parent->pml4_refcount;
     if (child->pml4_refcount) {
@@ -1801,11 +1944,11 @@ process_t* process_create_thread(registers_t *parent_regs, uint64_t entry_point,
         if (child->fds[i]) {
             if (child->fd_kind[i] == PROC_FD_KIND_FILE) {
                 process_fd_file_ref_t *ref = (process_fd_file_ref_t *)child->fds[i];
-                ref->refs++;
+                __atomic_fetch_add(&ref->refs, 1, __ATOMIC_RELAXED);
             } else if (child->fd_kind[i] == PROC_FD_KIND_PIPE_READ || child->fd_kind[i] == PROC_FD_KIND_PIPE_WRITE) {
                 process_fd_pipe_t *pipe = (process_fd_pipe_t *)child->fds[i];
-                if (child->fd_kind[i] == PROC_FD_KIND_PIPE_READ) pipe->readers++;
-                else pipe->writers++;
+                if (child->fd_kind[i] == PROC_FD_KIND_PIPE_READ) __atomic_fetch_add(&pipe->readers, 1, __ATOMIC_RELAXED);
+                else __atomic_fetch_add(&pipe->writers, 1, __ATOMIC_RELAXED);
             } else if (child->fd_kind[i] == PROC_FD_KIND_SOCKET) {
                 process_socket_addref((process_fd_socket_t *)child->fds[i]);
             }

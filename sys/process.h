@@ -76,6 +76,7 @@ typedef struct {
     uint32_t count;
     int readers;
     int writers;
+    spinlock_t lock;
     wait_queue_head_t read_queue;
     wait_queue_head_t write_queue;
 } process_fd_pipe_t;
@@ -160,6 +161,7 @@ typedef struct process {
     
     uint64_t heap_start;
     uint64_t heap_end;
+    struct vmm_space *vmm_space;
     
     void *fds[MAX_PROCESS_FDS];
     uint8_t fd_kind[MAX_PROCESS_FDS];
@@ -173,6 +175,7 @@ typedef struct process {
     bool kill_pending;       
 
     struct process *next;
+    struct process *pid_hash_next;
 
     bool fpu_initialized; 
     
@@ -200,7 +203,7 @@ typedef struct process {
     int signal_action_flags[MAX_SIGNALS];
 
     // Tracking for ELF executable segments to allow full memory reclamation on exit.
-    elf_segment_info_t elf_segments[4];
+    elf_segment_info_t elf_segments[16];
     uint32_t elf_segment_count;
 
     // Tracking for mmap memory allocations to allow full reclamation on exit.
@@ -220,6 +223,8 @@ typedef struct process {
 
     struct futex_waiter_entry {
         uint32_t *uaddr;
+        uint64_t pml4_phys;
+        uintptr_t phys_addr;
         struct process *proc;
         struct futex_waiter_entry *next;
     } futex_waiter;
@@ -229,12 +234,11 @@ typedef struct process {
     wait_queue_entry_t wait_node;
 } __attribute__((aligned(16))) process_t;
 
-// Loads the ELF executable at 'path' using fat32 into the pagemap given by user_pml4.
+// Loads the ELF executable at 'path' into the pagemap given by user_pml4.
 // If 'proc' is provided, the physical segments are tracked for later reclamation.
-// Returns entry point address on success, or 0 on failure.
-struct process;
-uint64_t elf_load(const char *path, uint64_t user_pml4, size_t *out_load_size, struct process *proc,
-                  uint64_t *out_phdr_vaddr, uint64_t *out_phdr_num);
+// Returns true on success, or false on failure.
+#include "elf.h"
+bool elf_load(const char *path, uint64_t user_pml4, struct process *proc, elf_load_result_t *out_result);
 
 typedef struct {
     uint32_t pid;

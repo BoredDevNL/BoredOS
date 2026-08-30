@@ -1,13 +1,11 @@
 <div align="center">
-  <img src="base/Library/Images/branding/bos.png" alt="BoredOS Logo" width="250" />
+  <img src="base/Library/Images/branding/banner.png" alt="BoredOS Logo" width="800" />
 
-  <h3>An operating system built for the enjoyment of building it.</h3>
+  <h3>An operating system made out of infinite boredom.</h3>
 
   [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
   ![Platform: x86_64](https://img.shields.io/badge/Platform-x86_64-lightgrey)
   [![Donate](https://img.shields.io/badge/Donate-❤️-pink)](https://buymeacoffee.com/boreddevhq)
-
-  <br />
 
   [Docs](docs/README.md) · [Contributing](CONTRIBUTING.md) · [Discord](https://discord.gg/J2BxWaFAgY)
 
@@ -15,12 +13,7 @@
 
 ---
 
-![Screenshot](base/Library/Images/branding/screenshot.jpg)
-
-> [!NOTE]
-> This screenshot might be a bit behind the current build.
-
-BoredOS is a hobby operating system written in C and x86-64 assembly. It boots through [Limine](https://github.com/limine-bootloader/limine) and runs on both QEMU and real hardware.
+BoredOS is a from-scratch x86-64 UNIX-like operating system written mostly in C.
 
 It isn't fully POSIX compliant, so software generally needs some porting work before it runs, though for most programs the required changes are minor. The project includes a windowed desktop environment called [Nova](usr/nova), a package manager, and an expanding set of ported software.
 
@@ -36,6 +29,8 @@ It isn't fully POSIX compliant, so software generally needs some porting work be
 | **Lua** | Available as a shell tool or embeddable in other programs. |
 | **mlibc** | The managarm C standard library. |
 | **kilo** | A simple text editor. |
+| **kirc** | A simple IRC client. |
+| **tvi** | A vi-like text editor. |
 
 ### Package manager
 
@@ -57,8 +52,8 @@ Networking is handled by lwIP, with drivers for Intel e1000, Realtek RTL8139/RTL
 |-----------|---------|
 | **SMP** | Multi-core support via LAPIC. Per-CPU state lives in the GS segment. XSAVE/XRSTOR handle FPU context across switches. |
 | **Scheduler** | Preemptive round-robin over a circular process list, with sleep/wake support, per-CPU affinity, and cross-core IPI for AP scheduling. |
-| **Memory** | A slab allocator with object pooling, plus physical and virtual mapping. |
-| **VFS** | One layer over FAT32, ext4, ProcFS, and SysFS. |
+| **Memory** | Physical page allocator (PMM), slab allocator, 4-level MMU with COW, VMA tracking with an RB-tree, demand paging, and a page cache. |
+| **VFS** | Virtual filesystem layer supporting tmpfs, FAT32, ext4, ProcFS, and SysFS. |
 | **IPC** | Unix domain sockets, shared memory through `/dev/shm`, wait queues, and work queues. |
 | **PTY** | Full pseudo-terminal support. |
 | **Devices** | PCI, AHCI (SATA), PS/2, ACPI, I2C, AC97 audio, and RTC. |

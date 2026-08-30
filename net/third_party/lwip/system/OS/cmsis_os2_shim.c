@@ -2,7 +2,7 @@
 #include "wait_queue.h"
 #include "process.h"
 #include "spinlock.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "kutils.h"
 #include <string.h>
 #include <stdlib.h>
@@ -151,11 +151,13 @@ osStatus_t osMessageQueueGet(osMessageQueueId_t id, void *msg_ptr, uint8_t *msg_
                 proc->sleep_until = 0;
             }
 
-            proc->state = PROC_STATE_BLOCKED;
-            spinlock_release_irqrestore(&q->lock, flags);
-
-            while (proc->state == PROC_STATE_BLOCKED) {
-                asm volatile("hlt");
+            if (proc) {
+                proc->state = PROC_STATE_BLOCKED;
+                spinlock_release_irqrestore(&q->lock, flags);
+                asm volatile("int $0x20");
+            } else {
+                spinlock_release_irqrestore(&q->lock, flags);
+                asm volatile("pause");
             }
         }
     } else {
@@ -223,11 +225,13 @@ osStatus_t osSemaphoreAcquire(osSemaphoreId_t id, uint32_t timeout) {
                 proc->sleep_until = 0;
             }
 
-            proc->state = PROC_STATE_BLOCKED;
-            spinlock_release_irqrestore(&s->lock, flags);
-
-            while (proc->state == PROC_STATE_BLOCKED) {
-                asm volatile("hlt");
+            if (proc) {
+                proc->state = PROC_STATE_BLOCKED;
+                spinlock_release_irqrestore(&s->lock, flags);
+                asm volatile("int $0x20");
+            } else {
+                spinlock_release_irqrestore(&s->lock, flags);
+                asm volatile("pause");
             }
         }
     } else {

@@ -1,42 +1,41 @@
 // Copyright (c) 2026 Christiaan (chris@boreddev.nl)
 // This software is released under the GNU General Public License v3.0. See LICENSE file for details.
+
 #include "ac97.h"
-#include "ac97_regs.h"
 #include "pci.h"
-#include "audio.h"
 #include "io.h"
-#include "memory_manager.h"
+#include "pmm.h"
+#include "slab.h"
 #include "platform.h"
 #include "spinlock.h"
 #include "kutils.h"
-#include "kconsole.h"
 #include "process.h"
 #include "idt.h"
 #include "errno.h"
 
-#define BDL_ENTRY_COUNT (32)
+// OSS-compatible DSP ioctl numbers, defined locally to avoid userspace headers.
+#define SNDCTL_DSP_RESET      0x5001
+#define SNDCTL_DSP_SYNC       0x5002
+#define SNDCTL_DSP_SPEED      0x5003
+#define SNDCTL_DSP_STEREO     0x5004
+#define SNDCTL_DSP_GETFMTS    0x5005
+#define SNDCTL_DSP_SETFMT     0x5006
+#define SNDCTL_DSP_CHANNELS   0x5007
 
-#define BUFFER_DESCRIPTOR_ALIGNMENT (4096)
+#define AFMT_S16_LE           0x0010
+#define AFMT_U8               0x0008
 
-#define DMA_BUFFER_SIZE (16 * 1024)
-#define DMA_BUFFER_ALIGNMENT (4096)
+// OSS-compatible mixer ioctl numbers.
+#define SOUND_MIXER_READ_VOLUME  0x6001
+#define SOUND_MIXER_WRITE_VOLUME 0x6002
+#define SOUND_MIXER_READ_PCM     0x6003
+#define SOUND_MIXER_WRITE_PCM    0x6004
+#define SOUND_MIXER_READ_MIC     0x6005
+#define SOUND_MIXER_WRITE_MIC    0x6006
 
-#define CLIENT_BUFFER_SIZE (128 * 1024)
-
-#define AUDIO_FRAMES (4096)
-#define CLIENT_TEMP_FRAMES (8192)
-
-#define Q16_SHIFT (16)
-#define Q16_ONE (1 << Q16_SHIFT)
-
-#define VOLUME_SCALE (10000)
-
-#define PHASE_INTEGER_BITS (32)
-
-#define PHASE_FRACTION_SHIFT (16)
-#define PHASE_FRACTION_MASK (0xFFFFFFFFu)
-
-#define MAX_AUDIO_CLIENTS (16)
+extern void serial_write(const char *str);
+extern void serial_write_hex(uint64_t val);
+extern void serial_write_num(uint64_t num);
 
 static pci_device_t ac97_dev;
 static bool ac97_found = false;
@@ -44,14 +43,14 @@ static uint16_t nam_base = 0;  // Native Audio Mixer I/O base (BAR0)
 static uint16_t nabm_base = 0; // Native Audio Bus Master I/O base (BAR1)
 
 // Buffer Descriptor List and its physical address for DMA.
-static ac97_bd_t *buffer_descriptor_list = NULL;
-static uint32_t buffer_descriptor_list_phys_addr = 0;
+static ac97_bd_t *bdl = NULL;
+static uint32_t bdl_phys = 0;
 
-// DMA buffers (one per BDL slot), each 16 KB.
-static uint8_t *dma_buffers[BDL_ENTRY_COUNT];
-static uint32_t dma_buffers_phys[BDL_ENTRY_COUNT];
+// 32 DMA buffers (one per BDL slot), each 16 KB.
+static uint8_t *dma_buffers[32];
+static uint32_t dma_buffers_phys[32];
 
-// Index of the next BDL slot to fill
+// Index of the next BDL slot to fill (wraps at 32).
 static int write_idx = 0;
 static spinlock_t ac97_lock = SPINLOCK_INIT;
 static bool vra_supported = false;
@@ -62,8 +61,8 @@ static bool vra_supported = false;
 static int sw_vol_l = 100, sw_vol_r = 100; // Master volume
 static int sw_pcm_l = 100, sw_pcm_r = 100; // PCM/DAC volume
 
-static int32_t mix_buf[AUDIO_FRAMES * 2];
-static int16_t client_temp_buf[CLIENT_TEMP_FRAMES * AUDIO_CHANNELS];
+static int32_t mix_buf[4096 * 2];
+static int16_t client_temp_buf[8192 * 2];
 
 typedef struct {
     int count;
@@ -74,7 +73,7 @@ typedef struct {
 static semaphore_t mixer_sem;
 
 static inline void sched_yield(void) {
-    asm volatile("int $128" : : "a"(24) : "rcx", "r11", "memory");
+    asm volatile("int $128" : : "a"(5), "D"(43) : "rcx", "r11", "memory");
 }
 
 static void sem_init(semaphore_t *sem, int initial_count) {
@@ -109,47 +108,30 @@ static void sem_wait(semaphore_t *sem) {
 static void sem_signal(semaphore_t *sem) {
     uint64_t flags = spinlock_acquire_irqsave(&sem->lock);
     sem->count++;
-    spinlock_release_irqrestore(&sem->lock, flags);
     wait_queue_wake_all(&sem->waitq);
+    spinlock_release_irqrestore(&sem->lock, flags);
 }
 
-// State for a single software audio client. Each client has its own ring
-// buffer and sample-rate tracking; the mixer thread blends all active clients
-// into the hardware DMA buffers.
+#define CLIENT_BUFFER_SIZE (128 * 1024)
+
 typedef struct {
     bool active;
-    int speed;    // Source sample rate in Hz (e.g. 44100, 48000)
-    int channels; // Informational only; output is always stereo
-    int format;   // Informational only; output is always AFMT_S16_LE
-
-    uint8_t *buffer;    // Ring buffer
-    uint32_t write_pos; // Next byte position for incoming audio data
-    uint32_t read_pos;  // Next byte position for the mixer to consume
-    uint32_t count;     // Number of bytes currently available to mix
-    uint64_t phase;     // 32.32 fixed-point phase accumulator for sample-rate conversion
-
+    int speed;
+    int channels;
+    int format;
+    uint8_t *buffer;
+    uint32_t write_pos;
+    uint32_t read_pos;
+    uint32_t count;
+    uint64_t phase;
     spinlock_t lock;
     wait_queue_head_t write_waitq;
     wait_queue_head_t sync_waitq;
 } audio_client_t;
 
+#define MAX_AUDIO_CLIENTS 8
 static audio_client_t audio_clients[MAX_AUDIO_CLIENTS];
-// Global mixer spinlock.
-// Lock Hierarchy: Always acquire `mixer_lock` before any `client->lock` to prevent deadlocks.
 static spinlock_t mixer_lock = SPINLOCK_INIT;
-
-// Read one stereo frame at frame_offset frames past the client's
-// current read position, wrapping around the ring buffer as needed.
-static inline void get_client_frame(audio_client_t *client, uint32_t frame_offset, int16_t *out_l, int16_t *out_r) {
-    uint32_t byte_offset = (client->read_pos + frame_offset * BYTES_PER_FRAME) % CLIENT_BUFFER_SIZE;
-    int16_t *samples = (int16_t *)(client->buffer + byte_offset);
-    *out_l = samples[0];
-    *out_r = samples[1];
-}
-
-bool ac97_present(void) {
-    return ac97_found;
-}
 
 // Returns true if the PCM Output DMA channel is running and has not halted.
 // NABM+0x1B: PCM Out Control; bit 0 = run/pause.
@@ -171,12 +153,13 @@ static void ac97_mixer_thread(void) {
             uint64_t flags = spinlock_acquire_irqsave(&ac97_lock);
             bool active = is_dma_active();
             if (active) {
-                // CIV (NABM+0x14) = current index being played; LVI (NABM+0x15) = last valid index.
-                uint8_t cpe = inb(nabm_base + 0x14); // Current Index Value (currently playing)
-                uint8_t lve = inb(nabm_base + 0x15); // Last Valid Index (last queued buffer)
+                uint8_t cpe = inb(nabm_base + 0x14) % 32; // Current Processed Entry (CIV)
+                uint8_t lve = inb(nabm_base + 0x15) % 32; // Last Valid Entry (LVI)
+
                 // Distance from CPE to LVE represents active buffers queued.
                 // Since CIV == LVI means 1 entry is actively being processed before halt,
-                int queued = (lve - cpe + BDL_ENTRY_COUNT) % BDL_ENTRY_COUNT + 1;
+                // the queue depth is (LVE - CPE + 32) % 32 + 1.
+                int queued = (lve - cpe + 32) % 32 + 1;
                 if (queued >= 3) {
                     spinlock_release_irqrestore(&ac97_lock, flags);
                     break;
@@ -184,9 +167,8 @@ static void ac97_mixer_thread(void) {
             } else {
                 // DMA stopped; reset the channel before submitting new buffers.
                 outb(nabm_base + 0x1B, 0x02); // RR: reset channel registers
-                const int ac97_reset_timeout_iterations = 100000;
-                int remaining_iterations = ac97_reset_timeout_iterations;
-                while ((inb(nabm_base + 0x1B) & 0x02) && --remaining_iterations > 0);
+                int timeout = 100000;
+                while ((inb(nabm_base + 0x1B) & 0x02) && --timeout > 0);
                 write_idx = 0;
             }
             spinlock_release_irqrestore(&ac97_lock, flags);
@@ -215,22 +197,22 @@ static void ac97_mixer_thread(void) {
                 if (client->active && client->count > 0) {
                     uint64_t phase = client->phase;
                     int speed = client->speed;
-                    if (speed <= 0) speed = DEFAULT_SAMPLE_SPEED;
-                    uint64_t phase_step = ((uint64_t)speed << PHASE_INTEGER_BITS) / DEFAULT_SAMPLE_SPEED;
+                    if (speed <= 0) speed = 48000;
+                    uint64_t phase_step = ((uint64_t)speed << 32) / 48000;
 
                     // Calculate how many source frames we need for linear interpolation:
-                    // (extra 1 frame for idx + 1 safety)
-                    uint32_t consumed_frames = ((phase + (uint64_t)AUDIO_FRAMES * phase_step) >> PHASE_INTEGER_BITS) + 2;
-                    if (consumed_frames > CLIENT_TEMP_FRAMES) {
-                        consumed_frames = CLIENT_TEMP_FRAMES;
+                    // ((phase + 4096 * phase_step) >> 32) + 2 (extra 1 frame for idx + 1 safety)
+                    uint32_t consumed_frames = ((phase + (uint64_t)4096 * phase_step) >> 32) + 2;
+                    if (consumed_frames > 8192) {
+                        consumed_frames = 8192;
                     }
-                    uint32_t avail_frames = client->count / BYTES_PER_FRAME;
+                    uint32_t avail_frames = client->count / 4;
                     uint32_t frames_to_copy = consumed_frames;
                     if (frames_to_copy > avail_frames) {
                         frames_to_copy = avail_frames;
                     }
 
-                    uint32_t bytes_to_copy = frames_to_copy * BYTES_PER_FRAME;
+                    uint32_t bytes_to_copy = frames_to_copy * 4;
                     uint32_t space_to_end = CLIENT_BUFFER_SIZE - client->read_pos;
                     if (bytes_to_copy <= space_to_end) {
                         memcpy(client_temp_buf, client->buffer + client->read_pos, bytes_to_copy);
@@ -240,12 +222,12 @@ static void ac97_mixer_thread(void) {
                     }
 
                     if (frames_to_copy < consumed_frames) {
-                        memset(((uint8_t*)client_temp_buf) + bytes_to_copy, 0, (consumed_frames - frames_to_copy) * BYTES_PER_FRAME);
+                        memset(((uint8_t*)client_temp_buf) + bytes_to_copy, 0, (consumed_frames - frames_to_copy) * 4);
                     }
 
-                    uint64_t end_phase = phase + (uint64_t)AUDIO_FRAMES * phase_step;
-                    uint32_t consumed_actual_frames = (uint32_t)(end_phase >> PHASE_INTEGER_BITS);
-                    uint32_t consumed_actual_bytes = consumed_actual_frames * BYTES_PER_FRAME;
+                    uint64_t end_phase = phase + (uint64_t)4096 * phase_step;
+                    uint32_t consumed_actual_frames = (uint32_t)(end_phase >> 32);
+                    uint32_t consumed_actual_bytes = consumed_actual_frames * 4;
                     bool clamped = false;
                     if (consumed_actual_bytes > client->count) {
                         consumed_actual_bytes = client->count;
@@ -260,7 +242,7 @@ static void ac97_mixer_thread(void) {
                         wake_sync = true;
                         client->phase = 0;
                     } else {
-                        client->phase = end_phase - ((uint64_t)consumed_actual_frames << PHASE_INTEGER_BITS);
+                        client->phase = end_phase - ((uint64_t)consumed_actual_frames << 32);
                     }
 
                     // Release client->lock before running the mix loop and doing wakeups to reduce lock hold times
@@ -272,28 +254,28 @@ static void ac97_mixer_thread(void) {
                     wait_queue_wake_all(&client->write_waitq);
 
                     // Perform linear interpolation and mixing from client_temp_buf lock-free
-                    for (int i = 0; i < AUDIO_FRAMES; i++) {
+                    for (int i = 0; i < 4096; i++) {
                         uint64_t src_phase = phase + i * phase_step;
-                        uint32_t idx  = src_phase >> PHASE_INTEGER_BITS;
-                        uint32_t frac = (src_phase & PHASE_FRACTION_MASK) >> PHASE_FRACTION_SHIFT;
+                        uint32_t idx  = src_phase >> 32;
+                        uint32_t frac = (src_phase & 0xFFFFFFFF) >> 16;
 
                         int16_t l = 0, r = 0;
                         if (idx < frames_to_copy) {
-                            int16_t l1 = client_temp_buf[idx * AUDIO_CHANNELS];
-                            int16_t r1 = client_temp_buf[idx * AUDIO_CHANNELS + 1];
+                            int16_t l1 = client_temp_buf[idx * 2];
+                            int16_t r1 = client_temp_buf[idx * 2 + 1];
                             if (idx + 1 < frames_to_copy) {
-                                int16_t l2 = client_temp_buf[(idx + 1) * AUDIO_CHANNELS];
-                                int16_t r2 = client_temp_buf[(idx + 1) * AUDIO_CHANNELS + 1];
-                                l = l1 + ((l2 - l1) * (int32_t)frac >> Q16_SHIFT);
-                                r = r1 + ((r2 - r1) * (int32_t)frac >> Q16_SHIFT);
+                                int16_t l2 = client_temp_buf[(idx + 1) * 2];
+                                int16_t r2 = client_temp_buf[(idx + 1) * 2 + 1];
+                                l = l1 + ((l2 - l1) * (int32_t)frac >> 16);
+                                r = r1 + ((r2 - r1) * (int32_t)frac >> 16);
                             } else {
                                 l = l1;
                                 r = r1;
                             }
                         }
 
-                        mix_buf[i * AUDIO_CHANNELS]     += l;
-                        mix_buf[i * AUDIO_CHANNELS + 1] += r;
+                        mix_buf[i * 2]     += l;
+                        mix_buf[i * 2 + 1] += r;
                     }
                 } else {
                     spinlock_release_irqrestore(&client->lock, c_flags);
@@ -301,49 +283,35 @@ static void ac97_mixer_thread(void) {
             }
             spinlock_release_irqrestore(&mixer_lock, flags);
 
-            int16_t *dest_buffer = (int16_t *)dma_buffers[write_idx];
-
-            int32_t vol_l_fp = (sw_vol_l * sw_pcm_l * Q16_ONE) / VOLUME_SCALE;
-            int32_t vol_r_fp = (sw_vol_r * sw_pcm_r * Q16_ONE) / VOLUME_SCALE;
-
-            const int32_t q_shift = 16;
-            const int32_t max_pcm16 = 32767;
-            const int32_t min_pcm16 = -32768;
-            for (int i = 0; i < AUDIO_FRAMES * AUDIO_CHANNELS; i += AUDIO_CHANNELS) {
-                int32_t left_sample = (mix_buf[i]     * vol_l_fp) >> q_shift;
-                int32_t right_sample = (mix_buf[i + 1] * vol_r_fp) >> q_shift;
-
-                // Clamp left and right sample
-                if (left_sample > max_pcm16)
-                  left_sample = max_pcm16;
-                else if (left_sample < min_pcm16)
-                  left_sample = min_pcm16;
-
-                if (right_sample > max_pcm16)
-                  right_sample = max_pcm16;
-                else if (right_sample < min_pcm16)
-                  right_sample = min_pcm16;
-
-                // Write ready audio samples to destination buffer
-                dest_buffer[i]     = (int16_t)left_sample;
-                dest_buffer[i + 1] = (int16_t)right_sample;
+            int16_t *dst = (int16_t *)dma_buffers[write_idx];
+            int32_t vol_l_fp = (sw_vol_l * sw_pcm_l * 65536) / 10000;
+            int32_t vol_r_fp = (sw_vol_r * sw_pcm_r * 65536) / 10000;
+            for (int i = 0; i < 4096 * 2; i += 2) {
+                int32_t l = (mix_buf[i]     * vol_l_fp) >> 16;
+                int32_t r = (mix_buf[i + 1] * vol_r_fp) >> 16;
+                if      (l >  32767) l =  32767;
+                else if (l < -32768) l = -32768;
+                if      (r >  32767) r =  32767;
+                else if (r < -32768) r = -32768;
+                dst[i]     = (int16_t)l;
+                dst[i + 1] = (int16_t)r;
             }
 
             // Submit the buffer to the hardware.
             flags = spinlock_acquire_irqsave(&ac97_lock);
-            buffer_descriptor_list[write_idx].length = AUDIO_FRAMES * AUDIO_CHANNELS; 
-            buffer_descriptor_list[write_idx].flags  = BUFFER_FLAG_INTERRUPT_ON_COMPLETE; 
+            bdl[write_idx].length = 8192; // 4096 stereo frames × 2 samples each
+            bdl[write_idx].flags  = 0x8000; // IOC bit — fires interrupt when this buffer completes.
 
             if (!active) {
                 // DMA was stopped: point the hardware at the BDL and start it.
-                outl(nabm_base + 0x10, buffer_descriptor_list_phys_addr); // PCM Out BDL Base Address
+                outl(nabm_base + 0x10, bdl_phys); // PCM Out BDL Base Address
                 outb(nabm_base + 0x15, 0);         // LVI = 0
                 outb(nabm_base + 0x1B, 0x1D);      // RPBM | LVBIE | IOCE | FEIE
             } else {
                 // DMA is already running: advance the Last Valid Index.
                 outb(nabm_base + 0x15, write_idx);
             }
-            write_idx = (write_idx + 1) % BDL_ENTRY_COUNT;
+            write_idx = (write_idx + 1) % 32;
             spinlock_release_irqrestore(&ac97_lock, flags);
         }
     }
@@ -439,26 +407,28 @@ void ac97_init(void) {
     outw(nam_base + 0x04, 0x0000);
     outw(nam_base + 0x18, 0x0808);
 
-    // Allocate the Buffer Descriptor List 
-    buffer_descriptor_list = (ac97_bd_t*)kmalloc_aligned(BDL_ENTRY_COUNT * sizeof(ac97_bd_t), BUFFER_DESCRIPTOR_ALIGNMENT);
-    if (!buffer_descriptor_list) {
+    // Allocate the Buffer Descriptor List directly from DMA32 physical memory
+    page_t *bdl_page = pmm_alloc_page(PAGE_FLAG_DMA32 | PAGE_FLAG_KERNEL | PAGE_FLAG_ZERO);
+    if (!bdl_page) {
         serial_write("[AC97] Failed to allocate BDL\n");
         return;
     }
-    buffer_descriptor_list_phys_addr = (uint32_t)v2p((uint64_t)buffer_descriptor_list);
+    bdl_phys = (uint32_t)pmm_page_to_paddr(bdl_page);
+    bdl = (ac97_bd_t *)pmm_page_to_vaddr(bdl_page);
 
-    for (int i = 0; i < BDL_ENTRY_COUNT; i++) {
-        dma_buffers[i] = (uint8_t*)kmalloc_aligned(DMA_BUFFER_SIZE, DMA_BUFFER_ALIGNMENT);
-        if (!dma_buffers[i]) {
+    // 16 KB DMA buffer per slot = 4 pages = order 2
+    for (int i = 0; i < 32; i++) {
+        page_t *dma_page = pmm_alloc_order(2, PAGE_FLAG_DMA32 | PAGE_FLAG_KERNEL | PAGE_FLAG_ZERO);
+        if (!dma_page) {
             serial_write("[AC97] Failed to allocate DMA buffers\n");
             return;
         }
-        dma_buffers_phys[i] = (uint32_t)v2p((uint64_t)dma_buffers[i]);
-        memset(dma_buffers[i], 0, DMA_BUFFER_SIZE);
+        dma_buffers_phys[i] = (uint32_t)pmm_page_to_paddr(dma_page);
+        dma_buffers[i]      = (uint8_t *)pmm_page_to_vaddr(dma_page);
 
-        buffer_descriptor_list[i].addr   = dma_buffers_phys[i];
-        buffer_descriptor_list[i].length = 0;
-        buffer_descriptor_list[i].flags  = 0;
+        bdl[i].addr   = dma_buffers_phys[i];
+        bdl[i].length = 0;
+        bdl[i].flags  = 0;
     }
 
     write_idx = 0;
@@ -479,43 +449,46 @@ void ac97_init(void) {
     serial_write_num(irq);
     serial_write("\n");
 
-    if (irq != 0 && irq != 0xFF) {
-        // Register C-level handler in the generic IRQ dispatch table
-        extern void idt_register_irq_handler(int irq, uint64_t (*handler)(registers_t *regs));
+    if (irq > 0 && irq < 16) {
         idt_register_irq_handler(irq, ac97_handler);
-
-        // Unmask IRQ on the PIC
         if (irq < 8) {
             outb(0x21, inb(0x21) & ~(1 << irq));
         } else {
             outb(0xA1, inb(0xA1) & ~(1 << (irq - 8)));
+            outb(0x21, inb(0x21) & ~(1 << 2)); // Unmask Cascade IRQ 2 on Master PIC
         }
 
         serial_write("[AC97] Registered IRQ handler on IRQ ");
         serial_write_num(irq);
         serial_write("\n");
     } else {
-        serial_write("[AC97] Warning: No valid IRQ found in PCI configuration\n");
+        serial_write("[AC97] Warning: Invalid or missing IRQ line\n");
     }
 
+    // Spawn the kernel mixer thread
     process_t *mixer_proc = process_create(ac97_mixer_thread, false);
-    if (!mixer_proc) {
-        serial_write("[AC97] Failed to create mixer thread\n");
-    } else {
+    if (mixer_proc) {
         serial_write("[AC97] Mixer thread spawned successfully\n");
+    } else {
+        serial_write("[AC97] Failed to spawn mixer thread\n");
     }
 
     serial_write("[AC97] Initialization successful! Variable rate audio: ");
     serial_write(vra_supported ? "yes\n" : "no\n");
 }
 
+bool ac97_present(void) {
+    return ac97_found;
+}
+
 void *ac97_open_client(void) {
+    if (!ac97_found) return NULL;
     uint64_t flags = spinlock_acquire_irqsave(&mixer_lock);
     for (int i = 0; i < MAX_AUDIO_CLIENTS; i++) {
         if (!audio_clients[i].active) {
             audio_clients[i].active    = true;
-            audio_clients[i].speed     = DEFAULT_SAMPLE_SPEED;
-            audio_clients[i].channels  = AUDIO_CHANNELS;
+            audio_clients[i].speed     = 48000;
+            audio_clients[i].channels  = 2;
             audio_clients[i].format    = AFMT_S16_LE;
             audio_clients[i].write_pos = 0;
             audio_clients[i].read_pos  = 0;
@@ -632,7 +605,7 @@ int ac97_dsp_ioctl(void *handle, uint64_t request, void *arg) {
             uint64_t flags = spinlock_acquire_irqsave(&client->lock);
             client->channels = *(int*)arg;
             spinlock_release_irqrestore(&client->lock, flags);
-            *(int*)arg = AUDIO_CHANNELS; 
+            *(int*)arg = 2; 
             return 0;
         }
         case SNDCTL_DSP_SETFMT: {
@@ -699,32 +672,20 @@ int ac97_dsp_ioctl(void *handle, uint64_t request, void *arg) {
 }
 
 static int ac97_reg_to_vol(uint16_t val) {
-    if (val & AC97_VOLUME_MUTE)
-        return 0;
-
-    int step_L = (val >> AC97_LEFT_SHIFT) & AC97_VOLUME_MAX;
-    int step_R = val & AC97_VOLUME_MAX;
-
-    int vol_L = (AC97_VOLUME_MAX - step_L) * AC97_VOL_PERCENT_MAX / AC97_VOLUME_MAX;
-    int vol_R = (AC97_VOLUME_MAX - step_R) * AC97_VOL_PERCENT_MAX / AC97_VOLUME_MAX;
-
-    return vol_L | (vol_R << AC97_LEFT_SHIFT);
+    if (val & 0x8000) return 0;
+    int step_L = (val >> 8) & 0x1F;
+    int step_R =  val       & 0x1F;
+    int vol_L  = (31 - step_L) * 100 / 31;
+    int vol_R  = (31 - step_R) * 100 / 31;
+    return vol_L | (vol_R << 8);
 }
 
 static uint16_t ac97_vol_to_reg(int vol_L, int vol_R) {
     if (vol_L == 0 && vol_R == 0)
-        return AC97_VOLUME_MUTE |
-               (AC97_VOLUME_MAX << AC97_LEFT_SHIFT) |
-               AC97_VOLUME_MAX;
-
-    int step_L = AC97_VOLUME_MAX -
-                 (vol_L * AC97_VOLUME_MAX / AC97_VOL_PERCENT_MAX);
-
-    int step_R = AC97_VOLUME_MAX -
-                 (vol_R * AC97_VOLUME_MAX / AC97_VOL_PERCENT_MAX);
-
-    return ((step_L & AC97_VOLUME_MAX) << AC97_LEFT_SHIFT) |
-           (step_R & AC97_VOLUME_MAX);
+        return 0x8000 | (31 << 8) | 31;
+    int step_L = 31 - (vol_L * 31 / 100);
+    int step_R = 31 - (vol_R * 31 / 100);
+    return ((step_L & 0x1F) << 8) | (step_R & 0x1F);
 }
 
 int ac97_mixer_ioctl(uint64_t request, void *arg) {

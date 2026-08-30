@@ -21,11 +21,12 @@ Explains the logical layout of the kernel and internal components.
 -   [`Interrupts & Exceptions`](architecture/system/interrupts.md): IDT, GDT, and exception handling.
 
 #### Memory
--   [`Memory (PMM/VMM)`](architecture/memory/memory.md): Physical Memory Management and Virtual Memory Management.
--   [`Memory Manager`](architecture/memory/memory_manager.md): Slab allocator and block allocator for kernel heap.
+-   [`Memory Architecture`](architecture/memory/memory.md): PMM frame allocator, MMU paging, VMA tracking, and demand paging in the VMM.
+-   [`Slab Allocator`](architecture/memory/memory_manager.md): Object caches and general heap allocation (`kmalloc`/`kfree`).
+-   [`Page Cache`](architecture/memory/pagecache.md): Page cache, radix tree indexing, and dirty page writeback.
 
 #### Storage & Filesystems
--   [`Filesystem`](architecture/storage/filesystem.md): Virtual File System (VFS) and the RAM-based FAT32 simulation.
+-   [`Filesystem & VFS`](architecture/storage/filesystem.md): VFS layer, tmpfs, FAT32, ext4, and background sync.
 -   [`AHCI Drivers`](architecture/storage/ahci_drivers.md): Hardware communication for block storage devices.
 
 #### Network

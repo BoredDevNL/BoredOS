@@ -8,7 +8,7 @@
 #include "lwip/etharp.h"
 #include "netif/ethernet.h"
 #include "lwip/ip.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "kutils.h"
 #include <string.h>
 

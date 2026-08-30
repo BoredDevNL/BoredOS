@@ -48,6 +48,19 @@ static const char *exception_messages[] = {
 
 uint64_t exception_handler_c(registers_t *regs) {
     uint64_t vector = regs->int_no;
+
+    if (vector == 14) {
+        uint64_t cr2;
+        asm volatile("mov %%cr2, %0" : "=r"(cr2));
+        extern int vmm_handle_page_fault(void *space, uintptr_t fault_addr, uint32_t error_code, registers_t *regs);
+        process_t *cur = process_get_current();
+        if (cur && cur->vmm_space) {
+            if (vmm_handle_page_fault(cur->vmm_space, cr2, (uint32_t)regs->err_code, regs) == 0) {
+                return (uint64_t)regs;
+            }
+        }
+    }
+
     char buf[17];
     
     // Serial Mirror
@@ -57,6 +70,7 @@ uint64_t exception_handler_c(registers_t *regs) {
     serial_write(buf);
     
     process_t *proc = process_get_current();
+    (void)proc;
     bool is_user_mode_fault = ((regs->cs & 0x3) != 0);
 
     if (is_user_mode_fault) {
@@ -113,9 +127,6 @@ uint64_t exception_handler_c(registers_t *regs) {
         serial_write(buf);
         serial_write("\nR15: 0x");
         itoa_hex(regs->r15, buf);
-        serial_write(buf);
-        serial_write("\nError Code: 0x");
-        itoa_hex(regs->err_code, buf);
         serial_write(buf);
         if (vector == 14) {
             uint64_t cr2;
@@ -316,6 +327,9 @@ void idt_register_interrupts(void) {
     extern void isr_sched_ipi_wrapper(void);
     idt_set_gate(0x41, isr_sched_ipi_wrapper, cs, 0x8E);
 
+    extern void isr_tlb_ipi_wrapper(void);
+    idt_set_gate(0x42, isr_tlb_ipi_wrapper, cs, 0x8E);
+
     // PCI/ISA IRQ wrappers
     extern void isr5_wrapper(void);
     extern void isr9_wrapper(void);
@@ -339,24 +353,38 @@ void idt_load(void) {
     // after all subsystems (WM, PS/2) are initialized!
 }
 
-static uint64_t (*irq_handlers[16])(registers_t *regs) = {0};
+#define MAX_IRQ_HANDLERS_PER_LINE 4
+static uint64_t (*irq_handlers[16][MAX_IRQ_HANDLERS_PER_LINE])(registers_t *regs) = {{0}};
 
 void idt_register_irq_handler(int irq, uint64_t (*handler)(registers_t *regs)) {
-    if (irq >= 0 && irq < 16) {
-        irq_handlers[irq] = handler;
+    if (irq >= 0 && irq < 16 && handler) {
+        for (int i = 0; i < MAX_IRQ_HANDLERS_PER_LINE; i++) {
+            if (irq_handlers[irq][i] == handler) return;
+            if (irq_handlers[irq][i] == NULL) {
+                irq_handlers[irq][i] = handler;
+                return;
+            }
+        }
     }
 }
 
 uint64_t irq_dispatch(int irq, registers_t *regs) {
-    if (irq >= 0 && irq < 16 && irq_handlers[irq]) {
-        return irq_handlers[irq](regs);
+    if (irq >= 0 && irq < 16) {
+        for (int i = 0; i < MAX_IRQ_HANDLERS_PER_LINE; i++) {
+            if (irq_handlers[irq][i]) {
+                irq_handlers[irq][i](regs);
+            }
+        }
     }
 
-    // Default EOI for unregistered IRQs
     if (irq >= 8) {
         outb(0xA0, 0x20);
     }
     outb(0x20, 0x20);
+
+    extern void lapic_eoi(void);
+    lapic_eoi();
+
     return (uint64_t)regs;
 }
 
@@ -364,3 +392,4 @@ uint64_t pci_irq_handler(registers_t *regs) {
     int irq = (int)regs->int_no - 32;
     return irq_dispatch(irq, regs);
 }
+

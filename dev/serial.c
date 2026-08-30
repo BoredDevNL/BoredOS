@@ -6,7 +6,7 @@
 #include "spinlock.h"
 #include "tty.h"
 #include "kutils.h"
-#include "memory_manager.h"
+#include "slab.h"
 
 static serial_ring_t g_com_rings[4];
 

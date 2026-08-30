@@ -7,13 +7,13 @@
 #include "acpi_i2c.h"
 #include "pci.h"
 #include "platform.h"
-#include "memory_manager.h"
-#include "paging.h"
+#include "slab.h"
+#include "mmu.h"
 #include "kutils.h"
 #include <string.h>
 
 extern void serial_write(const char *str);
-extern void serial_write_hex(uint32_t val);
+extern void serial_write_hex(uint64_t val);
 extern void serial_write_num(uint64_t num);
 
 #define MAX_LPSS_I2C_CONTROLLERS 8
@@ -198,10 +198,10 @@ static int map_bar0_to_kernel(uint64_t bar0_phys, uintptr_t *kernel_addr) {
     uint64_t virt_base = p2v(bar0_phys);
     
     // Map first 0x2000 bytes (8KB) to cover search range + registers
-    if (!paging_map_page(paging_get_pml4_phys(), virt_base, bar0_phys,
-                   PT_PRESENT | PT_RW | PT_CACHE_DISABLE) ||
-        !paging_map_page(paging_get_pml4_phys(), virt_base + 0x1000, bar0_phys + 0x1000,
-                   PT_PRESENT | PT_RW | PT_CACHE_DISABLE))
+    if (mmu_map_page(mmu_get_kernel_context(), virt_base, bar0_phys,
+                     MMU_PROT_READ | MMU_PROT_WRITE | MMU_FLAG_NOCACHE) != 0 ||
+        mmu_map_page(mmu_get_kernel_context(), virt_base + 0x1000, bar0_phys + 0x1000,
+                     MMU_PROT_READ | MMU_PROT_WRITE | MMU_FLAG_NOCACHE) != 0)
         return false;
 
     *kernel_addr = virt_base;

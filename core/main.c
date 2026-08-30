@@ -9,7 +9,6 @@
 #include "graphics.h"
 #include "gdt.h"
 #include "idt.h"
-#include "paging.h"
 #include "syscall.h"
 #include "process.h"
 #include "ps2.h"
@@ -22,7 +21,11 @@
 #include "vfs.h"
 #include "kconsole.h"
 #include "kutils.h"
-#include "memory_manager.h"
+#include "slab.h"
+#include "pmm.h"
+#include "pmm_test.h"
+#include "slab.h"
+#include "slab_test.h"
 #include "platform.h"
 #include "smp.h"
 #include "work_queue.h"
@@ -31,10 +34,10 @@
 #include "sysfs.h"
 #include "procfs.h"
 #include "disk.h"
-#include "bootfs.h"
+#include "tmpfs.h"
+#include "pagecache.h"
 #include "kernel_subsystem.h"
 #include "module_manager.h"
-#include "bootfs_state.h"
 #include "keymap.h"
 #include "keyboard.h"
 #include "acpi.h"
@@ -245,9 +248,16 @@ static bool cmdline_read_value(const char *cmdline, const char *key, char *out, 
     return false;
 }
 
+#define BOOT_FLAG_LIVE          0x01
+#define BOOT_FLAG_DISK          0x02
+#define BOOT_FLAG_ROOT_SET      0x08
+
+static uint8_t g_boot_flags = 0;
+static char g_boot_root_device[32] = {0};
+
 static void boot_parse_cmdline(const char *cmdline, uint32_t media_type) {
-    g_bootfs_state.boot_flags = 0;
-    g_bootfs_state.root_device[0] = '\0';
+    g_boot_flags = 0;
+    g_boot_root_device[0] = '\0';
 
     char root_arg[32];
     if (cmdline_read_value(cmdline, "root=", root_arg, (int)sizeof(root_arg))) {
@@ -256,27 +266,20 @@ static void boot_parse_cmdline(const char *cmdline, uint32_t media_type) {
             dev += 5;
         }
         int i = 0;
-        while (dev[i] && i < (int)sizeof(g_bootfs_state.root_device) - 1) {
-            g_bootfs_state.root_device[i] = dev[i];
+        while (dev[i] && i < (int)sizeof(g_boot_root_device) - 1) {
+            g_boot_root_device[i] = dev[i];
             i++;
         }
-        g_bootfs_state.root_device[i] = '\0';
-        if (i > 0) g_bootfs_state.boot_flags |= BOOT_FLAG_ROOT_SET;
+        g_boot_root_device[i] = '\0';
+        if (i > 0) g_boot_flags |= BOOT_FLAG_ROOT_SET;
     }
 
-    bool force_live = cmdline_has_flag(cmdline, "--live");
-    bool force_disk = cmdline_has_flag(cmdline, "--disk");
-
-    if (force_live) {
-        g_bootfs_state.boot_flags |= BOOT_FLAG_LIVE | BOOT_FLAG_FORCED;
-    } else if (force_disk) {
-        g_bootfs_state.boot_flags |= BOOT_FLAG_DISK | BOOT_FLAG_FORCED;
-    } else if (g_bootfs_state.boot_flags & BOOT_FLAG_ROOT_SET) {
-        g_bootfs_state.boot_flags |= BOOT_FLAG_DISK;
+    if (g_boot_flags & BOOT_FLAG_ROOT_SET) {
+        g_boot_flags |= BOOT_FLAG_DISK;
     } else if (media_type == LIMINE_MEDIA_TYPE_OPTICAL || media_type == LIMINE_MEDIA_TYPE_TFTP) {
-        g_bootfs_state.boot_flags |= BOOT_FLAG_LIVE;
+        g_boot_flags |= BOOT_FLAG_LIVE;
     } else {
-        g_bootfs_state.boot_flags |= BOOT_FLAG_DISK;
+        g_boot_flags |= BOOT_FLAG_DISK;
     }
 }
 
@@ -302,11 +305,10 @@ static void vfs_mkdir_recursive(const char *path) {
 }
 
 static void init_early(void) {
+    platform_init();
     serial_init();
     vfs_init();
     serial_write("\n");
-
-    platform_init();
     log_ok("Platform initialized");
     
     extern uint64_t hhdm_offset;
@@ -358,9 +360,6 @@ static void init_cpu_state(void) {
     idt_init();
     idt_register_interrupts();
 
-    paging_init();
-    log_ok("Paging ready");
-
     syscall_init();
     log_ok("Syscalls ready");
 }
@@ -379,8 +378,73 @@ static void init_verbose_console(void) {
 
 static void init_memory(void) {
     if (memmap_request.response != NULL) {
-        memory_manager_init_from_memmap(memmap_request.response);
-        log_ok("Memory manager ready");
+        extern void pmm_init(const pmm_boot_map_t *boot_map);
+        extern bool pmm_run_tests(void);
+        extern uint64_t hhdm_offset;
+
+        pmm_mem_region_t pmm_regions[memmap_request.response->entry_count];
+        for (uint64_t i = 0; i < memmap_request.response->entry_count; i++) {
+            struct limine_memmap_entry *entry = memmap_request.response->entries[i];
+            pmm_regions[i].base = entry->base;
+            pmm_regions[i].length = entry->length;
+            pmm_regions[i].type = (entry->type == LIMINE_MEMMAP_USABLE) ? PMM_REGION_USABLE : PMM_REGION_RESERVED;
+        }
+        pmm_boot_map_t boot_map = {
+            .regions = pmm_regions,
+            .region_count = memmap_request.response->entry_count,
+            .direct_map_base = hhdm_offset,
+        };
+        pmm_init(&boot_map);
+
+        if (pmm_run_tests()) {
+            log_ok("PMM unit tests passed");
+        } else {
+            log_fail("PMM unit tests failed");
+        }
+
+        slab_init();
+        if (slab_run_tests()) {
+            log_ok("SLAB Allocator unit tests passed");
+        } else {
+            log_fail("SLAB Allocator unit tests failed");
+        }
+
+        graphics_alloc_backing_buffer();
+
+        extern void mmu_init(void);
+        extern bool mmu_run_tests(void);
+        mmu_init();
+        if (mmu_run_tests()) {
+            log_ok("MMU Hardware Driver unit tests passed");
+        } else {
+            log_fail("MMU Hardware Driver unit tests failed");
+        }
+
+        extern bool vma_run_tests(void);
+        if (vma_run_tests()) {
+            log_ok("VMA Augmented RB-Tree unit tests passed");
+        } else {
+            log_fail("VMA Augmented RB-Tree unit tests failed");
+        }
+
+        extern void vmm_init(void);
+        extern bool vmm_run_tests(void);
+        vmm_init();
+        if (vmm_run_tests()) {
+            log_ok("VMM Demand Paging unit tests passed");
+        } else {
+            log_fail("VMM Demand Paging unit tests failed");
+        }
+
+        extern void pagecache_init(void);
+        extern bool pagecache_run_tests(void);
+        pagecache_init();
+        if (pagecache_run_tests()) {
+            log_ok("Page Cache unit tests passed");
+        } else {
+            log_fail("Page Cache unit tests failed");
+        }
+
         smp_init_bsp();
         log_ok("SMP BSP initialized");
     } else {
@@ -402,6 +466,9 @@ static void init_banner_and_acpi(void) {
 static void init_subsystems(void) {
     process_init();
 
+    extern void futex_init(void);
+    futex_init();
+
     fat32_init();
     log_ok("FAT32 ready");
 
@@ -416,25 +483,7 @@ static void init_subsystems(void) {
     vfs_mount("/proc", "procfs", "procfs", procfs_get_ops(), NULL);
 }
 
-static void init_bootfs(void) {
-    bootfs_init();
-    
-    if (bootloader_info_request.response != NULL) {
-        if (bootloader_info_request.response->name) {
-            strcpy(g_bootfs_state.bootloader_name, bootloader_info_request.response->name);
-        }
-        if (bootloader_info_request.response->version) {
-            strcpy(g_bootfs_state.bootloader_version, bootloader_info_request.response->version);
-        }
-    }
-    
-    if (kernel_file_request.response != NULL && kernel_file_request.response->kernel_file != NULL) {
-        g_bootfs_state.kernel_size = kernel_file_request.response->kernel_file->size;
-        serial_write("[INIT] Kernel size from bootloader: ");
-        serial_write_hex(g_bootfs_state.kernel_size);
-        serial_write(" bytes\n");
-    }
-
+static void init_rootfs(void) {
     if (kernel_file_request.response != NULL && kernel_file_request.response->kernel_file != NULL) {
         const char *cmdline = kernel_file_request.response->kernel_file->cmdline;
         uint32_t media_type = kernel_file_request.response->kernel_file->media_type;
@@ -443,77 +492,100 @@ static void init_bootfs(void) {
         boot_parse_cmdline(NULL, LIMINE_MEDIA_TYPE_GENERIC);
     }
 
-    if (g_bootfs_state.boot_flags & BOOT_FLAG_DISK) {
-        void *vol = NULL;
-        for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
-            vfs_mount_t *m = vfs_get_mount(i);
-            if (m && strcmp(m->device, g_bootfs_state.root_device) == 0) {
-                vol = m->fs_private;
-                break;
+    tmpfs_init();
+    vfs_mount("/", "tmpfs", "tmpfs", tmpfs_get_ops(), NULL);
+
+    if (g_boot_flags & BOOT_FLAG_DISK) {
+        Disk *d = NULL;
+        if (g_boot_root_device[0] != '\0') {
+            d = disk_get_by_name(g_boot_root_device);
+        }
+        if (!d) {
+            int total_disks = disk_get_count();
+            for (int i = 0; i < total_disks; i++) {
+                Disk *cand = disk_get_by_index(i);
+                if (cand && cand->is_partition && !cand->is_esp) {
+                    d = cand;
+                    break;
+                }
             }
         }
-        if (vol) {
+
+        void *vol = NULL;
+        const char *fs_type = NULL;
+        vfs_fs_ops_t *ops = NULL;
+
+        if (d) {
+            extern void *ext4fs_mount_volume(Disk *d);
+            extern vfs_fs_ops_t *ext4fs_get_ops(void);
+            extern void *fat32_mount_volume(void *disk_ptr);
+            extern struct vfs_fs_ops *fat32_get_realfs_ops(void);
+
+            if (!d->is_fat32) {
+                vol = ext4fs_mount_volume(d);
+                if (vol) {
+                    fs_type = "ext4";
+                    ops = ext4fs_get_ops();
+                }
+            }
+            if (!vol) {
+                vol = fat32_mount_volume(d);
+                if (vol) {
+                    fs_type = "fat32";
+                    ops = (vfs_fs_ops_t *)fat32_get_realfs_ops();
+                }
+            }
+        }
+
+        if (d && vol && fs_type && ops) {
             vfs_umount("/");
-            vfs_mount("/", g_bootfs_state.root_device, "fat32", fat32_get_realfs_ops(), vol);
-            fat32_set_root_volume(vol);
+            extern void tmpfs_destroy_all(void);
+            tmpfs_destroy_all();
+            vfs_mount("/", d->devname, fs_type, ops, vol);
+            if (strcmp(fs_type, "fat32") == 0) {
+                fat32_set_root_volume(vol);
+            }
             serial_write("[INIT] Switched root to /dev/");
-            serial_write(g_bootfs_state.root_device);
-            serial_write("\n");
-            
-            extern void bootfs_mount_boot_partition(void);
-            bootfs_mount_boot_partition();
+            serial_write(d->devname);
+            serial_write(" (");
+            serial_write(fs_type);
+            serial_write(")\n");
+
+            // Auto-mount ESP to /boot if available
+            int total_disks = disk_get_count();
+            for (int i = 0; i < total_disks; i++) {
+                Disk *esp = disk_get_by_index(i);
+                if (esp && esp->is_partition && esp->is_esp && esp->is_fat32) {
+                    void *esp_vol = fat32_mount_volume(esp);
+                    if (esp_vol) {
+                        vfs_mount("/boot", esp->devname, "fat32", (vfs_fs_ops_t *)fat32_get_realfs_ops(), esp_vol);
+                        serial_write("[INIT] Mounted ESP at /boot\n");
+                    }
+                    break;
+                }
+            }
+
+            // Ensure runtime directories and /tmp tmpfs exist on the new root
+            vfs_mkdir("/tmp");
+            tmpfs_init();
+            vfs_mount("/tmp", "tmpfs", "tmpfs", tmpfs_get_ops(), NULL);
+            vfs_mkdir("/var");
+            vfs_mkdir("/var/run");
+            vfs_mkdir("/dev");
         } else {
-            serial_write("[INIT] Warning: Root device volume not found! Running from ramfs.\n");
+            serial_write("[INIT] Warning: Root device volume not found! Running from tmpfs.\n");
         }
     }
-    
-    extern uint32_t kernel_ticks;
-    g_bootfs_state.boot_time_ms = kernel_ticks;
+
+    extern void flusher_init(void);
+    flusher_init();
 }
 
+
 static void init_modules(void) {
-    if (module_request.response != NULL) {
-        g_bootfs_state.num_modules = module_request.response->module_count;
-        
-        serial_write("[INIT] Scanning modules for bootfs state...\n");
-        for (uint64_t i = 0; i < module_request.response->module_count; i++) {
-            struct limine_file *mod = module_request.response->modules[i];
-            const char *path = mod->path;
-            
-            if (str_starts_with(path, "boot():")) path += 7;
-            else if (str_starts_with(path, "boot:///")) path += 8;
-            
-            int path_len = 0;
-            while (path[path_len]) path_len++;
-            
-            serial_write("[INIT] Module: ");
-            serial_write(path);
-            serial_write(" (");
-            serial_write_hex(mod->size);
-            serial_write(" bytes)\n");
-            
-            bool is_tar = (path_len >= 4 && 
-                           path[path_len-4] == '.' && path[path_len-3] == 't' && 
-                           path[path_len-2] == 'a' && path[path_len-1] == 'r');
-            bool is_lz4 = (path_len >= 8 && 
-                           path[path_len-8] == '.' && path[path_len-7] == 't' && 
-                           path[path_len-6] == 'a' && path[path_len-5] == 'r' && 
-                           path[path_len-4] == '.' && path[path_len-3] == 'l' && 
-                           path[path_len-2] == 'z' && path[path_len-1] == '4');
-
-            if (is_tar || is_lz4) {
-                g_bootfs_state.initrd_size = mod->size;
-                g_bootfs_state.initrd_ptr = mod->address;
-                serial_write("[INIT] -> Initrd detected\n");
-            }
-        }
-    }
-    
-    vfs_mount("/boot", "bootfs", "bootfs", bootfs_get_ops(), NULL);
-
     if (module_request.response == NULL) {
         log_fail("Limine module response NULL");
-    } else if (!(g_bootfs_state.boot_flags & BOOT_FLAG_DISK)) {
+    } else if (!(g_boot_flags & BOOT_FLAG_DISK)) {
         log_ok("Limine modules loaded");
         for (uint64_t i = 0; i < module_request.response->module_count; i++) {
             struct limine_file *mod = module_request.response->modules[i];
@@ -571,19 +643,10 @@ static void init_modules(void) {
                     
                     serial_write("[INIT] Decompression successful! Parsing TAR...\n");
                     
-                    uint8_t *shrunk_buf = (uint8_t *)krealloc(decomp_buf, decomp_size);
-                    if (shrunk_buf) {
-                        decomp_buf = shrunk_buf;
-                    }
-                    
                     tar_parse(decomp_buf, decomp_size);
-                    
-                    g_bootfs_state.initrd_ptr = decomp_buf;
-                    g_bootfs_state.initrd_size = decomp_size;
+                    kfree(decomp_buf);
                 } else {
                     tar_parse(mod->address, mod->size);
-                    g_bootfs_state.initrd_ptr = mod->address;
-                    g_bootfs_state.initrd_size = mod->size;
                 }
             } else {
                 char dir_path[256];
@@ -629,8 +692,6 @@ static void init_input(void) {
 }
 
 static void init_tty(void) {
-    extern void bootfs_refresh_from_disk(void);
-    bootfs_refresh_from_disk();
 
     extern void hostname_init(void);
     hostname_init();
@@ -643,21 +704,14 @@ static void init_tty(void) {
     process_create_elf("/bin/job_applications.elf", "", false, -1);
 
     if (!g_headless_mode) {
-        // Mode 1: Graphical device (fb0) available
-        // Spawn shells for graphical TTYs 1-10 (IDs 0..9)
-        for (int i = 0; i < 10; i++) {
-            char arg[4];
-            itoa(i + 1, arg);
-            process_create_elf("/bin/bsh.elf", arg, true, i);
-            //TODO: replace this horrible system with a proper userspace
-            // init system.. This works for now ig
-        }
+        // Spawn shell on active TTY 0 on boot (secondary TTYs spawned on demand)
+        process_create_elf("/bin/bsh.elf", "1", true, 0);
+
         // Route kernel debug output to COM1 and keep shell off COM1
         serial_set_debug_port(COM1_PORT);
         serial_set_log_silenced(false);
     } else {
-        // Mode 2: Headless mode
-        // Graphical TTY shells are not spawned; interactive shell runs on COM1 (ID 10)
+        // Headless mode: interactive shell runs on COM1 (ID 10)
         // COM2 (if present) is used for kernel debug logs; otherwise silence debug output on COM1
         if (serial_is_com2_present()) {
             serial_set_debug_port(COM2_PORT);
@@ -678,7 +732,7 @@ void kmain(void) {
     init_memory();
     init_banner_and_acpi();
     init_subsystems();
-    init_bootfs();
+    init_rootfs();
     init_modules();
     init_input();
     init_tty();

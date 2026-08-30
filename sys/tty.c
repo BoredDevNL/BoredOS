@@ -6,7 +6,7 @@
 #include "spinlock.h"
 #include "wait_queue.h"
 #include "font.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "graphics.h"
 #include "kutils.h"
 #include "process.h"
@@ -82,16 +82,7 @@ void tty_init(void) {
             g_ttys[i].serial_port = 0;
             g_ttys[i].width = w > 0 ? w : cols * 8;
             g_ttys[i].height = h > 0 ? h : rows * 8;
-            if (cols > 0 && rows > 0) {
-                g_ttys[i].grid = (tty_cell_t *)kmalloc(cols * rows * sizeof(tty_cell_t));
-                for (int j = 0; j < cols * rows; j++) {
-                    g_ttys[i].grid[j].codepoint = ' ';
-                    g_ttys[i].grid[j].fg = 0xFFFFFFFF;
-                    g_ttys[i].grid[j].bg = 0xFF000000;
-                }
-            } else {
-                g_ttys[i].grid = NULL;
-            }
+            g_ttys[i].grid = (i == 0 && cols > 0 && rows > 0) ? (tty_cell_t *)kmalloc(cols * rows * sizeof(tty_cell_t)) : NULL;
         }
         g_ttys[i].dirty = true;
         g_ttys[i].cursor_x = 0;
@@ -110,6 +101,13 @@ void tty_init(void) {
         g_ttys[i].last_char_was_cr = false;
         g_ttys[i].lock = SPINLOCK_INIT;
 
+        if (g_ttys[i].grid) {
+            for (int j = 0; j < cols * rows; j++) {
+                g_ttys[i].grid[j].codepoint = ' ';
+                g_ttys[i].grid[j].fg = 0xFFFFFFFF;
+                g_ttys[i].grid[j].bg = 0xFF000000;
+            }
+        }
         tty_queue_init(&g_ttys[i].key_queue);
         tty_queue_init(&g_ttys[i].mouse_queue);
         tty_queue_init(&g_ttys[i].out_queue);
@@ -119,17 +117,42 @@ void tty_init(void) {
     g_active_tty = 0;
 }
 
+static void ensure_tty_grid(tty_t *t) {
+    if (!t || t->grid || t->is_serial) return;
+    int cols = t->width / 8;
+    int rows = t->height / 8;
+    if (cols <= 0 || rows <= 0) return;
+    t->grid = (tty_cell_t *)kmalloc(cols * rows * sizeof(tty_cell_t));
+    if (t->grid) {
+        for (int j = 0; j < cols * rows; j++) {
+            t->grid[j].codepoint = ' ';
+            t->grid[j].fg = t->fg_color ? t->fg_color : 0xFFFFFFFF;
+            t->grid[j].bg = t->bg_color ? t->bg_color : 0xFF000000;
+        }
+        t->dirty = true;
+    }
+}
+
 tty_t* tty_get(int id) {
     if (id < 0 || id >= TTY_COUNT) return NULL;
+    ensure_tty_grid(&g_ttys[id]);
     return &g_ttys[id];
 }
 
 void tty_switch(int id) {
     if (id < 0 || id >= TTY_COUNT) return;
+    ensure_tty_grid(&g_ttys[id]);
     uint64_t flags = spinlock_acquire_irqsave(&g_tty_global_lock);
     g_active_tty = id;
     g_ttys[id].dirty = true;
+    int fg_pid = g_ttys[id].fg_pid;
     spinlock_release_irqrestore(&g_tty_global_lock, flags);
+
+    if (fg_pid <= 0) {
+        char args[32];
+        itoa(id + 1, args);
+        process_create_elf("/bin/bsh.elf", args, true, id);
+    }
 }
 
 int tty_get_active_id(void) {
@@ -464,8 +487,15 @@ void tty_write(int id, const char *data, size_t len) {
                 if (t->esc_num_params < 7) t->esc_num_params++;
             } else {
                 // Final command character
-                if (c == 'K') { // Erase to end of line
-                    tty_draw_rect(t, t->cursor_x, t->cursor_y, t->width - t->cursor_x, font_h, t->bg_color);
+                if (c == 'K') { // Erase line
+                    int mode = t->esc_params[0];
+                    if (mode == 2) {
+                        tty_draw_rect(t, 0, t->cursor_y, t->width, font_h, t->bg_color);
+                    } else if (mode == 1) {
+                        tty_draw_rect(t, 0, t->cursor_y, t->cursor_x + font_w, font_h, t->bg_color);
+                    } else {
+                        tty_draw_rect(t, t->cursor_x, t->cursor_y, t->width - t->cursor_x, font_h, t->bg_color);
+                    }
                 } else if (c == 'J') { // Erase in Display
                     int mode = t->esc_params[0];
                     if (mode == 2) { // Entire screen
@@ -673,8 +703,13 @@ void tty_push_char(int id, uint8_t c) {
                 target->sleep_until = 0;
             }
             t->fg_pid = -1;
+            process_put(target);
             return;
         }
+        if (target) {
+            process_put(target);
+        }
+
     }
 
     tty_queue_push(&t->char_queue, c);

@@ -24,6 +24,7 @@ typedef enum {
     SYS_POLL = 7,
     SYS_LSEEK = 8,
     SYS_MMAP = 9,
+    SYS_MPROTECT = 10,
     SYS_MUNMAP = 11,
     SYS_BRK = 12,
     SYS_RT_SIGACTION = 13,
@@ -83,9 +84,6 @@ typedef enum {
     SYS_SET_REAPER = 318,
     SYS_DISK_GET_COUNT = 322,
     SYS_DISK_GET_INFO = 323,
-    SYS_DISK_WRITE_GPT = 324,
-    SYS_DISK_WRITE_MBR = 325,
-    SYS_DISK_MKFS_FAT32 = 326,
     SYS_DISK_MOUNT = 327,
     SYS_DISK_UMOUNT = 328,
     SYS_DISK_SYNC = 329,
@@ -102,5 +100,6 @@ void syscall_init(void);
 uint64_t syscall_handler_c(registers_t *regs);
 int kernel_futex_wait(uint32_t *uaddr, uint32_t expected);
 int kernel_futex_wake(uint32_t *uaddr, int count);
+int signal_send_to_pid(int pid, int sig);
 
 #endif // SYSCALL_H

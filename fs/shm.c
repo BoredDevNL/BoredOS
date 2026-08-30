@@ -1,7 +1,7 @@
 #include "shm.h"
 #include "vfs.h"
 #include "spinlock.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "kutils.h"
 #include "platform.h"
 
@@ -39,7 +39,7 @@ shm_segment_t* shm_get_or_create(const char *name) {
     seg->name[i] = '\0';
     seg->page_count = 0;
     seg->size = 0;
-    seg->ref_count = 1;
+    seg->ref_count = 2; // 1 for shm_list namespace, 1 for the caller's open file handle
     seg->next = shm_list;
     shm_list = seg;
 
@@ -59,7 +59,7 @@ void shm_unref(shm_segment_t *seg) {
     uint64_t flags = spinlock_acquire_irqsave(&shm_lock);
     seg->ref_count--;
     if (seg->ref_count <= 0) {
-        // Remove from list
+        // Remove from list if still linked
         shm_segment_t *prev = NULL;
         shm_segment_t *cur = shm_list;
         while (cur) {
@@ -78,9 +78,9 @@ void shm_unref(shm_segment_t *seg) {
         // Free backing physical pages
         for (uint32_t i = 0; i < seg->page_count; i++) {
             void *physical_page = (void *)p2v(seg->phys_pages[i]);
-            kfree_null(physical_page);
+            kfree(physical_page);
         }
-        kfree_null(seg);
+        kfree(seg);
     }
     spinlock_release_irqrestore(&shm_lock, flags);
 }
@@ -153,9 +153,9 @@ void shm_unlink(const char *name) {
             if (cur->ref_count <= 0) {
                 for (uint32_t i = 0; i < cur->page_count; i++) {
                     void *physical_page = (void *)p2v(cur->phys_pages[i]);
-                    kfree_null(physical_page);
+                    kfree(physical_page);
                 }
-                kfree_null(cur);
+                kfree(cur);
             }
             break;
         }

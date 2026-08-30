@@ -84,26 +84,33 @@ int pty_destroy(int pty_id) {
     p->used = false;
     p->fg_pid = -1;
     spinlock_release_irqrestore(&g_pty_global_lock, flags);
+    process_kill_by_tty(pty_id);
     return 0;
 }
 
 void pty_write_output(int pty_id, const char *data, size_t len) {
     pty_pair_t *p = pty_get(pty_id);
     if (!p || !p->used) return;
+    uint64_t flags = spinlock_acquire_irqsave(&p->lock);
     for (size_t i = 0; i < len; i++) {
         pty_queue_push(&p->slave_to_master, (uint8_t)data[i]);
     }
+    spinlock_release_irqrestore(&p->lock, flags);
 }
 
 int pty_read_output(int pty_id, char *buf, size_t len) {
     pty_pair_t *p = pty_get(pty_id);
     if (!p || !p->used) return 0;
-    return pty_queue_pop(&p->slave_to_master, (uint8_t*)buf, len);
+    uint64_t flags = spinlock_acquire_irqsave(&p->lock);
+    int ret = pty_queue_pop(&p->slave_to_master, (uint8_t*)buf, len);
+    spinlock_release_irqrestore(&p->lock, flags);
+    return ret;
 }
 
 int pty_write_input(int pty_id, const char *buf, size_t len) {
     pty_pair_t *p = pty_get(pty_id);
     if (!p || !p->used) return 0;
+    uint64_t flags = spinlock_acquire_irqsave(&p->lock);
     for (size_t i = 0; i < len; i++) {
         uint8_t c = (uint8_t)buf[i];
         if (c == CTRL_C_CHAR) { // Ctrl+C (SIGINT)
@@ -118,18 +125,27 @@ int pty_write_input(int pty_id, const char *buf, size_t len) {
             if (target && target->pid > 1) {
                 process_terminate_with_status(target, 128 + SIGINT_CODE);
                 p->fg_pid = -1;
+                process_put(target);
                 continue;
             }
+            if (target) {
+                process_put(target);
+            }
+
         }
         pty_queue_push(&p->master_to_slave, c);
     }
+    spinlock_release_irqrestore(&p->lock, flags);
     return (int)len;
 }
 
 int pty_read_input(int pty_id, char *buf, size_t len) {
     pty_pair_t *p = pty_get(pty_id);
     if (!p || !p->used) return 0;
-    return pty_queue_pop(&p->master_to_slave, (uint8_t*)buf, len);
+    uint64_t flags = spinlock_acquire_irqsave(&p->lock);
+    int ret = pty_queue_pop(&p->master_to_slave, (uint8_t*)buf, len);
+    spinlock_release_irqrestore(&p->lock, flags);
+    return ret;
 }
 
 int pty_set_foreground(int pty_id, int pid) {
@@ -154,9 +170,11 @@ int pty_poll(int pty_id, struct poll_table *pt) {
         pt->qproc(&p->master_to_slave.wait_queue, pt);
     }
 
+    uint64_t flags = spinlock_acquire_irqsave(&p->lock);
     if (p->master_to_slave.head != p->master_to_slave.tail) {
         mask |= 0x0001;
     }
+    spinlock_release_irqrestore(&p->lock, flags);
 
     mask |= 0x0004;
 
@@ -172,9 +190,11 @@ int pty_poll_master(int pty_id, struct poll_table *pt) {
         pt->qproc(&p->slave_to_master.wait_queue, pt);
     }
 
+    uint64_t flags = spinlock_acquire_irqsave(&p->lock);
     if (p->slave_to_master.head != p->slave_to_master.tail) {
         mask |= 0x0001;
     }
+    spinlock_release_irqrestore(&p->lock, flags);
 
     mask |= 0x0004;
 
@@ -199,6 +219,10 @@ int pty_ioctl(int pty_id, uint64_t request, void *arg) {
         if (!arg) return -1;
         struct winsize *ws = (struct winsize *)arg;
         p->ws = *ws;
+        if (p->fg_pid > 0) {
+            extern int signal_send_to_pid(int pid, int sig);
+            signal_send_to_pid(p->fg_pid, 28);
+        }
         return 0;
     } else if (request == TIOCGPGRP) {
         if (!arg) return -1;

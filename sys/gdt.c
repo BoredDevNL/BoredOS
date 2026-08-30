@@ -4,7 +4,7 @@
 #include "gdt.h"
 #include <stdint.h>
 #include <stddef.h>
-#include "memory_manager.h"
+#include "slab.h"
 #include "kutils.h"
 
 // Base GDT: 5 segments + 1 TSS (2 entries) = 7 entries for BSP.

@@ -15,6 +15,7 @@ typedef struct {
 } DirtyRect;
 
 void graphics_init(struct limine_framebuffer *fb);
+void graphics_alloc_backing_buffer(void);
 void put_pixel(int x, int y, uint32_t color);
 uint32_t graphics_get_pixel(int x, int y);
 void draw_rect(int x, int y, int w, int h, uint32_t color);

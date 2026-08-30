@@ -3,14 +3,15 @@
 // This header needs to maintain in any file it is present in, as per the GPL license terms.
 #include "smp.h"
 #include "limine.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "gdt.h"
 #include "idt.h"
 #include "platform.h"
-#include "paging.h"
+#include "mmu.h"
 #include "process.h"
 #include "work_queue.h"
 #include "kutils.h"
+#include "lapic.h"
 #include "io.h"
 
 extern void serial_write(const char *str);
@@ -72,7 +73,7 @@ static void ap_entry(struct limine_smp_info *info) {
     asm volatile("mov %0, %%cr4" : : "r"(cr4));
     asm volatile("fninit");
 
-    pat_enable_wc();
+    pat_init();
 
     extern struct gdt_ptr gdtr;
     extern void gdt_flush(uint64_t);
@@ -86,7 +87,7 @@ static void ap_entry(struct limine_smp_info *info) {
     extern void syscall_init(void);
     syscall_init();
 
-    uint64_t kernel_cr3 = paging_get_kernel_pml4_phys();
+    uint64_t kernel_cr3 = mmu_get_kernel_context()->pml4_phys;
     asm volatile("mov %0, %%cr3" : : "r"(kernel_cr3));
 
     extern void lapic_enable(void);
@@ -274,4 +275,20 @@ uint32_t smp_init(struct limine_smp_response *smp_resp) {
 uint32_t smp_get_lapic_id(uint32_t cpu_id) {
     if (cpu_id >= total_cpus || !cpu_states) return 0xFF;
     return cpu_states[cpu_id].lapic_id;
+}
+
+void smp_wake_idle_cpus(void) {
+    if (total_cpus <= 1 || !cpu_states) return;
+    uint32_t my_id = smp_this_cpu_id();
+    for (uint32_t i = 0; i < total_cpus; i++) {
+        if (i == my_id) continue;
+        if (cpu_states[i].online) {
+            process_t *curr = (process_t *)cpu_states[i].current_process;
+            if (curr && curr->is_idle) {
+                extern void lapic_send_ipi(uint32_t lapic_id, uint8_t vector);
+                lapic_send_ipi(cpu_states[i].lapic_id, IPI_SCHED_VECTOR);
+                break;
+            }
+        }
+    }
 }

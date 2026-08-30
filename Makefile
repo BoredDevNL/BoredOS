@@ -47,7 +47,7 @@ KERNEL_ELF = $(BUILD_DIR)/boredos.elf
 ISO_IMAGE = boredos.iso
 
 # Package-based applications/assets
-PACKAGES = kilo lua bfonts nova doomgeneric bart serenityicons tcc netutils bearssl tinygl
+PACKAGES = kilo lua bfonts nova doomgeneric bart serenityicons tcc netutils bearssl tinygl btvi kirc
 
 BLUE  = \033[1;34m
 GREEN = \033[1;32m
@@ -85,9 +85,12 @@ endif
 
 CFLAGS = -g -O2 -pipe -Wall -Wextra -std=gnu11 -ffreestanding \
          -fno-stack-protector -fno-stack-check -fno-lto -fPIE \
-         -m64 -march=x86-64 -mno-sse -mno-sse2 -mno-mmx -mstackrealign -mno-red-zone \
+         -m64 -march=x86-64 -msse -msse2 -mstackrealign -mno-red-zone \
+         -MMD -MP \
          $(TOOLCHAIN_FLAGS) $(INCLUDES) \
          -Ifs/vendor/lwext4/include -Ifs/vendor/lwext4/include/misc
+
+-include $(OBJ_FILES:.o=.d)
 
 LDFLAGS = -m elf_x86_64 -nostdlib -static -pie --no-dynamic-linker \
           -z text -z max-page-size=0x1000 -T linker.ld
@@ -192,7 +195,7 @@ build/sdk: usr-fetch
 			--cross-file tools/cross_file.txt \
 			--prefix=$(abspath build/sdk) \
 			--libdir=lib \
-			-Ddefault_library=static \
+			-Ddefault_library=both \
 			-Dheaders_only=false \
 			-Dposix_option=enabled \
 			-Dlinux_option=disabled \
@@ -203,7 +206,7 @@ build/sdk: usr-fetch
 	@SYSROOT=$$(x86_64-boredos-gcc -print-sysroot 2>/dev/null); \
 	if [ -n "$$SYSROOT" ] && [ -d "$$SYSROOT" ]; then \
 		printf "$(GREEN)[SDK]$(RESET) Installing mlibc SDK to toolchain sysroot: $$SYSROOT\n"; \
-		mkdir -p "$$SYSROOT/usr/include" "$$SYSROOT/usr/lib"; \
+		mkdir -p "$$SYSROOT/usr/include" "$$SYSROOT/usr/lib" "$$SYSROOT/lib"; \
 		cp -R build/sdk/include/. "$$SYSROOT/usr/include/"; \
 		cp -R build/sdk/lib/. "$$SYSROOT/usr/lib/"; \
 		cp -R build/sdk/lib/. "$$SYSROOT/lib/"; \
@@ -225,6 +228,9 @@ userland: build/sdk
 	$(MAKE) -C usr/doomgeneric BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
 	$(MAKE) -C usr/tinygl BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
 	$(MAKE) -C usr/bpm BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
+	$(MAKE) -C usr/btvi BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
+	$(MAKE) -C usr/kirc BOREDOS_SDK=$(abspath build/sdk) DESTDIR=$(abspath build/userland/bin)
+
 	@printf "$(GREEN)[OK]$(RESET) Userland build complete.\n"
 
 .PHONY: packages
@@ -268,19 +274,12 @@ $(BUILD_DIR)/initrd.tar: $(KERNEL_ELF) userland packages
 	@printf "$(YELLOW)[PACKAGES]$(RESET) Generating exclusions list...\n"
 	@bash tools/gen_excludes.sh $(abspath $(BUILD_DIR)/initrd)
 
-	@printf "$(YELLOW)[COPY]$(RESET) Staging SDK development environment files in initrd...\n"
-	@cp build/sdk/lib/libc.a $(BUILD_DIR)/initrd/usr/lib/
-	@if [ -f build/sdk/lib/libm.a ]; then \
-		cp build/sdk/lib/libm.a $(BUILD_DIR)/initrd/usr/lib/; \
-	else \
-		cp build/sdk/lib/libc.a $(BUILD_DIR)/initrd/usr/lib/libm.a; \
-	fi
-	@$(STRIP) -S $(BUILD_DIR)/initrd/usr/lib/libc.a
-	@$(STRIP) -S $(BUILD_DIR)/initrd/usr/lib/libm.a
-	@cp build/sdk/lib/crt0.o $(BUILD_DIR)/initrd/usr/lib/crt0.o
-	@cp build/sdk/lib/crt1.o $(BUILD_DIR)/initrd/usr/lib/crt1.o
-	@cp build/sdk/lib/crti.o $(BUILD_DIR)/initrd/usr/lib/crti.o
-	@cp build/sdk/lib/crtn.o $(BUILD_DIR)/initrd/usr/lib/crtn.o
+	@printf "$(YELLOW)[COPY]$(RESET) Staging SDK development environment & shared runtime libraries in initrd...\n"
+	@mkdir -p $(BUILD_DIR)/initrd/usr/lib $(BUILD_DIR)/initrd/lib $(BUILD_DIR)/initrd/usr/include
+	@cp -R build/sdk/lib/. $(BUILD_DIR)/initrd/usr/lib/ 2>/dev/null || true
+	@cp -R build/sdk/lib/. $(BUILD_DIR)/initrd/lib/ 2>/dev/null || true
+	@if [ -f $(BUILD_DIR)/initrd/usr/lib/ld.so ]; then chmod +x $(BUILD_DIR)/initrd/usr/lib/ld.so; fi
+	@if [ -f $(BUILD_DIR)/initrd/lib/ld.so ]; then chmod +x $(BUILD_DIR)/initrd/lib/ld.so; fi
 	@cp -r build/sdk/include/. $(BUILD_DIR)/initrd/usr/include/
 
 	@printf "$(YELLOW)[COPY]$(RESET) Documentation...\n"
@@ -295,7 +294,7 @@ $(BUILD_DIR)/initrd.tar: $(KERNEL_ELF) userland packages
 
 	@printf "$(YELLOW)[COPY]$(RESET) Root files...\n"
 	@if [ -f LICENSE ]; then printf "  -> LICENSE\n"; mkdir -p $(BUILD_DIR)/initrd/docs; cp LICENSE $(BUILD_DIR)/initrd/docs/; fi
-	@if [ -f limine.conf ]; then printf "  -> limine.conf\n"; cp limine.conf $(BUILD_DIR)/initrd/; fi
+	@if [ -f base/boot/limine.conf ]; then printf "  -> limine.conf\n"; cp base/boot/limine.conf $(BUILD_DIR)/initrd/; fi
 	
 	@printf "$(YELLOW)[STRIP]$(RESET) Stripping ELF binaries to reduce initrd size...\n"
 	@find $(BUILD_DIR)/initrd/bin $(BUILD_DIR)/initrd/usr/bin -name '*.elf' 2>/dev/null | while read f; do \
@@ -313,7 +312,7 @@ $(BUILD_DIR)/initrd.tar.lz4: $(BUILD_DIR)/initrd.tar
 	lz4 -f -9 --content-size $(BUILD_DIR)/initrd.tar $(BUILD_DIR)/initrd.tar.lz4
 	@printf "$(GREEN)[OK]$(RESET) LZ4 compressed initrd created: $(BUILD_DIR)/initrd.tar.lz4\n"
 
-$(ISO_IMAGE): $(KERNEL_ELF) $(BUILD_DIR)/initrd.tar.lz4 limine.conf limine-setup
+$(ISO_IMAGE): $(KERNEL_ELF) $(BUILD_DIR)/initrd.tar.lz4 base/boot/limine.conf limine-setup
 	$(call PRINT_STEP,CREATING ISO IMAGE)
 	@printf "$(YELLOW)[ISO]$(RESET) Cleaning previous ISO root...\n"
 	rm -rf $(ISO_DIR)
@@ -326,14 +325,11 @@ $(ISO_IMAGE): $(KERNEL_ELF) $(BUILD_DIR)/initrd.tar.lz4 limine.conf limine-setup
 	cp $(KERNEL_ELF) $(ISO_DIR)/
 
 	@printf "$(YELLOW)[COPY]$(RESET) Limine config...\n"
-	cp limine.conf $(ISO_DIR)/
+	cp base/boot/limine.conf $(ISO_DIR)/
 	
 	@printf "$(YELLOW)[COPY]$(RESET) Initrd...\n"
 	cp $(BUILD_DIR)/initrd.tar.lz4 $(ISO_DIR)/
 
-	@printf "$(YELLOW)[CONFIG]$(RESET) Adding initrd module path...\n"
-	printf "    module_path: boot():/initrd.tar.lz4\n" >> $(ISO_DIR)/limine.conf
-	
 	@printf "$(YELLOW)[COPY]$(RESET) Optional splash image...\n"
 	@if [ -f base/boot/splash.jpg ]; then printf "  -> splash.jpg\n"; cp base/boot/splash.jpg $(ISO_DIR)/splash.jpg; else printf "  -> no splash.jpg found\n"; fi
 	
@@ -401,7 +397,7 @@ run-mac: $(ISO_IMAGE) disk.qcow2
 	$(call PRINT_STEP,RUNNING BOREDOS IN QEMU ON MACOS)
 	qemu-system-x86_64 -m 4G -serial stdio -cdrom $< -boot d \
 	    -smp 4 \
-		-audiodev coreaudio,id=audio0,out.frequency=48000 -machine pcspk-audiodev=audio0 \
+		-audiodev coreaudio,id=audio0,out.frequency=48000 \
 		-device AC97,audiodev=audio0 \
 		-vga std -global VGA.xres=1920 -global VGA.yres=1080 \
 		-display cocoa,show-cursor=off \

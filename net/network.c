@@ -42,12 +42,17 @@ typedef struct udp_packet {
 static void udp_socket_recv_callback(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr, u16_t port) {
     (void)pcb;
     process_fd_socket_t *sock = (process_fd_socket_t *)arg;
-    if (!sock || !p) return;
+    if (!sock || !p) {
+        if (p) pbuf_free(p);
+        return;
+    }
 
-    sockbuf_append(&sock->rx_sb, p, addr, port);
-    pbuf_free(p);
+    if (sockbuf_append(&sock->rx_sb, p, addr, port) < 0) {
+        pbuf_free(p);
+    }
     wait_queue_wake_all(&sock->rx_waitq);
-} 
+}
+ 
 
 
 static wait_queue_head_t net_rx_waitq;
@@ -66,18 +71,31 @@ static void net_worker_loop(void) {
 
     while (1) {
         net_rx_pending = 0;
-        int count = network_process_frames();
-        if (count == 0 && !net_rx_pending) {
+        int count;
+        int batch = 32;
+        do {
+            count = network_process_frames();
+        } while (count > 0 && --batch > 0);
+
+        if (!net_rx_pending && count == 0) {
             wait_queue_wait_timeout(&net_rx_waitq, 5);
         }
     }
 }
 
+
+static spinlock_t net_init_lock = SPINLOCK_INIT;
+
 int network_init(void) {
-    if (lwip_initialized) return 0;
+    uint64_t rflags = spinlock_acquire_irqsave(&net_init_lock);
+    if (lwip_initialized) {
+        spinlock_release_irqrestore(&net_init_lock, rflags);
+        return 0;
+    }
     
     // First, find and initialize the generic NIC device if not already done
     if (nic_init() != 0) {
+        spinlock_release_irqrestore(&net_init_lock, rflags);
         return -1; // No supported NIC found
     }
 
@@ -92,6 +110,7 @@ int network_init(void) {
     ip4_addr_set_zero(&gw);
     
     if (netif_add(&nic_netif, &ipaddr, &netmask, &gw, NULL, nic_netif_init, ethernet_input) == NULL) {
+        spinlock_release_irqrestore(&net_init_lock, rflags);
         return -1;
     }
     
@@ -106,6 +125,7 @@ int network_init(void) {
     extern void serial_write(const char *str);
     serial_write("[NET] Network interface initialized and background net thread spawned\n");
 
+    spinlock_release_irqrestore(&net_init_lock, rflags);
     return 0;
 }
 
@@ -319,10 +339,23 @@ static err_t tcp_socket_recv_callback(void *arg, struct tcp_pcb *tpcb, struct pb
         return ERR_OK;
     }
 
-    sockbuf_append(&sock->rx_sb, p, NULL, 0);
-    pbuf_free(p);
+    if (sockbuf_append(&sock->rx_sb, p, NULL, 0) < 0) {
+        pbuf_free(p);
+        return ERR_OK;
+    }
     wait_queue_wake_all(&sock->rx_sb.waitq);
     wait_queue_wake_all(&sock->rx_waitq);
+    return ERR_OK;
+}
+
+
+static err_t tcp_socket_sent_callback(void *arg, struct tcp_pcb *tpcb, u16_t len) {
+    (void)tpcb; (void)len;
+    process_fd_socket_t *sock = (process_fd_socket_t *)arg;
+    if (sock) {
+        wait_queue_wake_all(&sock->rx_sb.waitq);
+        wait_queue_wake_all(&sock->rx_waitq);
+    }
     return ERR_OK;
 }
 
@@ -372,7 +405,9 @@ static err_t tcp_socket_accept_callback(void *arg, struct tcp_pcb *new_pcb, err_
 
     tcp_arg(new_pcb, client);
     tcp_recv(new_pcb, tcp_socket_recv_callback);
+    tcp_sent(new_pcb, tcp_socket_sent_callback);
     tcp_err(new_pcb, tcp_socket_err_callback);
+
 
     uint64_t lflags = spinlock_acquire_irqsave(&listener->lock);
     int max_backlog = (listener->backlog_max > 0 && listener->backlog_max <= 128) ? listener->backlog_max : 128;
@@ -531,7 +566,9 @@ int network_socket_connect(void *s, uint32_t ip_val, uint16_t port) {
 
     tcp_arg((struct tcp_pcb *)sock->pcb, sock);
     tcp_recv((struct tcp_pcb *)sock->pcb, tcp_socket_recv_callback);
+    tcp_sent((struct tcp_pcb *)sock->pcb, tcp_socket_sent_callback);
     tcp_err((struct tcp_pcb *)sock->pcb, tcp_socket_err_callback);
+
 
     ip_addr_t dest_addr;
     IP_SET_TYPE_VAL(dest_addr, IPADDR_TYPE_V4);
@@ -540,22 +577,37 @@ int network_socket_connect(void *s, uint32_t ip_val, uint16_t port) {
     err_t err = tcp_connect((struct tcp_pcb *)sock->pcb, &dest_addr, port, tcp_socket_connected_callback);
     spinlock_release_irqrestore(&network_lock, flags);
 
-    if (err != ERR_OK) return -1;
-
+    uint32_t connect_start = sys_now();
+    uint32_t timeout = sock->sndtimeo ? sock->sndtimeo : 2000;
     while (!sock->tcp_connect_done && !sock->tcp_connect_error) {
-        wait_queue_wait(&sock->rx_sb.waitq);
+        if (sys_now() - connect_start >= timeout) {
+            sock->tcp_connect_error = 1;
+            break;
+        }
+        network_process_frames();
+        if (sock->tcp_connect_done || sock->tcp_connect_error) break;
+        wait_queue_wait_timeout(&sock->rx_sb.waitq, 10);
     }
     return sock->tcp_connect_done ? 0 : -1;
 }
+
 
 static u8_t raw_icmp_recv_callback(void *arg, struct raw_pcb *pcb, struct pbuf *p, const ip_addr_t *addr) {
     (void)pcb;
     process_fd_socket_t *sock = (process_fd_socket_t *)arg;
     if (!sock || !p) return 0;
 
-    sockbuf_append(&sock->rx_sb, p, addr, 0);
-    return 1;
+    struct pbuf *q = pbuf_clone(PBUF_RAW, PBUF_POOL, p);
+    if (q) {
+        if (sockbuf_append(&sock->rx_sb, q, addr, 0) < 0) {
+            pbuf_free(q);
+        }
+    }
+    wait_queue_wake_all(&sock->rx_sb.waitq);
+    wait_queue_wake_all(&sock->rx_waitq);
+    return 0;
 }
+
 
 int network_socket_recvfrom(void *s, void *buf, size_t max_len, int nonblock, uint32_t *from_ip, uint16_t *from_port) {
     process_fd_socket_t *sock = (process_fd_socket_t *)s;
@@ -573,9 +625,11 @@ int network_socket_recvfrom(void *s, void *buf, size_t max_len, int nonblock, ui
         }
         if (sock->tcp_closed) return 0;
         if (timeout_ms > 0) {
-            wait_queue_wait_timeout(&sock->rx_sb.waitq, timeout_ms);
+            uint32_t remain = timeout_ms - (sys_now() - start_time);
+            uint32_t slice = (remain < 10) ? remain : 10;
+            wait_queue_wait_timeout(&sock->rx_sb.waitq, slice);
         } else {
-            wait_queue_wait(&sock->rx_sb.waitq);
+            wait_queue_wait_timeout(&sock->rx_sb.waitq, 10);
         }
     }
 
@@ -668,28 +722,47 @@ int network_socket_recv(void *s, void *buf, size_t max_len, int nonblock) {
         return network_socket_recvfrom(s, buf, max_len, nonblock, NULL, NULL);
     }
 
+    uint32_t timeout_ms = sock->rcvtimeo;
+    uint32_t start_time = sys_now();
+
     while (sockbuf_is_empty(&sock->rx_sb)) {
         if (sock->tcp_closed) return 0;
         if (sock->tcp_connect_error) return -1;
         if (nonblock) return -2;
+        if (timeout_ms > 0 && (sys_now() - start_time >= timeout_ms)) {
+            return -2;
+        }
 
         network_process_frames();
         if (!sockbuf_is_empty(&sock->rx_sb)) break;
 
-        wait_queue_wait_timeout(&sock->rx_sb.waitq, 5);
+        if (timeout_ms > 0) {
+            uint32_t remain = timeout_ms - (sys_now() - start_time);
+            uint32_t slice = (remain < 10) ? remain : 10;
+            wait_queue_wait_timeout(&sock->rx_sb.waitq, slice);
+        } else {
+            wait_queue_wait_timeout(&sock->rx_sb.waitq, 10);
+        }
     }
 
     int copied = sockbuf_read(&sock->rx_sb, buf, max_len, NULL, NULL, 0);
     if (copied > 0 && sock->pcb) {
         uint64_t flags = spinlock_acquire_irqsave(&network_lock);
         if (sock->pcb) {
-            tcp_recved((struct tcp_pcb *)sock->pcb, (u16_t)copied);
+            size_t left = (size_t)copied;
+            while (left > 0) {
+                u16_t chunk = (left > 0xFFFF) ? 0xFFFF : (u16_t)left;
+                tcp_recved((struct tcp_pcb *)sock->pcb, chunk);
+                left -= chunk;
+            }
             tcp_output((struct tcp_pcb *)sock->pcb);
         }
         spinlock_release_irqrestore(&network_lock, flags);
     }
     return copied;
+
 }
+
 
 int network_socket_send(void *s, const void *data, size_t len, int nonblock) {
     process_fd_socket_t *sock = (process_fd_socket_t *)s;
@@ -732,6 +805,7 @@ int network_socket_send(void *s, const void *data, size_t len, int nonblock) {
         spinlock_release_irqrestore(&network_lock, flags);
 
         if (nonblock) return -2; // EWOULDBLOCK
+        network_process_frames();
         wait_queue_wait_timeout(&sock->rx_waitq, 5);
     }
 }
@@ -739,6 +813,7 @@ int network_socket_send(void *s, const void *data, size_t len, int nonblock) {
 #define MAX_RAW_TAPS 16
 static process_fd_socket_t *raw_taps[MAX_RAW_TAPS];
 static spinlock_t raw_taps_lock = SPINLOCK_INIT;
+static volatile int active_raw_taps = 0;
 
 void raw_tap_register(process_fd_socket_t *sock) {
     if (!sock) return;
@@ -749,6 +824,7 @@ void raw_tap_register(process_fd_socket_t *sock) {
     for (int i = 0; i < MAX_RAW_TAPS; i++) {
         if (!raw_taps[i]) {
             raw_taps[i] = sock;
+            active_raw_taps++;
             break;
         }
     }
@@ -761,6 +837,7 @@ void raw_tap_unregister(process_fd_socket_t *sock) {
     for (int i = 0; i < MAX_RAW_TAPS; i++) {
         if (raw_taps[i] == sock) {
             raw_taps[i] = NULL;
+            active_raw_taps--;
             break;
         }
     }
@@ -768,7 +845,7 @@ void raw_tap_unregister(process_fd_socket_t *sock) {
 }
 
 void raw_tap_broadcast(const void *data, size_t len) {
-    if (!data || len == 0) return;
+    if (!data || len == 0 || active_raw_taps == 0) return;
     uint64_t flags = spinlock_acquire_irqsave(&raw_taps_lock);
     for (int i = 0; i < MAX_RAW_TAPS; i++) {
         process_fd_socket_t *sock = raw_taps[i];
@@ -784,6 +861,8 @@ void raw_tap_broadcast(const void *data, size_t len) {
     }
     spinlock_release_irqrestore(&raw_taps_lock, flags);
 }
+
+
 
 void network_socket_close(void *s) {
     process_fd_socket_t *sock = (process_fd_socket_t *)s;
@@ -801,6 +880,7 @@ void network_socket_close(void *s) {
             tcp_arg((struct tcp_pcb *)sock->pcb, NULL);
             if (!sock->is_listening) {
                 tcp_recv((struct tcp_pcb *)sock->pcb, NULL);
+                tcp_sent((struct tcp_pcb *)sock->pcb, NULL);
                 tcp_err((struct tcp_pcb *)sock->pcb, NULL);
             } else {
                 tcp_accept((struct tcp_pcb *)sock->pcb, NULL);
@@ -813,6 +893,7 @@ void network_socket_close(void *s) {
         }
         sock->pcb = NULL;
     }
+
     sockbuf_destroy(&sock->rx_sb);
 
     uint64_t lflags = spinlock_acquire_irqsave(&sock->lock);
@@ -1120,7 +1201,9 @@ int network_socket_connect_v6(void *s, const ipv6_address_t *ip6, uint16_t port)
     sock->tcp_closed = 0;
     tcp_arg((struct tcp_pcb *)sock->pcb, sock);
     tcp_recv((struct tcp_pcb *)sock->pcb, tcp_socket_recv_callback);
+    tcp_sent((struct tcp_pcb *)sock->pcb, tcp_socket_sent_callback);
     tcp_err((struct tcp_pcb *)sock->pcb, tcp_socket_err_callback);
+
 
     err_t err = tcp_connect((struct tcp_pcb *)sock->pcb, &dest_ip, port, tcp_socket_connected_callback);
     spinlock_release_irqrestore(&network_lock, flags);

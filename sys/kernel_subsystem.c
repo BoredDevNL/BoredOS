@@ -1,5 +1,5 @@
 #include "kernel_subsystem.h"
-#include "memory_manager.h"
+#include "slab.h"
 #include "spinlock.h"
 #include "kutils.h"
 

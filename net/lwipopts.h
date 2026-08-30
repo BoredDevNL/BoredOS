@@ -44,12 +44,13 @@
 #define LWIP_NETIF_LINK_CALLBACK   1
 
 #define TCP_MSS                    1460
-#define TCP_WND                    (256 * TCP_MSS)
-#define TCP_SND_BUF                (256 * TCP_MSS)
+#define TCP_WND                    (512 * TCP_MSS)
+#define TCP_SND_BUF                (512 * TCP_MSS)
 #define TCP_SND_QUEUELEN           (4 * (TCP_SND_BUF/TCP_MSS))
 
 #define LWIP_WND_SCALE             1
-#define TCP_RCV_SCALE              3
+#define TCP_RCV_SCALE              5
+
 #define TCP_SNDLOWAT               (2 * TCP_MSS)
 #define LWIP_TCP_SACK_OUT          1
 #define LWIP_TCP_TIMESTAMPS        1
@@ -64,10 +65,11 @@
 #define MEMP_MEM_MALLOC            0
 #define MEM_LIBC_MALLOC            0
 #define MEM_SIZE                   (16 * 1024 * 1024)
-#define PBUF_POOL_SIZE             2048
-#define MEMP_NUM_TCP_SEG           1024
-#define MEMP_NUM_PBUF              2048
+#define PBUF_POOL_SIZE             4096
+#define MEMP_NUM_TCP_SEG           2048
+#define MEMP_NUM_PBUF              4096
 #define MEMP_NUM_TCP_PCB           256
+
 #define MEMP_NUM_RAW_PCB           16
 #define PBUF_POOL_FREE_OOSEQ_QUEUE_CALL() pbuf_free_ooseq()
 #define LWIP_NETIF_LOOPBACK 1
